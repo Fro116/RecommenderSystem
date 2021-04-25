@@ -1,0 +1,6 @@
+item_correlations
+user_profiles
+*.csv
+.ipynb_checkpoints
+scraper
+.DS_Store
