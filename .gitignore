@@ -2,5 +2,4 @@ data/item_correlations
 data/deltas
 user_profiles
 *.ipynb_checkpoints
-scraper
 .DS_Store
