@@ -1,5 +1,6 @@
 data/item_correlations
 data/deltas
+data/anime_facts
 user_profiles
 *.ipynb_checkpoints
 .DS_Store
