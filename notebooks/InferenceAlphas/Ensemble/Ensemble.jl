@@ -14,7 +14,6 @@ if !@isdefined ENSEMBLE_IFNDEF
     source_name = "LinearModel"
     @nbinclude("../Alpha.ipynb")
     @nbinclude("../../TrainingAlphas/Ensemble/EnsembleInputs.ipynb")
-    @nbinclude("../../TrainingAlphas/Ensemble/ItemMetadata.ipynb")
     Logging.disable_logging(Logging.Warn)
     
     function read_recommendee_suppressed_alpha(alpha::String, split::String, task::String)
@@ -58,12 +57,7 @@ if !@isdefined ENSEMBLE_IFNDEF
         params = read_params(source)
         base_features =
             reduce(hcat, read_recommendee_alpha(x, "all").rating for x in params["alphas"])
-        metadata_features = get_item_metadata_features(
-            convert.(Int32, fill(1, num_items())),
-            convert.(Int32, collect(1:num_items())),
-            get_recommendee_split("implicit"),
-        )
-        X = hcat(base_features, metadata_features)
+        X = base_features
 
         preds = convert.(Float32, vec(predict(params["model"], X)))
         write_recommendee_alpha(preds, source)
