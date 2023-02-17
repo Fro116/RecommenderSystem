@@ -35,7 +35,7 @@ if !@isdefined TRANSFORMER_IFNDEF
             word = encode_word(
                 df.item[i],
                 df.rating[i],
-                df.timestamp[i],
+                min.(df.timestamp[i], 1f0),
                 df.status[i],
                 df.completion[i],
                 df.user[i],
