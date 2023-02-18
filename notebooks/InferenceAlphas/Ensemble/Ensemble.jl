@@ -21,9 +21,6 @@ if !@isdefined ENSEMBLE_IFNDEF
         if alpha in implicit_raw_alphas(task)
             suppress = true
             content = "implicit"
-        elseif alpha in ptw_raw_alphas(task)
-            suppress = true
-            content = "ptw"
         else
             suppress = false
         end
@@ -46,7 +43,7 @@ if !@isdefined ENSEMBLE_IFNDEF
         for alpha in params["alphas"]
             push!(X, read_recommendee_suppressed_alpha(alpha, "all", task).rating)
         end
-        if content in ["implicit", "ptw"]
+        if content == "implicit"
             push!(X, fill(1.0f0 / num_items(), num_items()))
         end
         X = reduce(hcat, X)
@@ -139,7 +136,6 @@ username = ARGS[1]
 for task in ALL_TASKS
     compute_linear_alpha("$task/LinearExplicit", "explicit", task)
     compute_linear_alpha("$task/LinearImplicit", "implicit", task)
-    compute_linear_alpha("$task/LinearPtw", "ptw", task)
     compute_nonlinear_alpha("$task/NonlinearExplicit")
     compute_nonlinear_alpha("$task/NonlinearImplicit")
     compute_explicit_alpha(task)
