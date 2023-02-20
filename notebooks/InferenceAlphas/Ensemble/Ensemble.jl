@@ -78,43 +78,8 @@ if !@isdefined ENSEMBLE_IFNDEF
         collect(A')
     end
 
-    function get_implicit_features()
-        df = get_recommendee_split("implicit")
-        sparse(df.item, df.user, df.rating, num_items(), 1)
-    end
-
-    function get_explicit_features()
-        df = get_recommendee_split("explicit")
-        sparse(df.item, df.user, df.rating, num_items(), 1)
-    end
-
-    function get_user_features()
-        collect(vcat(get_implicit_features(), get_explicit_features()))
-    end
-
-    function get_embedding(
-        u::Integer,
-        a::Integer,
-        q::Integer,
-        user_features::AbstractMatrix,
-        query_features::AbstractMatrix,
-    )
-        user_features[:, u], [a], query_features[:, q]
-    end
-    
-    function get_embedding(
-        u::Integer,
-        a::Vector{Int32},
-        user_features::AbstractMatrix,
-        query_features::AbstractMatrix,
-    )
-        repeat(user_features[:, u], 1, length(a)), a, query_features[:, a]
-    end    
-    
-    function compute_mle_alpha(task)
-        name = "$task/MLE.Ensemble"
+    function compute_mle_alpha(name)
         params = read_params(name)
-        U = get_user_features()
         Q = get_query_features(params["hyp"].alphas)
         Q = (Q .- params["inference_data"]["μ"]) ./ params["inference_data"]["σ"]
         m = params["m"]
@@ -123,7 +88,7 @@ if !@isdefined ENSEMBLE_IFNDEF
         batch_size = params["hyp"].batch_size
         batches = chunk(convert.(Int32, 1:num_items()), batch_size)
         Threads.@threads for batch in batches
-            sample = get_embedding(1, batch, U, Q)
+            sample = Q[:, batch]
             alpha = m(sample)
             scores[batch] .= vec(alpha)
         end
@@ -139,5 +104,5 @@ for task in ALL_TASKS
     compute_nonlinear_alpha("$task/NonlinearExplicit")
     compute_nonlinear_alpha("$task/NonlinearImplicit")
     compute_explicit_alpha(task)
-    compute_mle_alpha(task)
+    compute_mle_alpha("$task/MLE.Ensemble.list_size_8")
 end
