@@ -69,11 +69,24 @@ if !@isdefined ENSEMBLE_IFNDEF
         end
         write_recommendee_alpha(preds, source)
     end
+
+    function get_query_transform(alpha)
+        if occursin("NonlinearImplicit", alpha)
+            transform = identity
+        elseif occursin("ItemCount", alpha)
+            transform = x -> log(x + 1)
+        elseif occursin("Variance", alpha) || occursin("implicit", lowercase(alpha))
+            transform = x -> log(x + Float32(eps(Float64)))
+        else
+            transform = identity
+        end
+    end
     
     function get_query_features(alphas::Vector{String})
         A = Matrix{Float32}(undef, num_items(), length(alphas))
         Threads.@threads for i = 1:length(alphas)
-            A[:, i] = read_recommendee_alpha(alphas[i], "all").rating
+            transform = get_query_transform(alphas[i])
+            A[:, i] = transform.(read_recommendee_alpha(alphas[i], "all").rating)
         end
         collect(A')
     end
@@ -82,6 +95,8 @@ if !@isdefined ENSEMBLE_IFNDEF
         params = read_params(name)
         Q = get_query_features(params["hyp"].alphas)
         Q = (Q .- params["inference_data"]["μ"]) ./ params["inference_data"]["σ"]
+        clip_std = params["inference_data"]["clip_std"]
+        clamp!(Q, -clip_std, clip_std)
         m = params["m"]
         chunk(arr, n) = [arr[i:min(i + n - 1, end)] for i = 1:n:length(arr)]
         scores = Array{Float32}(undef, num_items())
@@ -104,5 +119,5 @@ for task in ALL_TASKS
     compute_nonlinear_alpha("$task/NonlinearExplicit")
     compute_nonlinear_alpha("$task/NonlinearImplicit")
     compute_explicit_alpha(task)
-    compute_mle_alpha("$task/MLE.Ensemble.list_size_8")
+    compute_mle_alpha("$task/MLE.Ensemble")
 end

@@ -22,6 +22,17 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
         write_recommendee_alpha(preds, name)
     end
     
+    function compute_sequel_series_alpha(name)
+        df = get_recommendee_split("implicit")
+        x = zeros(Float32, num_items())
+        x[df.item] .= df.rating
+        x = 1 .- x
+        S = read_similarity_matrix("$name/similarity_matrix")
+        preds = S * x
+        write_recommendee_alpha(preds, name)
+    end
+        
+    
     function compute_seen_items_alpha()
         for content in ["explicit", "implicit", "ptw"]
             num_seen::Float32 = length(get_recommendee_split(content).item)
@@ -48,7 +59,8 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
 end
 
 username = ARGS[1]
-compute_related_series_alpha("all/RelatedSeries");
-compute_related_series_alpha("all/RecapSeries");
+compute_related_series_alpha("all/RelatedSeries")
+compute_related_series_alpha("all/RecapSeries")
+compute_sequel_series_alpha("all/SequelSeries")
 compute_seen_items_alpha()
 compute_user_stats_alpha()

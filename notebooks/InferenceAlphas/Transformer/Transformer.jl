@@ -27,15 +27,19 @@ if !@isdefined TRANSFORMER_IFNDEF
         sentences = Dict{Int32,Vector{word_type}}()
         df = reduce(cat, [get_df(content) for content in contents])
         order = sortperm(df.timestamp)
-        for idx = 1:length(order)
-            i = order[idx]
+        for i in order
             if df.user[i] ∉ keys(sentences)
                 sentences[df.user[i]] = [replace_user(cls_tokens, df.user[i])]
+            end
+            # handle timestamps from the future # TODO
+            ts = df.timestamp[i]
+            if ts > 1f0
+                ts = 1
             end
             word = encode_word(
                 df.item[i],
                 df.rating[i],
-                min.(df.timestamp[i], 1f0),
+                ts,
                 df.status[i],
                 df.completion[i],
                 df.user[i],
