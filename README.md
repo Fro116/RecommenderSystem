@@ -1,5 +1,5 @@
 # RecommenderSystem
-This is an anime recommender system based off of MyAnimeList and AniList user ratings. This codebase has been used to train a model on over 700 million user-item interactions spread across over 4 million users. See the notebook in `notebooks/README.ipynb` for usage instructions (you may need to install Python and JupyterLab first).
+This is an anime recommender system based off of MyAnimeList and AniList user ratings. This codebase has been used to train a model on over 800 million user-item interactions spread across over 5 million users. See the notebook in `notebooks/README.ipynb` for usage instructions (you may need to install Python and JupyterLab first).
 
 Details on the recommender system can be found by inspecting the source code at `notebooks/TrainingAlphas`. The main component is a BERT-style transformer that is pretrained on watch histories and fine-tuned on a learning-to-rank task. This model is then ensembled with other, more classical models.
 
