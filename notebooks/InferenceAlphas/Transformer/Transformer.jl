@@ -55,7 +55,7 @@ if !@isdefined TRANSFORMER_IFNDEF
         if task == "random"
             s = subset_sentence(s, max_seq_len - 1; recent = false, rng = rng)
             masked_word = mask_tokens
-        elseif task in ["causal", "temporal"]
+        elseif task == "temporal"
             s = subset_sentence(s, max_seq_len - 1; recent = true, rng = rng)
             masked_word = replace_position(mask_tokens, Int32(length(s)))
             masked_word = replace_timestamp(mask_tokens, 1)

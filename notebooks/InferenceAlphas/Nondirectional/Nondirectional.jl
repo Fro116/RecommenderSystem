@@ -11,7 +11,10 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
     NONDIRECTIONAL_IFNDEF = true  
     source_name = "Nondirectional"
     @nbinclude("../Alpha.ipynb");
-    @nbinclude("../../TrainingAlphas/Explicit/ExplicitItemCFBase.ipynb");   
+    
+    function read_similarity_matrix(outdir)
+        read_params(outdir)["S"]
+    end;    
     
     function compute_related_series_alpha(name)
         df = get_recommendee_split("implicit")
