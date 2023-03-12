@@ -26,8 +26,6 @@ if !@isdefined NEURAL_IFNDEF
         for content in ["explicit", "implicit"]
             push!(jobs, ("$task/Neural$(uppercasefirst(content))AutoencoderUntuned", task))
         end
-        push!(jobs, ("$task/NeuralExplicitItemCFUntuned", task))
-        push!(jobs, ("$task/NeuralImplicitEaseUntuned", task))
     end
     for j in jobs
         read_params_memoized(j[1])
