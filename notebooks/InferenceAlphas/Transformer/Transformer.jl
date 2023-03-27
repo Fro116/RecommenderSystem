@@ -8,8 +8,9 @@ import NBInclude: @nbinclude
 if !@isdefined TRANSFORMER_IFNDEF
     TRANSFORMER_IFNDEF=true
     source_name = "Transformer";
+    import Random
     @nbinclude("../Alpha.ipynb")
-    @nbinclude("../../TrainingAlphas/Transformer/Transformer.ipynb");
+    @nbinclude("../../TrainingAlphas/Transformer/Reference/Include.ipynb");
 
     function get_training_data(include_ptw, cls_tokens)
         function get_df(content)
@@ -24,12 +25,12 @@ if !@isdefined TRANSFORMER_IFNDEF
         if include_ptw
             push!(contents, "ptw")
         end
-        sentences = Dict{Int32,Vector{word_type}}()
+        sentences = Dict{Int32,Vector{wordtype}}()
         df = reduce(cat, [get_df(content) for content in contents])
         order = sortperm(df.timestamp)
         for i in order
             if df.user[i] ∉ keys(sentences)
-                sentences[df.user[i]] = [replace_user(cls_tokens, df.user[i])]
+                sentences[df.user[i]] = [replace(cls_tokens, :user, df.user[i])]
             end
             # handle timestamps from the future # TODO
             ts = df.timestamp[i]
@@ -57,8 +58,7 @@ if !@isdefined TRANSFORMER_IFNDEF
             masked_word = mask_tokens
         elseif task == "temporal"
             s = subset_sentence(s, max_seq_len - 1; recent = true, rng = rng)
-            masked_word = replace_position(mask_tokens, Int32(length(s)))
-            masked_word = replace_timestamp(mask_tokens, 1)
+            masked_word = replace(mask_tokens, :timestamp, 1)
         else
             @assert false
         end
@@ -70,9 +70,9 @@ if !@isdefined TRANSFORMER_IFNDEF
         rng = Random.GLOBAL_RNG
         seq_len = min(maximum(length.(sentences)), max_seq_len)
         tokens =
-            get_token_ids(sentences, seq_len, vocab_sizes[7], pad_tokens, cls_tokens; rng = rng)
+            get_token_ids(sentences, seq_len, extract(vocab_sizes, :position), pad_tokens, cls_tokens; rng = rng)
         attention_mask = reshape(
-            convert.(Float32, tokens[1] .!= pad_tokens[1]),
+            convert.(Float32, extract(tokens, :item) .!= extract(pad_tokens, :item)),
             (1, seq_len, length(sentences)),
         )
         attention_mask = attention_mask .* permutedims(attention_mask, (2, 1, 3))
@@ -95,14 +95,13 @@ if !@isdefined TRANSFORMER_IFNDEF
             config["pad_tokens"],
             config["cls_tokens"],
         )
-
         X = model.embed(
-            item = tokens[1],
-            rating = tokens[2],
-            timestamp = tokens[3],
-            status = tokens[4],
-            completion = tokens[5],
-            position = tokens[7],
+            item = extract(tokens, :item),
+            rating = extract(tokens, :rating),
+            timestamp = extract(tokens, :timestamp),
+            status = extract(tokens, :status),
+            completion = extract(tokens, :completion),
+            position = extract(tokens, :position),
         )
         X = model.transformers(X, attention_mask)
         X = gather(X, [(size(X)[2], 1)])
