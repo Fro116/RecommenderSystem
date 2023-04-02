@@ -26,17 +26,15 @@ if !@isdefined TRANSFORMER_IFNDEF
             push!(contents, "ptw")
         end
         sentences = Dict{Int32,Vector{wordtype}}()
+        sentences[1] = [replace(cls_tokens, :user, 1)]
         df = reduce(cat, [get_df(content) for content in contents])
         order = sortperm(df.timestamp)
         for i in order
-            if df.user[i] ∉ keys(sentences)
-                sentences[df.user[i]] = [replace(cls_tokens, :user, df.user[i])]
-            end
-            # handle timestamps from the future # TODO
             ts = df.timestamp[i]
-            if ts > 1f0
-                ts = 1
-            end
+            # handle timestamps from the future # TODO            
+            # if ts > 1f0
+            #     ts = 1
+            # end
             word = encode_word(
                 df.item[i],
                 df.rating[i],
