@@ -2,6 +2,7 @@
 # coding: utf-8
 
 import argparse
+import contextlib
 import glob
 import json
 import logging
@@ -23,6 +24,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
+
+
 
 
 # Logging
@@ -378,8 +381,9 @@ def get_dataset(rank, outdir, split, batch_size, worker, num_workers):
             last_worker = num_workers
         completion_file = os.path.join(outdir, "training", f"{split}.{last_worker}.h5.complete")
         data_file = completion_file[: -len(".complete")]
-        os.remove(completion_file)
-        os.remove(data_file)
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(completion_file)
+            os.remove(data_file)
 
     return dataset
 
@@ -549,7 +553,7 @@ def get_dataloader(
     return dataloader
 
 
-def run_process(rank, world_size, name):
+def run_process(rank, world_size, name, model_checkpoint):
     setup_multiprocessing(rank, world_size)
 
     outdir = get_data_path(os.path.join("alphas", name))
@@ -560,7 +564,9 @@ def run_process(rank, world_size, name):
     torch.set_float32_matmul_precision("high")
 
     model = TransformerModel(model_config).to(rank)
-    model = DDP(model, device_ids=[rank], output_device=rank)
+    if model_checkpoint is not None:
+        model.load_state_dict(torch.load(os.path.join(outdir, "model.pt")))
+    model = DDP(model, device_ids=[rank], output_device=rank, find_unused_parameters=True)
     optimizer = create_optimizer(model, training_config)
     scheduler = create_learning_rate_schedule(optimizer, training_config)
     scaler = torch.cuda.amp.GradScaler()
@@ -591,11 +597,10 @@ def run_process(rank, world_size, name):
 # Main
 parser = argparse.ArgumentParser(description='PytorchPretrain')
 parser.add_argument('--outdir', type=str, help='name of the data directory')
+parser.add_argument('--model_checkpoint', type=str, help='name of the model checkpoint directory')
 args = parser.parse_args()
-if args.outdir is not None:
-    name = args.outdir
-else:
-    name = "all/Transformer/v0"
+name = "all/Transformer/v0" if args.outdir is None else args.outdir
+model_checkpoint = args.model_checkpoint
 if __name__ == "__main__":
     world_size = torch.cuda.device_count()
-    mp.spawn(run_process, args=(world_size, name), nprocs=world_size)
+    mp.spawn(run_process, args=(world_size, name, model_checkpoint), nprocs=world_size)
