@@ -558,7 +558,7 @@ def run_process(rank, world_size, name, model_checkpoint):
 
     outdir = get_data_path(os.path.join("alphas", name))
     logger = get_logger(outdir, rank)
-    config_file = os.path.join(outdir, "training", "config.json")
+    config_file = os.path.join(outdir, "config.json")
     training_config = create_training_config(config_file)
     model_config = create_model_config(training_config)
     torch.set_float32_matmul_precision("high")
