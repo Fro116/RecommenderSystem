@@ -119,7 +119,7 @@ class Bert(nn.Module):
 
 
 class TransformerModel(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, finetune):
         super(TransformerModel, self).__init__()
 
         # create embeddings
@@ -183,6 +183,7 @@ class TransformerModel(nn.Module):
             self.crossentropy_lossfn,
             self.rating_lossfn,
         ]
+        self.finetune = finetune
 
     def crossentropy_lossfn(self, x, y, w):
         return (-x * y * w).sum() / w.sum()
@@ -190,7 +191,7 @@ class TransformerModel(nn.Module):
     def rating_lossfn(self, x, y, w):
         return (torch.square(x - y) * w).sum() / w.sum()
 
-    def lossfn(self, embed, lossfn, classifier, positions, labels, weights):
+    def pretrain_lossfn(self, embed, lossfn, classifier, positions, labels, weights):
         weight_sum = weights.sum()
         if not torch.is_nonzero(weight_sum):
             return weight_sum
@@ -201,15 +202,39 @@ class TransformerModel(nn.Module):
         weights = weights[bp[0], bp[1]]
         preds = classifier(embed).gather(dim=-1, index=positions)
         return lossfn(preds, labels, weights)
-
-    def forward(self, inputs, mask, positions, labels, weights):
+    
+    def pretrain_forward(self, inputs, mask, positions, labels, weights):
         e = self.embed(inputs)
         e = self.transformers(e, mask)
         losses = tuple(
-            self.lossfn(e, *args)
+            self.pretrain_lossfn(e, *args)
             for args in zip(self.lossfns, self.classifier, positions, labels, weights)
         )
-        return losses
+        return losses    
+    
+    def finetune_lossfn(self, embed, lossfn, classifier, labels, weights):
+        weight_sum = weights.sum()
+        if not torch.is_nonzero(weight_sum):
+            return weight_sum
+        preds = classifier(embed)
+        return lossfn(preds, labels, weights)    
+    
+    def finetune_forward(self, inputs, mask, positions, labels, weights):
+        e = self.embed(inputs)
+        e = self.transformers(e, mask)
+        e = e[range(len(positions)), positions, :]
+        losses = tuple(
+            self.finetune_lossfn(e, *args)
+            for args in zip(self.lossfns, self.classifier, labels, weights)
+        )
+        return losses  
+    
+    def forward(self, *args):
+        if self.finetune:
+            return self.finetune_forward(*args)
+        else:
+            return self.pretrain_forward(*args)
+
 
 
 # Configs
@@ -288,10 +313,10 @@ class PretrainDataset(Dataset):
         self.embeddings = [
             f["anime"][:] - 1,
             f["manga"][:] - 1,
-            f["rating"][:].reshape(*f["rating"].shape, 1),
-            f["timestamp"][:].reshape(*f["timestamp"].shape, 1),
+            f["rating"][:].reshape(*f["rating"].shape, 1).astype(np.float32),
+            f["timestamp"][:].reshape(*f["timestamp"].shape, 1).astype(np.float32),
             f["status"][:] - 1,
-            f["completion"][:].reshape(*f["completion"].shape, 1),
+            f["completion"][:].reshape(*f["completion"].shape, 1).astype(np.float32),
             f["position"][:] - 1,
         ]
         self.mask = f["user"][:]
@@ -301,60 +326,34 @@ class PretrainDataset(Dataset):
             return x.reshape(*x.shape, 1)
 
         self.positions = [
-            process_position(f["positions_anime_item"]),
-            process_position(f["positions_anime_rating"]),
-            process_position(f["positions_manga_item"]),
-            process_position(f["positions_manga_rating"]),
+            process_position(f[f"positions_{medium}_{task}"])
+            for medium in ["anime", "manga"]
+            for task in ["item", "rating"]
         ]
         self.labels = [
-            np.expand_dims(f["labels_anime_item"][:], axis=-1),
-            np.expand_dims(f["labels_anime_rating"][:], axis=-1),
-            np.expand_dims(f["labels_manga_item"][:], axis=-1),
-            np.expand_dims(f["labels_manga_rating"][:], axis=-1),
+            np.expand_dims(f[f"labels_{medium}_{task}"][:], axis=-1)
+            for medium in ["anime", "manga"]
+            for task in ["item", "rating"]
         ]
         self.weights = [
-            np.expand_dims(f["weights_anime_item"][:], axis=-1),
-            np.expand_dims(f["weights_anime_rating"][:], axis=-1),
-            np.expand_dims(f["weights_manga_item"][:], axis=-1),
-            np.expand_dims(f["weights_manga_rating"][:], axis=-1),
+            np.expand_dims(f[f"weights_{medium}_{task}"][:], axis=-1)
+            for medium in ["anime", "manga"]
+            for task in ["item", "rating"]
         ]
 
     def __len__(self):
         return self.length
 
     def __getitem__(self, i):
-        embeds = [
-            self.embeddings[0][i, :],
-            self.embeddings[1][i, :],
-            self.embeddings[2][i, :, :],
-            self.embeddings[3][i, :, :],
-            self.embeddings[4][i, :],
-            self.embeddings[5][i, :, :],
-            self.embeddings[6][i, :],
-        ]
+        embeds = [x[i, :] for x in self.embeddings]
 
         # a true value means that the tokens will not attend to each other
         mask = self.mask[i, :]
         mask = mask.reshape(1, mask.size) != mask.reshape(mask.size, 1)
 
-        positions = [
-            self.positions[0][:][i, :],
-            self.positions[1][:][i, :],
-            self.positions[2][:][i, :],
-            self.positions[3][:][i, :],
-        ]
-        labels = [
-            self.labels[0][:][i, :],
-            self.labels[1][:][i, :],
-            self.labels[2][:][i, :],
-            self.labels[3][:][i, :],
-        ]
-        weights = [
-            self.weights[0][:][i, :],
-            self.weights[1][:][i, :],
-            self.weights[2][:][i, :],
-            self.weights[3][:][i, :],
-        ]
+        positions = [x[i, :] for x in self.positions]
+        labels = [x[i, :] for x in self.labels]
+        weights = [x[i, :] for x in self.weights]
         return embeds, mask, positions, labels, weights
 
 
@@ -553,7 +552,7 @@ def get_dataloader(
     return dataloader
 
 
-def run_process(rank, world_size, name, model_checkpoint):
+def run_process(rank, world_size, name, finetune, model_init):
     setup_multiprocessing(rank, world_size)
 
     outdir = get_data_path(os.path.join("alphas", name))
@@ -563,9 +562,10 @@ def run_process(rank, world_size, name, model_checkpoint):
     model_config = create_model_config(training_config)
     torch.set_float32_matmul_precision("high")
 
-    model = TransformerModel(model_config).to(rank)
-    if model_checkpoint is not None:
-        model.load_state_dict(torch.load(os.path.join(outdir, "model.pt")))
+    model = TransformerModel(model_config, finetune).to(rank)
+    if model_init is not None:
+        model_outdir = get_data_path(os.path.join("alphas", model_init))
+        model.load_state_dict(torch.load(os.path.join(model_outdir, "model.pt")))
     model = DDP(model, device_ids=[rank], output_device=rank, find_unused_parameters=True)
     optimizer = create_optimizer(model, training_config)
     scheduler = create_learning_rate_schedule(optimizer, training_config)
@@ -597,10 +597,10 @@ def run_process(rank, world_size, name, model_checkpoint):
 # Main
 parser = argparse.ArgumentParser(description='PytorchPretrain')
 parser.add_argument('--outdir', type=str, help='name of the data directory')
-parser.add_argument('--model_checkpoint', type=str, help='name of the model checkpoint directory')
+parser.add_argument('--finetune', action='store_true', help='whether to pretrain a model or finetune one')
+parser.add_argument('--initialize', type=str, help='initialize training from a model checkpoint')
 args = parser.parse_args()
 name = "all/Transformer/v0" if args.outdir is None else args.outdir
-model_checkpoint = args.model_checkpoint
 if __name__ == "__main__":
     world_size = torch.cuda.device_count()
-    mp.spawn(run_process, args=(world_size, name, model_checkpoint), nprocs=world_size)
+    mp.spawn(run_process, args=(world_size, name, args.finetune, args.initialize), nprocs=world_size)
