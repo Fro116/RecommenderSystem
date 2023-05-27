@@ -274,13 +274,13 @@ def create_training_config(config_file):
         "peak_learning_rate": 3e-4 if config["mode"] == "pretrain" else 1e-5,
         "weight_decay": 1e-2,
         "num_epochs": 1 if config["mode"] == "pretrain" else 100, # TODO
-        "tokens_per_epoch": config["tokens_per_epoch"],
-        "num_validation_sentences": config["num_validation_sentences"],
+        "training_epoch_size": int(config["training_epoch_size"]),
+        "validation_epoch_size": int(config["validation_epoch_size"]),
         "batch_size": get_batch_size(),
         "warmup_ratio": 0.06,
         "mode": config["mode"],        
         # data
-        "num_data_workers": config["num_workers"],
+        "num_data_shards": config["num_workers"],
         "num_dataloader_workers": 4,
     }
     assert len(config["vocab_sizes"]) == len(config["vocab_types"])
@@ -415,43 +415,77 @@ class FinetuneDataset(Dataset):
         labels = [x[i, :].toarray().flatten() for x in self.labels]
         weights = [x[i, :].toarray().flatten() for x in self.weights]
         return embeds, mask, positions, labels, weights
+    
+    
+class StreamingDataset(Dataset):
+    def __init__(self, rank, outdir, split, batch_size, num_shards, mode, max_size):
+        self.rank = rank
+        self.outdir = outdir
+        self.split = split
+        self.batch_size = batch_size
+        self.shard = 1
+        self.num_shards = num_shards
+        self.mode = mode
+        self.max_size = max_size
+
+        self.start_index = 0
+        self.dataset = None
+        self.advance_stream()
+
+        self.last_item = 0
+
+    def advance_stream(self):
+        # wait for the data shard to be written
+        completion_file = os.path.join(
+            self.outdir, "training", f"{self.split}.{self.shard}.h5.complete"
+        )
+        while not os.path.exists(completion_file):
+            time.sleep(1)
+
+        # read the data shard
+        data_file = completion_file[: -len(".complete")]
+        if self.mode == "pretrain":
+            dataset = PretrainDataset(data_file)
+        elif self.mode == "finetune":
+            dataset = FinetuneDataset(data_file)
+        else:
+            assert False
+
+        # remove old data shards
+        worker_info = torch.utils.data.get_worker_info()
+        dataloader_worker = worker_info.id if worker_info is not None else 0
+        if self.rank == 0 and dataloader_worker == 0:
+            last_shard = self.num_shards if self.shard == 1 else self.shard - 1
+            completion_file = os.path.join(
+                self.outdir, "training", f"{self.split}.{last_shard}.h5.complete"
+            )
+            data_file = completion_file[: -len(".complete")]
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(completion_file)
+                os.remove(data_file)
+
+        if self.dataset:
+            self.start_index += len(self.dataset)
+        self.dataset = dataset
+        self.shard = 1 if self.shard == self.num_shards else self.shard + 1        
+
+    def __len__(self):
+        return self.max_size
+
+    def __getitem__(self, i):
+        assert i >= self.last_item
+        self.last_item = i
+
+        if i >= self.start_index + len(self.dataset):
+            self.advance_stream()
+        assert self.start_index <= i < self.start_index + len(self.dataset)
+        return self.dataset[i - self.start_index]    
 
 
 def to_device(data, device):
     if isinstance(data, (list, tuple)):
         return [to_device(x, device) for x in data]
     return data.to(device)
-
-
-def get_dataset(rank, outdir, split, batch_size, worker, num_workers, mode):
-    # wait for the data shard to be written
-    completion_file = os.path.join(outdir, "training", f"{split}.{worker}.h5.complete")
-    while not os.path.exists(completion_file):
-        time.sleep(1)
-
-    # read the data shard
-    data_file = completion_file[: -len(".complete")]
-    if mode == "pretrain":
-        dataset = PretrainDataset(data_file)
-    elif mode == "finetune":
-        dataset = FinetuneDataset(data_file)
-    else:
-        assert False
-
-    # remove old data shards
-    if rank == 0:
-        last_worker = worker - 1
-        if last_worker == 0:
-            last_worker = num_workers
-        completion_file = os.path.join(
-            outdir, "training", f"{split}.{last_worker}.h5.complete"
-        )
-        data_file = completion_file[: -len(".complete")]
-        with contextlib.suppress(FileNotFoundError):
-            os.remove(completion_file)
-            os.remove(data_file)
-
-    return dataset
 
 
 def get_data_path(file):
@@ -463,6 +497,29 @@ def get_data_path(file):
 
 
 # Training
+
+class EarlyStopper:
+    def __init__(self, patience, rtol):
+        self.patience = patience
+        self.counter = 0
+        self.best_score = float('inf')
+        self.early_stop = False
+        self.save_model = False
+        self.rtol = rtol
+
+    def __call__(self, score):
+        if score > self.best_score * (1 - self.rtol):
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.counter = 0 
+        self.save_model = False            
+        if score < self.best_score:
+            self.best_score = score
+            self.save_model = True
+
+        
 def create_optimizer(model, config):
     decay_parameters = []
     no_decay_parameters = []
@@ -481,17 +538,14 @@ def create_optimizer(model, config):
     )
 
 
-def create_learning_rate_schedule(optimizer, config):
+def create_learning_rate_schedule(optimizer, config, world_size):
     if config["mode"] == "pretrain":
-        steps_per_epoch = int(
-            math.ceil(
-                config["tokens_per_epoch"]
-                / (config["batch_size"] * config["max_sequence_length"])
-            )
+        steps_per_epoch = math.ceil(
+                config["training_epoch_size"] / (config["batch_size"] * world_size)
         )
         total_steps = config["num_epochs"] * steps_per_epoch
         warmup_ratio = config["warmup_ratio"]
-        warmup_steps = int(math.ceil(total_steps * warmup_ratio))
+        warmup_steps = math.ceil(total_steps * warmup_ratio)
         warmup_lambda = (
             lambda x: x / warmup_steps
             if x < warmup_steps
@@ -507,103 +561,59 @@ def create_learning_rate_schedule(optimizer, config):
         assert False
 
 
-def train_epoch(rank, world_size, outdir, model, config, optimizer, scheduler, scaler):
+def train_epoch(rank, world_size, outdir, model, dataloader, config, optimizer, scheduler, scaler):
     training_loss = 0.0
     training_steps = 0
-    tokens_remaining = config["tokens_per_epoch"]
-    tokens_per_batch = config["max_sequence_length"] * config["batch_size"]
     progress = tqdm(
-        desc=f"Number of Tokens",
-        total=tokens_remaining,
+        desc=f"Batches",
+        total=len(dataloader),
         mininterval=1,
         disable=rank != 0,
     )
-    data_worker = 1
-    while tokens_remaining > 0:
-        dataloader = get_dataloader(
-            rank,
-            world_size,
-            outdir,
-            config["mode"],
-            "training",
-            config["batch_size"],
-            data_worker,
-            config["num_data_workers"],
-            pin_memory=True,
-            num_workers=config["num_dataloader_workers"],
-        )
-        data_worker = (
-            1 if data_worker == config["num_data_workers"] else data_worker + 1
-        )
-        dataloader.sampler.set_epoch(0)
-        for data in dataloader:
-            optimizer.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                loss = sum(model(*to_device(data, rank)))
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            if config["mode"] != "finetune":
-                scheduler.step()
-            training_loss += float(loss)
-            training_steps += 1
-            update_size = tokens_per_batch * world_size
-            progress.update(update_size)
-            tokens_remaining -= update_size
-            if tokens_remaining <= 0:
-                break
+    for data in dataloader:
+        optimizer.zero_grad(set_to_none=True)
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            loss = sum(model(*to_device(data, rank)))
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        if config["mode"] != "finetune":
+            scheduler.step()
+        training_loss += float(loss)
+        training_steps += 1
+        progress.update(world_size)
     progress.close()
+    # TODO tensor losses
     return training_loss / training_steps
 
 
-def evaluate_metrics(rank, world_size, outdir, model, config):
+def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
     losses = [0.0 for _ in range(4)]
     steps = 0
-    sentences_remaining = config["num_validation_sentences"]
     # since we're not taking gradients, we can use bigger batches
-    batch_size = 2 * config["batch_size"]
     progress = tqdm(
-        desc=f"Number of Sentences",
-        total=sentences_remaining,
+        desc=f"Batches",
+        total=len(dataloader),
         mininterval=1,
         disable=rank != 0,
     )
-    data_worker = 1
-    while sentences_remaining > 0:
-        dataloader = get_dataloader(
-            rank,
-            world_size,
-            outdir,
-            config["mode"],
-            "validation",
-            batch_size,
-            data_worker,
-            config["num_data_workers"],
-            pin_memory=True,
-            num_workers=config["num_dataloader_workers"],
-        )
-        data_worker = (
-            1 if data_worker == config["num_data_workers"] else data_worker + 1
-        )
-        for data in dataloader:
-            with torch.no_grad():
-                with torch.cuda.amp.autocast():
-                    loss = model(*to_device(data, rank))
-                    for i in range(len(losses)):
-                        losses[i] += float(loss[i])
-            steps += 1
-            update_size = batch_size * world_size
-            progress.update(update_size)
-            sentences_remaining -= update_size
-            if sentences_remaining <= 0:
-                break
+    for data in dataloader:
+        with torch.no_grad():
+            with torch.cuda.amp.autocast():
+                loss = model(*to_device(data, rank))
+                for i in range(len(losses)):
+                    losses[i] += float(loss[i])
+        steps += 1
+        progress.update(world_size)
     progress.close()
     for i in range(len(losses)):
         losses[i] /= steps
     return losses
-    tensor_losses = torch.tensor(losses).to_device(rank)
-    total_loss = dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM) / world_size
-    return [float(x) for x in total_loss]
+
+    # TODO tensor losses
+    # tensor_losses = torch.tensor(losses).to_device(rank)
+    # total_loss = dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM) / world_size
+    # return [float(x) for x in total_loss]
 
 
 def save_model(rank, world_size, model, outdir):
@@ -625,14 +635,12 @@ def get_dataloader(
     mode,
     split,
     batch_size,
-    data_worker,
-    num_data_workers,
+    num_data_shards,
+    epoch_size,
     pin_memory=False,
     num_workers=0,
 ):
-    dataset = get_dataset(
-        rank, outdir, split, batch_size, data_worker, num_data_workers, mode
-    )
+    dataset = StreamingDataset(rank, outdir, split, batch_size, num_data_shards, mode, epoch_size)
     sampler = DistributedSampler(
         dataset, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False
     )
@@ -666,15 +674,36 @@ def run_process(rank, world_size, name, model_init):
         model, device_ids=[rank], output_device=rank, find_unused_parameters=True
     )
     optimizer = create_optimizer(model, training_config)
-    scheduler = create_learning_rate_schedule(optimizer, training_config)
+    scheduler = create_learning_rate_schedule(optimizer, training_config, world_size)
     scaler = torch.cuda.amp.GradScaler()
-
+    stopper = (
+        EarlyStopper(patience=10, rtol=0.001)
+        if training_config["mode"] == "finetune"
+        else None
+    )    
+    
     for epoch in range(training_config["num_epochs"]):
+        dataloaders = {
+            x: get_dataloader(
+                rank,
+                world_size,
+                outdir,
+                training_config["mode"],
+                x,
+                training_config["batch_size"] * (1 if x == "training" else 2),
+                training_config["num_data_shards"],
+                training_config[f"{x}_epoch_size"],
+                pin_memory=True,
+                num_workers=training_config["num_dataloader_workers"],
+            )    
+            for x in ["training", "validation"]
+        }
         training_loss = train_epoch(
             rank,
             world_size,
             outdir,
             model,
+            dataloaders["training"],
             training_config,
             optimizer,
             scheduler,
@@ -682,15 +711,21 @@ def run_process(rank, world_size, name, model_init):
         )
         logger.info(f"Epoch: {epoch}, Training Loss: {training_loss}")
         validation_loss = evaluate_metrics(
-            rank, world_size, outdir, model, training_config
+            rank, world_size, outdir, model, dataloaders["validation"], training_config
         )
         if training_config["mode"] == "finetune":
             scheduler.step(sum(validation_loss))
         logger.info(
             f"Epoch: {epoch}, Validation Loss: {sum(validation_loss)}, {validation_loss}"
         )
-
-    save_model(rank, world_size, model, outdir)
+        if stopper:
+            stopper(sum(validation_loss))
+            if stopper.save_model:
+                save_model(rank, world_size, model, outdir)
+            if stopper.early_stop:
+                break
+    if not stopper:
+        save_model(rank, world_size, model, outdir)    
     dist.destroy_process_group()
 
 
