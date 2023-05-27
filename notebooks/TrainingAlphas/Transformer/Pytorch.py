@@ -492,6 +492,10 @@ def get_data_path(file):
     return os.path.join(path, "data", file)
 
 
+def get_temp_path(file):
+    return get_data_path(file)
+
+
 # Training
 
 class EarlyStopper:
@@ -577,10 +581,14 @@ def train_epoch(rank, world_size, outdir, model, dataloader, config, optimizer, 
             scheduler.step()
         training_loss += float(loss)
         training_steps += 1
-        progress.update(world_size)
+        progress.update()
     progress.close()
-    # TODO tensor losses
-    return training_loss / training_steps
+    
+    training_loss = training_loss / training_steps
+    tensor_losses = torch.tensor([training_loss]).to(rank)
+    dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM)
+    tensor_losses /= world_size
+    return [float(x) for x in tensor_losses]
 
 
 def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
@@ -600,16 +608,14 @@ def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
                 for i in range(len(losses)):
                     losses[i] += float(loss[i])
         steps += 1
-        progress.update(world_size)
+        progress.update()
     progress.close()
     for i in range(len(losses)):
         losses[i] /= steps
-    return losses
-
-    # TODO tensor losses
-    # tensor_losses = torch.tensor(losses).to_device(rank)
-    # total_loss = dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM) / world_size
-    # return [float(x) for x in total_loss]
+    tensor_losses = torch.tensor(losses).to(rank)
+    dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM)
+    tensor_losses /= world_size
+    return [float(x) for x in tensor_losses]
 
 
 def save_model(rank, world_size, model, outdir):
@@ -655,7 +661,7 @@ def get_dataloader(
 def run_process(rank, world_size, name, model_init):
     setup_multiprocessing(rank, world_size)
 
-    outdir = get_data_path(os.path.join("alphas", name))
+    outdir = get_temp_path(os.path.join("alphas", name))
     logger = get_logger(outdir, rank)
     config_file = os.path.join(outdir, "config.json")
     training_config = create_training_config(config_file)
@@ -731,8 +737,9 @@ parser.add_argument("--outdir", type=str, help="name of the data directory")
 parser.add_argument(
     "--initialize", type=str, help="initialize training from a model checkpoint"
 )
+parser.add_argument("--gpus", type=int, help="number of gpus to use")
 args = parser.parse_args()
 name = "all/Transformer/v0" if args.outdir is None else args.outdir
+gpus = torch.cuda.device_count() if args.gpus is None else args.gpus
 if __name__ == "__main__":
-    world_size = torch.cuda.device_count()
-    mp.spawn(run_process, args=(world_size, name, args.initialize), nprocs=world_size)
+    mp.spawn(run_process, args=(gpus, name, args.initialize), nprocs=gpus)
