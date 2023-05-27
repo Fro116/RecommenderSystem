@@ -242,12 +242,8 @@ def get_batch_size():
             / 2**30
         )
     )
-    if gpu_mem == 40:
-        return 256
-    elif gpu_mem == 24:
-        return 128
-    else:
-        return 128
+    mult = max(round(gpu_mem / 20), 1)
+    return 128 * mult
 
 
 def create_training_config(config_file):
