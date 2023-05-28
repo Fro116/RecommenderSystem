@@ -269,15 +269,15 @@ def create_training_config(config_file):
         # training
         "peak_learning_rate": 3e-4 if config["mode"] == "pretrain" else 1e-5,
         "weight_decay": 1e-2,
-        "num_epochs": 1 if config["mode"] == "pretrain" else 100, # TODO
+        "num_epochs": 1 if config["mode"] == "pretrain" else 100,  # TODO
         "training_epoch_size": int(config["training_epoch_size"]),
         "validation_epoch_size": int(config["validation_epoch_size"]),
         "batch_size": get_batch_size(),
         "warmup_ratio": 0.06,
-        "mode": config["mode"],        
+        "mode": config["mode"],
         # data
-        "num_data_shards": config["num_workers"],
-        "num_dataloader_workers": 4,
+        "num_data_shards": config["num_data_shards"],
+        "num_dataloader_workers": config["num_dataloader_workers"],
     }
     assert len(config["vocab_sizes"]) == len(config["vocab_types"])
     assert len(config["vocab_sizes"]) == len(config["vocab_names"])
@@ -411,11 +411,23 @@ class FinetuneDataset(Dataset):
         labels = [x[i, :].toarray().flatten() for x in self.labels]
         weights = [x[i, :].toarray().flatten() for x in self.weights]
         return embeds, mask, positions, labels, weights
-    
-    
+
+
 class StreamingDataset(Dataset):
-    def __init__(self, rank, outdir, split, batch_size, num_shards, mode, max_size):
+    def __init__(
+        self,
+        rank,
+        world_size,
+        num_workers,
+        outdir,
+        split,
+        batch_size,
+        num_shards,
+        mode,
+        max_size,
+    ):
         self.rank = rank
+        self.world_size = world_size
         self.outdir = outdir
         self.split = split
         self.batch_size = batch_size
@@ -423,19 +435,27 @@ class StreamingDataset(Dataset):
         self.num_shards = num_shards
         self.mode = mode
         self.max_size = max_size
-
-        self.start_index = 0
-        self.dataset = None
-        self.advance_stream()
-
-        self.last_item = 0
+        self.data = [
+            {
+                "dataset": None,
+                "start_index": 0,
+                "last_item": 0,
+            }
+            for _ in range(num_workers)
+        ]
 
     def advance_stream(self):
         # wait for the data shard to be written
-        completion_file = os.path.join(
-            self.outdir, "training", f"{self.split}.{self.shard}.h5.complete"
+        workerid = torch.utils.data.get_worker_info().id        
+        basefile = os.path.join(
+            self.outdir, "training", f"{self.split}.{self.shard}.h5"
         )
-        while not os.path.exists(completion_file):
+        completion_file = basefile + ".complete"
+        num_workers = torch.utils.data.get_worker_info().num_workers
+        read_file = (
+            basefile + f".read.{self.rank}.{workerid}.{self.world_size}.{num_workers}"
+        )
+        while os.path.exists(read_file) or not os.path.exists(completion_file):
             time.sleep(1)
 
         # read the data shard
@@ -446,36 +466,26 @@ class StreamingDataset(Dataset):
             dataset = FinetuneDataset(data_file)
         else:
             assert False
+        open(read_file, "w").close()
 
-        # remove old data shards
-        worker_info = torch.utils.data.get_worker_info()
-        dataloader_worker = worker_info.id if worker_info is not None else 0
-        if self.rank == 0 and dataloader_worker == 0:
-            last_shard = self.num_shards if self.shard == 1 else self.shard - 1
-            completion_file = os.path.join(
-                self.outdir, "training", f"{self.split}.{last_shard}.h5.complete"
-            )
-            data_file = completion_file[: -len(".complete")]
-            with contextlib.suppress(FileNotFoundError):
-                os.remove(completion_file)
-                os.remove(data_file)
-
-        if self.dataset:
-            self.start_index += len(self.dataset)
-        self.dataset = dataset
-        self.shard = 1 if self.shard == self.num_shards else self.shard + 1        
+        if self.data[workerid]["dataset"]:
+            self.data[workerid]["start_index"] += len(self.data[workerid]["dataset"])
+        self.data[workerid]["dataset"] = dataset
+        self.shard = 1 if self.shard == self.num_shards else self.shard + 1
 
     def __len__(self):
         return self.max_size
 
     def __getitem__(self, i):
-        assert i >= self.last_item
-        self.last_item = i
+        workerid = torch.utils.data.get_worker_info().id
+        assert i >= self.data[workerid]["last_item"]
+        self.data[workerid]["last_item"] = i
 
-        if i >= self.start_index + len(self.dataset):
+        while self.data[workerid]["dataset"] is None or i >= self.data[
+            workerid
+        ]["start_index"] + len(self.data[workerid]["dataset"]):
             self.advance_stream()
-        assert self.start_index <= i < self.start_index + len(self.dataset)
-        return self.dataset[i - self.start_index]    
+        return self.data[workerid]["dataset"][i - self.data[workerid]["start_index"]]
 
 
 def to_device(data, device):
@@ -498,11 +508,12 @@ def get_temp_path(file):
 
 # Training
 
+
 class EarlyStopper:
     def __init__(self, patience, rtol):
         self.patience = patience
         self.counter = 0
-        self.best_score = float('inf')
+        self.best_score = float("inf")
         self.early_stop = False
         self.save_model = False
         self.rtol = rtol
@@ -513,13 +524,13 @@ class EarlyStopper:
             if self.counter >= self.patience:
                 self.early_stop = True
         else:
-            self.counter = 0 
-        self.save_model = False            
+            self.counter = 0
+        self.save_model = False
         if score < self.best_score:
             self.best_score = score
             self.save_model = True
 
-        
+
 def create_optimizer(model, config):
     decay_parameters = []
     no_decay_parameters = []
@@ -541,7 +552,7 @@ def create_optimizer(model, config):
 def create_learning_rate_schedule(optimizer, config, world_size):
     if config["mode"] == "pretrain":
         steps_per_epoch = math.ceil(
-                config["training_epoch_size"] / (config["batch_size"] * world_size)
+            config["training_epoch_size"] / (config["batch_size"] * world_size)
         )
         total_steps = config["num_epochs"] * steps_per_epoch
         warmup_ratio = config["warmup_ratio"]
@@ -561,7 +572,9 @@ def create_learning_rate_schedule(optimizer, config, world_size):
         assert False
 
 
-def train_epoch(rank, world_size, outdir, model, dataloader, config, optimizer, scheduler, scaler):
+def train_epoch(
+    rank, world_size, outdir, model, dataloader, config, optimizer, scheduler, scaler
+):
     training_loss = 0.0
     training_steps = 0
     progress = tqdm(
@@ -583,7 +596,7 @@ def train_epoch(rank, world_size, outdir, model, dataloader, config, optimizer, 
         training_steps += 1
         progress.update()
     progress.close()
-    
+
     training_loss = training_loss / training_steps
     tensor_losses = torch.tensor([training_loss]).to(rank)
     dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM)
@@ -642,7 +655,17 @@ def get_dataloader(
     pin_memory=False,
     num_workers=0,
 ):
-    dataset = StreamingDataset(rank, outdir, split, batch_size, num_data_shards, mode, epoch_size)
+    dataset = StreamingDataset(
+        rank,
+        world_size,
+        num_workers,
+        outdir,
+        split,
+        batch_size,
+        num_data_shards,
+        mode,
+        epoch_size,
+    )
     sampler = DistributedSampler(
         dataset, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False
     )
@@ -682,8 +705,8 @@ def run_process(rank, world_size, name, model_init):
         EarlyStopper(patience=10, rtol=0.001)
         if training_config["mode"] == "finetune"
         else None
-    )    
-    
+    )
+
     for epoch in range(training_config["num_epochs"]):
         dataloaders = {
             x: get_dataloader(
@@ -697,7 +720,7 @@ def run_process(rank, world_size, name, model_init):
                 training_config[f"{x}_epoch_size"],
                 pin_memory=True,
                 num_workers=training_config["num_dataloader_workers"],
-            )    
+            )
             for x in ["training", "validation"]
         }
         training_loss = train_epoch(
@@ -727,8 +750,15 @@ def run_process(rank, world_size, name, model_init):
             if stopper.early_stop:
                 break
     if not stopper:
-        save_model(rank, world_size, model, outdir)    
+        save_model(rank, world_size, model, outdir)
     dist.destroy_process_group()
+
+
+def cleanup_previous_runs(name):
+    outdir = get_temp_path(os.path.join("alphas", name, "training"))
+    for x in os.listdir(outdir):
+        if "read" in x:
+            os.remove(os.path.join(outdir, x))
 
 
 # Main
@@ -742,4 +772,5 @@ args = parser.parse_args()
 name = "all/Transformer/v0" if args.outdir is None else args.outdir
 gpus = torch.cuda.device_count() if args.gpus is None else args.gpus
 if __name__ == "__main__":
+    cleanup_previous_runs(name)
     mp.spawn(run_process, args=(gpus, name, args.initialize), nprocs=gpus)
