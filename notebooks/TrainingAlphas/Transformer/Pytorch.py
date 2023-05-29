@@ -246,7 +246,7 @@ def get_batch_size():
     return 128 * mult
 
 
-def create_training_config(config_file):
+def create_training_config(config_file, epochs):
     config = json.load(open(config_file, "r"))
     config = {
         # tokenization
@@ -269,7 +269,7 @@ def create_training_config(config_file):
         # training
         "peak_learning_rate": 3e-4 if config["mode"] == "pretrain" else 1e-5,
         "weight_decay": 1e-2,
-        "num_epochs": 1 if config["mode"] == "pretrain" else 100,  # TODO
+        "num_epochs": epochs,
         "training_epoch_size": int(config["training_epoch_size"]),
         "validation_epoch_size": int(config["validation_epoch_size"]),
         "batch_size": get_batch_size(),
@@ -681,13 +681,13 @@ def get_dataloader(
     return dataloader
 
 
-def run_process(rank, world_size, name, model_init):
+def run_process(rank, world_size, name, epochs, model_init):
     setup_multiprocessing(rank, world_size)
 
     outdir = get_temp_path(os.path.join("alphas", name))
     logger = get_logger(outdir, rank)
     config_file = os.path.join(outdir, "config.json")
-    training_config = create_training_config(config_file)
+    training_config = create_training_config(config_file, epochs)
     model_config = create_model_config(training_config)
     torch.set_float32_matmul_precision("high")
 
@@ -768,9 +768,11 @@ parser.add_argument(
     "--initialize", type=str, help="initialize training from a model checkpoint"
 )
 parser.add_argument("--gpus", type=int, help="number of gpus to use")
+parser.add_argument("--epochs", type=int, help="number of epochs to use")
 args = parser.parse_args()
-name = "all/Transformer/v0" if args.outdir is None else args.outdir
-gpus = torch.cuda.device_count() if args.gpus is None else args.gpus
 if __name__ == "__main__":
+    name = "all/Transformer/v0" if args.outdir is None else args.outdir
+    gpus = torch.cuda.device_count() if args.gpus is None else args.gpus    
+    epochs = 1 if args.epochs is None else args.epochs
     cleanup_previous_runs(name)
-    mp.spawn(run_process, args=(gpus, name, args.initialize), nprocs=gpus)
+    mp.spawn(run_process, args=(gpus, name, epochs, args.initialize), nprocs=gpus)
