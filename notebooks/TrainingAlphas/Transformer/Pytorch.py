@@ -431,24 +431,32 @@ class StreamingDataset(Dataset):
         self.outdir = outdir
         self.split = split
         self.batch_size = batch_size
-        self.shard = 1
         self.num_shards = num_shards
         self.mode = mode
         self.max_size = max_size
+        self.num_workers = num_workers
         self.data = [
             {
                 "dataset": None,
                 "start_index": 0,
-                "last_item": 0,
+                "shard": 1,
             }
-            for _ in range(num_workers)
-        ]
+            for _ in range(self.num_workers)
+        ]        
+
+    def reset(self):
+        worker = torch.utils.data.get_worker_info().id
+        self.data[worker] = {
+            "dataset": None,
+            "start_index": 0,
+            "shard": 1,
+        }        
 
     def advance_stream(self):
         # wait for the data shard to be written
-        workerid = torch.utils.data.get_worker_info().id        
+        workerid = torch.utils.data.get_worker_info().id
         basefile = os.path.join(
-            self.outdir, "training", f"{self.split}.{self.shard}.h5"
+            self.outdir, "training", f'{self.split}.{self.data[workerid]["shard"]}.h5'
         )
         completion_file = basefile + ".complete"
         num_workers = torch.utils.data.get_worker_info().num_workers
@@ -471,19 +479,23 @@ class StreamingDataset(Dataset):
         if self.data[workerid]["dataset"]:
             self.data[workerid]["start_index"] += len(self.data[workerid]["dataset"])
         self.data[workerid]["dataset"] = dataset
-        self.shard = 1 if self.shard == self.num_shards else self.shard + 1
+        self.data[workerid]["shard"] = (
+            1
+            if self.data[workerid]["shard"] == self.num_shards
+            else self.data[workerid]["shard"] + 1
+        )
 
     def __len__(self):
         return self.max_size
 
     def __getitem__(self, i):
         workerid = torch.utils.data.get_worker_info().id
-        assert i >= self.data[workerid]["last_item"]
-        self.data[workerid]["last_item"] = i
+        if i < self.data[workerid]["start_index"]:
+            self.reset()
 
-        while self.data[workerid]["dataset"] is None or i >= self.data[
-            workerid
-        ]["start_index"] + len(self.data[workerid]["dataset"]):
+        while self.data[workerid]["dataset"] is None or i >= self.data[workerid][
+            "start_index"
+        ] + len(self.data[workerid]["dataset"]):
             self.advance_stream()
         return self.data[workerid]["dataset"][i - self.data[workerid]["start_index"]]
 
@@ -771,8 +783,9 @@ parser.add_argument("--gpus", type=int, help="number of gpus to use")
 parser.add_argument("--epochs", type=int, help="number of epochs to use")
 args = parser.parse_args()
 if __name__ == "__main__":
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'        
     name = "all/Transformer/v0" if args.outdir is None else args.outdir
-    gpus = torch.cuda.device_count() if args.gpus is None else args.gpus    
+    gpus = torch.cuda.device_count() if args.gpus is None else args.gpus
     epochs = 1 if args.epochs is None else args.epochs
     cleanup_previous_runs(name)
     mp.spawn(run_process, args=(gpus, name, epochs, args.initialize), nprocs=gpus)
