@@ -243,7 +243,7 @@ def get_batch_size():
         )
     )
     mult = max(round(gpu_mem / 20), 1)
-    return 128 * mult
+    return 96 * mult
 
 
 def create_training_config(config_file, epochs):
@@ -433,24 +433,19 @@ class StreamingDataset(Dataset):
         self.batch_size = batch_size
         self.num_shards = num_shards
         self.mode = mode
-        self.max_size = max_size
+        chunk_size = batch_size * world_size
+        self.max_size = chunk_size * math.ceil(max_size / chunk_size)
         self.num_workers = num_workers
         self.data = [
             {
                 "dataset": None,
                 "start_index": 0,
+                "epoch": 0,                
                 "shard": 1,
+                "prev_item": 0,                
             }
             for _ in range(self.num_workers)
         ]        
-
-    def reset(self):
-        worker = torch.utils.data.get_worker_info().id
-        self.data[worker] = {
-            "dataset": None,
-            "start_index": 0,
-            "shard": 1,
-        }        
 
     def advance_stream(self):
         # wait for the data shard to be written
@@ -490,9 +485,14 @@ class StreamingDataset(Dataset):
 
     def __getitem__(self, i):
         workerid = torch.utils.data.get_worker_info().id
-        if i < self.data[workerid]["start_index"]:
-            self.reset()
-
+        
+        # if we're starting a new epoch        
+        while i + self.data[workerid]["epoch"] * self.max_size < self.data[workerid]["prev_item"]:
+            self.data[workerid]["epoch"] += 1 
+        i += self.data[workerid]["epoch"] * self.max_size
+        self.data[workerid]["prev_item"] = i
+        
+        # if we're loading a new shard
         while self.data[workerid]["dataset"] is None or i >= self.data[workerid][
             "start_index"
         ] + len(self.data[workerid]["dataset"]):
