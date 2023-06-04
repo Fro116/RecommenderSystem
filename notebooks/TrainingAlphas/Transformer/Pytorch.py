@@ -276,7 +276,8 @@ def create_training_config(config_file, epochs):
         "warmup_ratio": 0.06,
         "mode": config["mode"],
         # data
-        "num_data_shards": config["num_data_shards"],
+        "num_training_shards": config["num_training_shards"],
+        "num_validation_shards": config["num_validation_shards"],        
         "num_dataloader_workers": config["num_dataloader_workers"],
     }
     assert len(config["vocab_sizes"]) == len(config["vocab_types"])
@@ -434,7 +435,8 @@ class StreamingDataset(Dataset):
         self.num_shards = num_shards
         self.mode = mode
         chunk_size = batch_size * world_size
-        self.max_size = chunk_size * math.ceil(max_size / chunk_size)
+        rounding = math.floor if split == "validation" else math.ceil
+        self.max_size = chunk_size * rounding(max_size / chunk_size) 
         self.num_workers = num_workers
         self.data = [
             {
@@ -728,7 +730,7 @@ def run_process(rank, world_size, name, epochs, model_init):
                 training_config["mode"],
                 x,
                 training_config["batch_size"] * (1 if x == "training" else 2),
-                training_config["num_data_shards"],
+                training_config[f"num_{x}_shards"],
                 training_config[f"{x}_epoch_size"],
                 pin_memory=True,
                 num_workers=training_config["num_dataloader_workers"],
