@@ -243,7 +243,7 @@ def get_batch_size():
         )
     )
     mult = max(round(gpu_mem / 20), 1)
-    return 96 * mult
+    return 64 * mult
 
 
 def create_training_config(config_file, epochs):
@@ -263,8 +263,8 @@ def create_training_config(config_file, epochs):
             "position",
         ],
         # model
-        "num_layers": 4,
-        "hidden_size": 512,
+        "num_layers": 8,
+        "hidden_size": 768,
         "max_sequence_length": config["max_sequence_length"],
         # training
         "peak_learning_rate": 3e-4 if config["mode"] == "pretrain" else 1e-5,
