@@ -1,6 +1,11 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+# prevent multithreading deadlocks
+import os
+
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
 import argparse
 import contextlib
 import glob
@@ -243,7 +248,7 @@ def get_batch_size():
         )
     )
     mult = max(round(gpu_mem / 20), 1)
-    return 64 * mult
+    return 16 * mult
 
 
 def create_training_config(config_file, epochs):
@@ -277,7 +282,7 @@ def create_training_config(config_file, epochs):
         "mode": config["mode"],
         # data
         "num_training_shards": config["num_training_shards"],
-        "num_validation_shards": config["num_validation_shards"],        
+        "num_validation_shards": config["num_validation_shards"],
         "num_dataloader_workers": config["num_dataloader_workers"],
     }
     assert len(config["vocab_sizes"]) == len(config["vocab_types"])
@@ -436,18 +441,18 @@ class StreamingDataset(Dataset):
         self.mode = mode
         chunk_size = batch_size * world_size
         rounding = math.floor if split == "validation" else math.ceil
-        self.max_size = chunk_size * rounding(max_size / chunk_size) 
+        self.max_size = chunk_size * rounding(max_size / chunk_size)
         self.num_workers = num_workers
         self.data = [
             {
                 "dataset": None,
                 "start_index": 0,
-                "epoch": 0,                
+                "epoch": 0,
                 "shard": 1,
-                "prev_item": 0,                
+                "prev_item": 0,
             }
             for _ in range(self.num_workers)
-        ]        
+        ]
 
     def advance_stream(self):
         # wait for the data shard to be written
@@ -487,13 +492,16 @@ class StreamingDataset(Dataset):
 
     def __getitem__(self, i):
         workerid = torch.utils.data.get_worker_info().id
-        
-        # if we're starting a new epoch        
-        while i + self.data[workerid]["epoch"] * self.max_size < self.data[workerid]["prev_item"]:
-            self.data[workerid]["epoch"] += 1 
+
+        # if we're starting a new epoch
+        while (
+            i + self.data[workerid]["epoch"] * self.max_size
+            < self.data[workerid]["prev_item"]
+        ):
+            self.data[workerid]["epoch"] += 1
         i += self.data[workerid]["epoch"] * self.max_size
         self.data[workerid]["prev_item"] = i
-        
+
         # if we're loading a new shard
         while self.data[workerid]["dataset"] is None or i >= self.data[workerid][
             "start_index"
@@ -666,7 +674,6 @@ def get_dataloader(
     batch_size,
     num_data_shards,
     epoch_size,
-    pin_memory=False,
     num_workers=0,
 ):
     dataset = StreamingDataset(
@@ -686,11 +693,12 @@ def get_dataloader(
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
-        pin_memory=pin_memory,
         num_workers=num_workers,
+        sampler=sampler,
         drop_last=False,
         shuffle=False,
-        sampler=sampler,
+        persistent_workers=True,
+        pin_memory=True,
     )
     return dataloader
 
@@ -703,7 +711,23 @@ def run_process(rank, world_size, name, epochs, model_init):
     config_file = os.path.join(outdir, "config.json")
     training_config = create_training_config(config_file, epochs)
     model_config = create_model_config(training_config)
+    torch.cuda.set_device(rank)
     torch.set_float32_matmul_precision("high")
+
+    dataloaders = {
+        x: get_dataloader(
+            rank,
+            world_size,
+            outdir,
+            training_config["mode"],
+            x,
+            training_config["batch_size"] * (1 if x == "training" else 2),
+            training_config[f"num_{x}_shards"],
+            training_config[f"{x}_epoch_size"],
+            num_workers=training_config["num_dataloader_workers"],
+        )
+        for x in ["training", "validation"]
+    }
 
     model = TransformerModel(model_config).to(rank)
     if model_init is not None:
@@ -721,22 +745,12 @@ def run_process(rank, world_size, name, epochs, model_init):
         else None
     )
 
+    initial_loss = evaluate_metrics(
+        rank, world_size, outdir, model, dataloaders["validation"], training_config
+    )
+    logger.info(f"Initial Loss: {sum(initial_loss)}, {initial_loss}")
+
     for epoch in range(training_config["num_epochs"]):
-        dataloaders = {
-            x: get_dataloader(
-                rank,
-                world_size,
-                outdir,
-                training_config["mode"],
-                x,
-                training_config["batch_size"] * (1 if x == "training" else 2),
-                training_config[f"num_{x}_shards"],
-                training_config[f"{x}_epoch_size"],
-                pin_memory=True,
-                num_workers=training_config["num_dataloader_workers"],
-            )
-            for x in ["training", "validation"]
-        }
         training_loss = train_epoch(
             rank,
             world_size,
@@ -785,7 +799,6 @@ parser.add_argument("--gpus", type=int, help="number of gpus to use")
 parser.add_argument("--epochs", type=int, help="number of epochs to use")
 args = parser.parse_args()
 if __name__ == "__main__":
-    os.environ['OPENBLAS_NUM_THREADS'] = '1'        
     name = "all/Transformer/v0" if args.outdir is None else args.outdir
     gpus = torch.cuda.device_count() if args.gpus is None else args.gpus
     epochs = 1 if args.epochs is None else args.epochs
