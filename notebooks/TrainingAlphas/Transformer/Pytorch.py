@@ -5,6 +5,7 @@
 import os
 
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
 
 import argparse
 import contextlib
@@ -228,10 +229,14 @@ class TransformerModel(nn.Module):
         preds = classifier(embed)
         return lossfn(preds, labels, weights)
 
-    def finetune_forward(self, inputs, mask, positions, labels, weights):
+    def finetune_forward(
+        self, inputs, mask, positions, labels, weights, users, embed_only=False
+    ):
         e = self.embed(inputs)
         e = self.transformers(e, mask)
         e = e[range(len(positions)), positions, :]
+        if embed_only:
+            return e
         losses = tuple(
             self.finetune_lossfn(e, *args)
             for args in zip(self.lossfns, self.classifier, labels, weights)
@@ -413,10 +418,12 @@ class FinetuneDataset(Dataset):
         mask = self.mask[i, :]
         mask = mask.reshape(1, mask.size) != mask.reshape(mask.size, 1)
 
+        user = self.mask[i, 0]
+
         positions = self.positions[i]
         labels = [x[i, :].toarray().flatten() for x in self.labels]
         weights = [x[i, :].toarray().flatten() for x in self.weights]
-        return embeds, mask, positions, labels, weights
+        return embeds, mask, positions, labels, weights, user
 
 
 class StreamingDataset(Dataset):
@@ -529,8 +536,6 @@ def get_temp_path(file):
 
 
 # Training
-
-
 class EarlyStopper:
     def __init__(self, patience, rtol):
         self.patience = patience
@@ -586,10 +591,7 @@ def create_learning_rate_schedule(optimizer, config, world_size):
         )
         return optim.lr_scheduler.LambdaLR(optimizer, warmup_lambda)
     elif config["mode"] == "finetune":
-        # TODO optimize params
-        return optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, factor=0.1, patience=1, threshold=0.001
-        )
+        return None
     else:
         assert False
 
@@ -612,7 +614,7 @@ def train_epoch(
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-        if config["mode"] != "finetune":
+        if scheduler is not None:
             scheduler.step()
         training_loss += float(loss)
         training_steps += 1
@@ -638,7 +640,7 @@ def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
     )
     for data in dataloader:
         with torch.no_grad():
-            with torch.cuda.amp.autocast():
+            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                 loss = model(*to_device(data, rank))
                 for i in range(len(losses)):
                     losses[i] += float(loss[i])
@@ -653,9 +655,71 @@ def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
     return [float(x) for x in tensor_losses]
 
 
+def record_predictions(rank, world_size, model, outdir, dataloader, usertag):
+    assert world_size == 1
+
+    f = h5py.File(os.path.join(outdir, "training", "users.h5"), "r")
+    all_users = f[usertag][:]
+    f.close()
+
+    user_batches = []
+    embed_batches = []
+    seen_users = set()
+    progress = tqdm(
+        desc=f"Batches",
+        total=len(all_users),
+        mininterval=1,
+        disable=rank != 0,
+    )
+    while len(seen_users) < len(all_users):
+        for data in dataloader:
+            with torch.no_grad():
+                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                    x = model(*to_device(data, rank), embed_only=True).to("cpu").to(torch.float32).numpy()
+                    users = data[-1].numpy()
+                    user_batches.append(users)
+                    embed_batches.append(x)
+                    new_users = len(seen_users | set(users)) - len(seen_users)
+                    seen_users |= set(users)
+                    progress.update(new_users)
+            if len(seen_users) >= len(all_users):
+                break
+    progress.close()
+
+    f = h5py.File(os.path.join(outdir, "embeddings.h5"), "w")
+    f.create_dataset("users", data=np.hstack(user_batches))
+    f.create_dataset("embedding", data=np.vstack(embed_batches))
+    detach = lambda x: x.to("cpu").detach().numpy()
+    f.create_dataset(
+        "anime_item_weight", data=detach(model.module.classifier[0][0].weight)
+    )
+    f.create_dataset("anime_item_bias", data=detach(model.module.classifier[0][0].bias))
+    f.create_dataset(
+        "anime_rating_weight", data=detach(model.module.classifier[1].weight)
+    )
+    f.create_dataset("anime_rating_bias", data=detach(model.module.classifier[1].bias))
+    f.create_dataset(
+        "manga_item_weight", data=detach(model.module.classifier[2][0].weight)
+    )
+    f.create_dataset("manga_item_bias", data=detach(model.module.classifier[2][0].bias))
+    f.create_dataset(
+        "manga_rating_weight", data=detach(model.module.classifier[3].weight)
+    )
+    f.create_dataset("manga_rating_bias", data=detach(model.module.classifier[3].bias))
+    f.close()
+
+
 def save_model(rank, world_size, model, outdir):
     if rank == 0:
         torch.save(model.module.state_dict(), os.path.join(outdir, "model.pt"))
+        
+def load_model(outdir):
+    state_dict = torch.load(os.path.join(outdir, "model.pt"))
+    compile_prefix = '_orig_mod.'
+    for k,v in list(state_dict.items()):
+        if k.startswith(compile_prefix):
+            state_dict[k[len(compile_prefix):]] = state_dict.pop(k)        
+    return state_dict
 
 
 # Distributed Data Parallel
@@ -732,7 +796,8 @@ def run_process(rank, world_size, name, epochs, model_init):
     model = TransformerModel(model_config).to(rank)
     if model_init is not None:
         model_outdir = get_data_path(os.path.join("alphas", model_init))
-        model.load_state_dict(torch.load(os.path.join(model_outdir, "model.pt")))
+        model.load_state_dict(load_model(model_outdir))
+    model = torch.compile(model)
     model = DDP(
         model, device_ids=[rank], output_device=rank, find_unused_parameters=True
     )
@@ -766,8 +831,6 @@ def run_process(rank, world_size, name, epochs, model_init):
         validation_loss = evaluate_metrics(
             rank, world_size, outdir, model, dataloaders["validation"], training_config
         )
-        if training_config["mode"] == "finetune":
-            scheduler.step(sum(validation_loss))
         logger.info(
             f"Epoch: {epoch}, Validation Loss: {sum(validation_loss)}, {validation_loss}"
         )
@@ -779,6 +842,12 @@ def run_process(rank, world_size, name, epochs, model_init):
                 break
     if not stopper:
         save_model(rank, world_size, model, outdir)
+
+    if training_config["mode"] == "finetune" and world_size == 1:
+        record_predictions(
+            rank, world_size, model, outdir, dataloaders["validation"], "test"
+        )
+
     dist.destroy_process_group()
 
 
