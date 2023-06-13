@@ -6,7 +6,6 @@
 
 using Logging
 Logging.disable_logging(Logging.Warn)
-using LightGBM
 import NBInclude: @nbinclude
 import SparseArrays: sparse
 if !@isdefined ENSEMBLE_IFNDEF
@@ -48,26 +47,6 @@ if !@isdefined ENSEMBLE_IFNDEF
         end
         X = reduce(hcat, X)
         write_recommendee_alpha(X * params["β"], alpha)
-    end
-    
-    function compute_nonlinear_alpha(source)
-        params = read_params(source)
-        base_features =
-            reduce(hcat, read_recommendee_alpha(x, "all").rating for x in params["alphas"])
-        X = base_features
-
-        preds = convert.(Float32, vec(predict(params["model"], X)))
-        write_recommendee_alpha(preds, source)
-    end
-
-    function compute_explicit_alpha(task::String)
-        source = "$task/Explicit"
-        alphas = read_params(source)["alphas"]
-        preds = zeros(Float32, num_items())
-        for alpha in alphas
-            preds += read_recommendee_alpha(alpha, "all").rating
-        end
-        write_recommendee_alpha(preds, source)
     end
 
     function get_query_transform(alpha)
@@ -116,8 +95,5 @@ username = ARGS[1]
 for task in ALL_TASKS
     compute_linear_alpha("$task/LinearExplicit", "explicit", task)
     compute_linear_alpha("$task/LinearImplicit", "implicit", task)
-    compute_nonlinear_alpha("$task/NonlinearExplicit")
-    compute_nonlinear_alpha("$task/NonlinearImplicit")
-    compute_explicit_alpha(task)
     compute_mle_alpha("$task/MLE.Ensemble")
 end
