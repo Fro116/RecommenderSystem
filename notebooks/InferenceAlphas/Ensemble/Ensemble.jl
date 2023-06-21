@@ -6,6 +6,7 @@ if !@isdefined ENSEMBLE_IFNDEF
     import SparseArrays: sparse    
     @nbinclude("../Alpha.ipynb")
     @nbinclude("../../TrainingAlphas/Ensemble/EnsembleInputs.ipynb")
+    using Flux
     Logging.disable_logging(Logging.Warn)
     
     function read_recommendee_suppressed_alpha(alpha::String, split::String, task::String, medium::String)
@@ -39,56 +40,44 @@ if !@isdefined ENSEMBLE_IFNDEF
             push!(X, fill(1.0f0 / num_items(medium), num_items(medium)))
         end
         X = reduce(hcat, X)
-        write_recommendee_alpha(X * params["β"], alpha)
+        write_recommendee_alpha(X * params["β"], medium, alpha)
     end
 
-#     function get_query_transform(alpha)
-#         if occursin("NonlinearImplicit", alpha)
-#             transform = identity
-#         elseif occursin("ItemCount", alpha)
-#             transform = x -> log(x + 1)
-#         elseif occursin("Variance", alpha) || occursin("implicit", lowercase(alpha))
-#             transform = x -> log(x + Float32(eps(Float64)))
-#         else
-#             transform = identity
-#         end
-#     end
+    function get_query_transform(alpha::String)
+        if occursin("ItemCount", alpha) || occursin("UserVariance", alpha)
+            return x -> log(x + 1)
+        else
+            return identity
+        end
+    end
     
-#     function get_query_features(alphas::Vector{String})
-#         A = Matrix{Float32}(undef, num_items(), length(alphas))
-#         Threads.@threads for i = 1:length(alphas)
-#             transform = get_query_transform(alphas[i])
-#             A[:, i] = transform.(read_recommendee_alpha(alphas[i], "all").rating)
-#         end
-#         collect(A')
-#     end
+    function get_query_features(alphas::Vector{String}, medium::String)
+        A = Matrix{Float32}(undef, num_items(medium), length(alphas))
+        Threads.@threads for i = 1:length(alphas)
+            transform = get_query_transform(alphas[i])
+            A[:, i] = transform.(read_recommendee_alpha(alphas[i], "all", medium).rating)
+        end
+        collect(A')
+    end
 
-#     function compute_mle_alpha(name)
-#         params = read_params(name)
-#         Q = get_query_features(params["hyp"].alphas)
-#         Q = (Q .- params["inference_data"]["μ"]) ./ params["inference_data"]["σ"]
-#         clip_std = params["inference_data"]["clip_std"]
-#         clamp!(Q, -clip_std, clip_std)
-#         m = params["m"]
-#         chunk(arr, n) = [arr[i:min(i + n - 1, end)] for i = 1:n:length(arr)]
-#         scores = Array{Float32}(undef, num_items())
-#         batch_size = params["hyp"].batch_size
-#         batches = chunk(convert.(Int32, 1:num_items()), batch_size)
-#         Threads.@threads for batch in batches
-#             sample = Q[:, batch]
-#             alpha = m(sample)
-#             scores[batch] .= vec(alpha)
-#         end
-#         write_recommendee_alpha(scores, name)
-#     end
+    function compute_mle_alpha(name::String, medium::String)
+        params = read_params(name)
+        Q = get_query_features(params["hyp"].alphas, medium)
+        Q = (Q .- params["inference_data"]["μ"]) ./ params["inference_data"]["σ"]
+        m = params["m"]
+        scores = vec(m(Q))
+        write_recommendee_alpha(scores, medium, name)
+    end
 end
     
     
 username = ARGS[1]
 for medium in ALL_MEDIUMS
     for task in ALL_TASKS
-        compute_linear_alpha("$task/LinearExplicit", "explicit", task, medium)
-        compute_linear_alpha("$task/LinearImplicit", "implicit", task, medium)
-        # compute_mle_alpha("$task/MLE.Ensemble")
+        compute_linear_alpha("$medium/$task/LinearExplicit", "explicit", task, medium)
+        compute_linear_alpha("$medium/$task/LinearImplicit", "implicit", task, medium)
+        for i in 1:5
+            compute_mle_alpha("$medium/$task/MLE.Ensemble.$i", medium)
+        end
     end
 end

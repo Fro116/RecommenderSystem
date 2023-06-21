@@ -43,7 +43,7 @@ def save_embeddings(username, medium, task):
     training_config = create_training_config(config_file, 1)
     model_config = create_model_config(training_config)
     model = TransformerModel(model_config)
-    model.load_state_dict(load_model(source_dir))
+    model.load_state_dict(load_model(source_dir, map_location="cpu"))
     model.eval()
     warnings.filterwarnings("ignore")
     
