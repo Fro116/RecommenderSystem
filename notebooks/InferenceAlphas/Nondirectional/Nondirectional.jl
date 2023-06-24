@@ -44,28 +44,6 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
         write_recommendee_alpha(preds, medium, outdir)
     end    
     
-    function compute_sequel_implicit_alpha(name, outdir, medium)
-        df = get_recommendee_split("implicit", medium)        
-        watched = zeros(Float32, num_items(medium))
-        watched[df.item] .= df.rating
-        
-        df = filter(df, df.status .== 5)
-        watched_items = zeros(Float32, num_items(medium))
-        watched_items[df.item] .= df.rating
-        
-        S = read_similarity_matrix("$name/similarity_matrix")
-        num_watched_prequels = S * watched_items
-        num_required_prequels = S * ones(Float32, num_items(medium))
-        
-        preds = zeros(Float32, num_items(medium))
-        for i in 1:length(preds)
-            if (num_watched_prequels[i] == num_required_prequels[i] && watched[i] == 0)
-                preds[i] = 1
-            end
-        end
-        write_recommendee_alpha(preds, medium, outdir)
-    end        
-
     function compute_sequel_series_alpha(name, medium)
         df = get_recommendee_split("implicit", medium)
         df = filter(df, df.status .== 5)
@@ -93,48 +71,20 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
             write_recommendee_alpha(fill(num_seen, num_items(medium)), medium, name)
         end
     end
-
-    function compute_user_stats_alpha(medium)
-        r = get_recommendee_split("explicit", medium).rating
-        if length(r) == 0
-            p_mean = 0.0f0
-        else
-            p_mean = mean(r)
-        end
-        if length(r) <= 1
-            p_var = 0.0f0
-        else
-            p_var = var(r)
-        end
-        write_recommendee_alpha(
-            fill(p_mean, num_items(medium)),
-            medium,
-            "$medium/all/UserAverage",
-        )
-        write_recommendee_alpha(
-            fill(p_var, num_items(medium)),
-            medium,
-            "$medium/all/UserVariance",
-        )
-    end
 end
 
 username = ARGS[1]
 for medium in ALL_MEDIUMS
     compute_related_series_alpha("$medium/all/RelatedSeries", medium)
     compute_related_series_alpha("$medium/all/RecapSeries", medium)
-    
     compute_cross_related_series_alpha("$medium/all/CrossRelatedSeries", medium)
     compute_cross_related_series_alpha("$medium/all/CrossRecapSeries", medium)   
     
     for task in ALL_TASKS
         compute_sequel_explicit_alpha("$medium/all/SequelSeries", "$medium/$task/SequelExplicit", medium)
-        compute_sequel_implicit_alpha("$medium/all/SequelSeries", "$medium/$task/SequelImplicit", medium)
     end
-        
     compute_sequel_series_alpha("$medium/all/SequelSeries", medium)
     compute_dependency_alpha("$medium/all/SequelSeries", "$medium/all/Dependencies", medium)   
         
     compute_seen_items_alpha(medium)
-    compute_user_stats_alpha(medium)
 end
