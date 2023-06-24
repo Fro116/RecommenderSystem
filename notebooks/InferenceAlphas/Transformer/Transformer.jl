@@ -160,7 +160,7 @@ if !@isdefined TRANSFORMER_IFNDEF
         end
     end
 
-    function compute_alpha(username, task, medium, version)
+    function compute_alpha_ptw(username, task, medium, version, ptw)
         sourcedir = get_data_path(joinpath("alphas", medium, task, "Transformer", version))
         outdir =
             joinpath(recommendee_alpha_basepath(), medium, task, "Transformer", version)
@@ -172,7 +172,7 @@ if !@isdefined TRANSFORMER_IFNDEF
         sentences = get_training_data(
             task,
             config["media"],
-            config["include_ptw_impressions"],
+            ptw,
             config["cls_tokens"],
             config["empty_tokens"],
         )
@@ -194,17 +194,44 @@ if !@isdefined TRANSFORMER_IFNDEF
         rating_preds = rating_weight * embeddings[:, 1] + rating_bias
         item_preds = softmax(item_weight * embeddings[:, 1] + item_bias)
 
+        suffix = ptw ? "ptw" : "noptw"
         write_recommendee_alpha(
             rating_preds[1:num_items(medium)],
             medium,
-            "$medium/$task/Transformer/$version/explicit",
+            "$medium/$task/Transformer/$version/explicit/$suffix",
         )
 
         write_recommendee_alpha(
             item_preds[1:num_items(medium)],
             medium,
-            "$medium/$task/Transformer/$version/implicit",
+            "$medium/$task/Transformer/$version/implicit/$suffix",
         )
+    end
+    
+    function compute_alpha(username, task, medium, version)
+        # the model never sees instances of a ptw item being watched.
+        # therefore, the predictions for ptw items are biased.
+        # we adjust for this by making preds for ptw items using
+        # a filtered list that does not include ptw items.
+        for ptw in [false, true]
+            compute_alpha_ptw(username, task, medium, version, ptw)
+        end
+        ptw_items = get_recommendee_split("ptw", medium).item
+        for content in ["explicit", "implicit"]
+            outdir = "$medium/$task/Transformer/$version/$content"
+            pred_ptw = read_recommendee_alpha("$outdir/ptw", "all", medium).rating
+            pred_noptw = read_recommendee_alpha("$outdir/noptw", "all", medium).rating
+            preds = pred_ptw
+            preds[ptw_items] = pred_noptw[ptw_items]
+            if content == "implicit"
+                preds ./= sum(preds)
+            end
+            write_recommendee_alpha(
+                preds,
+                medium,
+                outdir,
+            )            
+        end
     end
 end
 
