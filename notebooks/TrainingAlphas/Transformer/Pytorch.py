@@ -8,10 +8,12 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 
 import argparse
+import glob
 import json
 import logging
 import math
 import random
+import shutil
 import time
 
 import h5py
@@ -413,7 +415,12 @@ def record_predictions(rank, world_size, model, outdir, dataloader, usertag):
         for data in dataloader:
             with torch.no_grad():
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                    x = model(*to_device(data, rank), embed_only=True).to("cpu").to(torch.float32).numpy()
+                    x = (
+                        model(*to_device(data, rank), embed_only=True)
+                        .to("cpu")
+                        .to(torch.float32)
+                        .numpy()
+                    )
                     users = data[-1].numpy()
                     user_batches.append(users)
                     embed_batches.append(x)
@@ -424,7 +431,7 @@ def record_predictions(rank, world_size, model, outdir, dataloader, usertag):
                 break
     progress.close()
     model.train()
-    
+
     f = h5py.File(os.path.join(outdir, "embeddings.h5"), "w")
     f.create_dataset("users", data=np.hstack(user_batches))
     f.create_dataset("embedding", data=np.vstack(embed_batches))
@@ -448,9 +455,47 @@ def record_predictions(rank, world_size, model, outdir, dataloader, usertag):
     f.close()
 
 
-def save_model(rank, world_size, model, outdir):
+def load_checkpoints(outdir):
+    checkpoint = None
+    epoch = -1
+    for x in glob.glob(os.path.join(outdir, f"model.*.pt")):
+        trial = int(os.basename(x).split(".")[1])
+        if trial > epoch:
+            epoch = trial
+            checkpoint = x
+    return checkpoint, epoch
+
+
+def initialize_model(model, model_init, outdir):
+    starting_epoch = 0
+    if model_init is not None:
+        model_fn = get_data_path(os.path.join("alphas", model_init, "model.pt"))
+        model.load_state_dict(load_model(model_fn))
+    checkpoint, epoch = load_checkpoints(outdir)
+    if checkpoint is not None:
+        starting_epoch = epoch + 1
+        model.load_state_dict(load_model(checkpoint))
+    return starting_epoch
+
+
+def save_model(rank, world_size, model, epoch, outdir):
+    # atomically save model
     if rank == 0:
-        torch.save(model.module.state_dict(), os.path.join(outdir, "model.pt"))
+        checkpoint = os.path.join(outdir, f"model.{epoch}.pt")
+        torch.save(model.module.state_dict(), checkpoint + "~")
+        os.rename(checkpoint + "~", checkpoint)
+        previous_checkpoints = glob.glob(os.path.join(outdir, f"model.*.pt"))
+        for fn in previous_checkpoints:
+            if fn != checkpoint:
+                os.remove(fn)
+
+
+def publish_model(outdir):
+    checkpoint, epoch = load_checkpoints(outdir)
+    assert checkpoint is not None
+    modelfn = os.path.join(outdir, f"model.pt")
+    shutil.copyfile(checkpoint, modelfn + "~")
+    os.rename(modelfn + "~", modelfn)
 
 
 # Distributed Data Parallel
@@ -525,9 +570,7 @@ def run_process(rank, world_size, name, epochs, model_init):
     }
 
     model = TransformerModel(model_config).to(rank)
-    if model_init is not None:
-        model_outdir = get_data_path(os.path.join("alphas", model_init))
-        model.load_state_dict(load_model(model_outdir))
+    starting_epoch = initialize_model(model, model_init, outdir)
     model = torch.compile(model)
     model = DDP(
         model, device_ids=[rank], output_device=rank, find_unused_parameters=True
@@ -541,12 +584,14 @@ def run_process(rank, world_size, name, epochs, model_init):
         else None
     )
 
+    if starting_epoch > 0:
+        logger.info(f"Resuming training from epoch {starting_epoch}")
     initial_loss = evaluate_metrics(
         rank, world_size, outdir, model, dataloaders["validation"], training_config
     )
     logger.info(f"Initial Loss: {sum(initial_loss)}, {initial_loss}")
 
-    for epoch in range(training_config["num_epochs"]):
+    for epoch in range(starting_epoch, training_config["num_epochs"]):
         training_loss = train_epoch(
             rank,
             world_size,
@@ -568,11 +613,12 @@ def run_process(rank, world_size, name, epochs, model_init):
         if stopper:
             stopper(sum(validation_loss))
             if stopper.save_model:
-                save_model(rank, world_size, model, outdir)
+                save_model(rank, world_size, model, epoch, outdir)
             if stopper.early_stop:
                 break
-    if not stopper:
-        save_model(rank, world_size, model, outdir)
+        else:
+            save_model(rank, world_size, model, epoch, outdir)
+    publish_model(outdir)
 
     if training_config["mode"] == "finetune" and world_size == 1:
         record_predictions(

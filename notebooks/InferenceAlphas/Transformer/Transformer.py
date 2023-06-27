@@ -39,11 +39,12 @@ class InferenceDataset(Dataset):
 
 def save_embeddings(username, medium, task):
     source_dir = get_data_path(os.path.join("alphas", medium, task, "Transformer", "v1"))
+    model_file = os.path.join(source_dir, "model.pt")    
     config_file = os.path.join(source_dir, "config.json")
     training_config = create_training_config(config_file, 1)
     model_config = create_model_config(training_config)
     model = TransformerModel(model_config)
-    model.load_state_dict(load_model(source_dir, map_location="cpu"))
+    model.load_state_dict(load_model(model_file, map_location="cpu"))
     model.eval()
     warnings.filterwarnings("ignore")
     

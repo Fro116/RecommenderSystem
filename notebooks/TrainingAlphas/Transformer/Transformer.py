@@ -272,8 +272,8 @@ def get_data_path(file):
     return os.path.join(path, "data", file)
 
 
-def load_model(outdir, map_location=None):
-    state_dict = torch.load(os.path.join(outdir, "model.pt"), map_location=map_location)
+def load_model(fn, map_location=None):
+    state_dict = torch.load(fn, map_location=map_location)
     compile_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
         if k.startswith(compile_prefix):
