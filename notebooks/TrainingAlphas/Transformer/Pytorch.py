@@ -571,7 +571,9 @@ def run_process(rank, world_size, name, epochs, model_init):
 
     model = TransformerModel(model_config).to(rank)
     starting_epoch = initialize_model(model, model_init, outdir)
-    model = torch.compile(model)
+    if world_size == 1:
+        # TODO fix recompilation errors by experimenting with dynamic=True and also try max-autotune
+        model = torch.compile(model)
     model = DDP(
         model, device_ids=[rank], output_device=rank, find_unused_parameters=True
     )
