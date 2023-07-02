@@ -459,7 +459,7 @@ def load_checkpoints(outdir):
     checkpoint = None
     epoch = -1
     for x in glob.glob(os.path.join(outdir, f"model.*.pt")):
-        trial = int(os.basename(x).split(".")[1])
+        trial = int(os.path.basename(x).split(".")[1])
         if trial > epoch:
             epoch = trial
             checkpoint = x
@@ -581,7 +581,7 @@ def run_process(rank, world_size, name, epochs, model_init):
     scheduler = create_learning_rate_schedule(optimizer, training_config, world_size)
     scaler = torch.cuda.amp.GradScaler()
     stopper = (
-        EarlyStopper(patience=10, rtol=0.001)
+        EarlyStopper(patience=1, rtol=0.001)
         if training_config["mode"] == "finetune"
         else None
     )
@@ -591,6 +591,8 @@ def run_process(rank, world_size, name, epochs, model_init):
     initial_loss = evaluate_metrics(
         rank, world_size, outdir, model, dataloaders["validation"], training_config
     )
+    if stopper:
+        stopper(sum(initial_loss))
     logger.info(f"Initial Loss: {sum(initial_loss)}, {initial_loss}")
 
     for epoch in range(starting_epoch, training_config["num_epochs"]):
