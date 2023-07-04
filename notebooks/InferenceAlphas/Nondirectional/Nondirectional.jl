@@ -64,10 +64,10 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
         write_recommendee_alpha(preds, medium, outdir)
     end    
 
-    function compute_seen_items_alpha(medium)
-        for content in ["explicit", "implicit", "ptw"]
+    function compute_seen_items_alpha(task, medium)
+        for content in ["implicit"]
             num_seen::Float32 = length(get_recommendee_split(content, medium).item)
-            name = "$medium/all/$(uppercasefirst(content))ItemCount"
+            name = "$medium/$task/$(uppercasefirst(content))ItemCount"
             write_recommendee_alpha(fill(num_seen, num_items(medium)), medium, name)
         end
     end
@@ -82,9 +82,8 @@ for medium in ALL_MEDIUMS
     
     for task in ALL_TASKS
         compute_sequel_explicit_alpha("$medium/all/SequelSeries", "$medium/$task/SequelExplicit", medium)
+        compute_seen_items_alpha(task, medium)
     end
     compute_sequel_series_alpha("$medium/all/SequelSeries", medium)
-    compute_dependency_alpha("$medium/all/SequelSeries", "$medium/all/Dependencies", medium)   
-        
-    compute_seen_items_alpha(medium)
+    compute_dependency_alpha("$medium/all/SequelSeries", "$medium/all/Dependencies", medium)           
 end
