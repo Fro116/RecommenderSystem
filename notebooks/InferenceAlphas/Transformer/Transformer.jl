@@ -67,9 +67,14 @@ if !@isdefined TRANSFORMER_IFNDEF
     end
 
     function featurize(sentences, task, medium, user, config)
+        if user in keys(sentences)
+            sentence = copy(sentences[user])
+        else
+            sentence = Vector{wordtype}()
+            push!(sentence, replace(config["cls_tokens"], :user, user))
+        end        
         featurize(;
-            sentence = user in keys(sentences) ? sentences[user] :
-                       eltype(values(sentences))(),
+            sentence = sentence,
             task=task,
             medium = medium,
             user = user,
@@ -94,21 +99,15 @@ if !@isdefined TRANSFORMER_IFNDEF
         mask_tokens,
         empty_tokens,
     )
-        if length(sentence) == 0
-            push!(sentence, replace(cls_tokens, :user, user))
-        end
         sentence = subset_sentence(
             sentence,
             min(length(sentence), max_seq_len - 1);
             recent = true,
-            keep_first = false,
             rng = nothing,
         )
 
         # add masking token    
-        if task == "temporal"
-            masked_word = replace(mask_tokens, :timestamp, 1)
-        elseif task == "temporal_causal"
+        if task == "temporal_causal"
             masked_word = replace(mask_tokens, :timestamp, 1)
             masked_word = replace(masked_word, :position, length(sentence))
         else

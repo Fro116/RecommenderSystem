@@ -395,7 +395,7 @@ def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
 
 
 def record_predictions(rank, world_size, model, outdir, dataloader, usertag):
-    assert world_size == 1
+    assert rank == 0
 
     f = h5py.File(os.path.join(outdir, "training", "users.h5"), "r")
     all_users = f[usertag][:]
@@ -437,21 +437,21 @@ def record_predictions(rank, world_size, model, outdir, dataloader, usertag):
     f.create_dataset("embedding", data=np.vstack(embed_batches))
     detach = lambda x: x.to("cpu").detach().numpy()
     f.create_dataset(
-        "anime_item_weight", data=detach(model.module.classifier[0][0].weight)
+        "anime_item_weight", data=detach(model.classifier[0][0].weight)
     )
-    f.create_dataset("anime_item_bias", data=detach(model.module.classifier[0][0].bias))
+    f.create_dataset("anime_item_bias", data=detach(model.classifier[0][0].bias))
     f.create_dataset(
-        "anime_rating_weight", data=detach(model.module.classifier[1].weight)
+        "anime_rating_weight", data=detach(model.classifier[1].weight)
     )
-    f.create_dataset("anime_rating_bias", data=detach(model.module.classifier[1].bias))
+    f.create_dataset("anime_rating_bias", data=detach(model.classifier[1].bias))
     f.create_dataset(
-        "manga_item_weight", data=detach(model.module.classifier[2][0].weight)
+        "manga_item_weight", data=detach(model.classifier[2][0].weight)
     )
-    f.create_dataset("manga_item_bias", data=detach(model.module.classifier[2][0].bias))
+    f.create_dataset("manga_item_bias", data=detach(model.classifier[2][0].bias))
     f.create_dataset(
-        "manga_rating_weight", data=detach(model.module.classifier[3].weight)
+        "manga_rating_weight", data=detach(model.classifier[3].weight)
     )
-    f.create_dataset("manga_rating_bias", data=detach(model.module.classifier[3].bias))
+    f.create_dataset("manga_rating_bias", data=detach(model.classifier[3].bias))
     f.close()
 
 
@@ -547,7 +547,7 @@ def run_process(rank, world_size, name, epochs, model_init):
     setup_multiprocessing(rank, world_size)
 
     outdir = get_temp_path(os.path.join("alphas", name))
-    logger = get_logger(outdir, rank)
+    logger = get_logger(outdir, rank) # TODO logging inside jl notebooks
     config_file = os.path.join(outdir, "config.json")
     training_config = create_training_config(config_file, epochs)
     model_config = create_model_config(training_config)
@@ -624,7 +624,11 @@ def run_process(rank, world_size, name, epochs, model_init):
             save_model(rank, world_size, model, epoch, outdir)
     publish_model(outdir)
 
-    if training_config["mode"] == "finetune" and world_size == 1:
+    if training_config["mode"] == "finetune" and rank == 0:
+        model = TransformerModel(model_config).to(rank)
+        epoch = initialize_model(model, model_init, outdir)
+        model = torch.compile(model)
+        logger.info(f"Initializing from epoch {epoch}")
         record_predictions(
             rank, world_size, model, outdir, dataloaders["validation"], "test"
         )

@@ -35,13 +35,23 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
         write_recommendee_alpha(preds, medium, name)
     end
     
-    function compute_sequel_explicit_alpha(name, outdir, medium)
+    function compute_sequel_explicit_alpha(name, outdir, task, medium)
         df = get_recommendee_split("explicit", medium)        
         x = zeros(Float32, num_items(medium))
+        w = zeros(Float32, num_items(medium))        
         x[df.item] .= df.rating
+        w[df.item] .= 1
         S = read_similarity_matrix("$name/similarity_matrix")
-        preds = S * x ./ max(1, length(df.rating))
-        write_recommendee_alpha(preds, medium, outdir)
+        weights = S * w
+        preds = S * x 
+        baseline = read_recommendee_alpha("$medium/$task/ExplicitUserItemBiases", "all", medium).rating
+        out = zeros(Float32, num_items(medium))
+        for i in 1:length(preds)
+            if weights[i] != 0
+                out[i] = preds[i] / weights[i] - baseline[i]
+            end
+        end
+        write_recommendee_alpha(out, medium, outdir)
     end    
     
     function compute_sequel_series_alpha(name, medium)
@@ -81,7 +91,7 @@ for medium in ALL_MEDIUMS
     compute_cross_related_series_alpha("$medium/all/CrossRecapSeries", medium)   
     
     for task in ALL_TASKS
-        compute_sequel_explicit_alpha("$medium/all/SequelSeries", "$medium/$task/SequelExplicit", medium)
+        compute_sequel_explicit_alpha("$medium/all/SequelSeries", "$medium/$task/SequelExplicit", task, medium)
         compute_seen_items_alpha(task, medium)
     end
     compute_sequel_series_alpha("$medium/all/SequelSeries", medium)
