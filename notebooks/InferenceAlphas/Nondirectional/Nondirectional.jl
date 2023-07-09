@@ -73,14 +73,6 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
         preds = S * x
         write_recommendee_alpha(preds, medium, outdir)
     end    
-
-    function compute_seen_items_alpha(task, medium)
-        for content in ["implicit"]
-            num_seen::Float32 = length(get_recommendee_split(content, medium).item)
-            name = "$medium/$task/$(uppercasefirst(content))ItemCount"
-            write_recommendee_alpha(fill(num_seen, num_items(medium)), medium, name)
-        end
-    end
 end
 
 username = ARGS[1]
@@ -89,11 +81,10 @@ for medium in ALL_MEDIUMS
     compute_related_series_alpha("$medium/all/RecapSeries", medium)
     compute_cross_related_series_alpha("$medium/all/CrossRelatedSeries", medium)
     compute_cross_related_series_alpha("$medium/all/CrossRecapSeries", medium)   
-    
+    compute_sequel_series_alpha("$medium/all/SequelSeries", medium)
+    compute_sequel_series_alpha("$medium/all/DirectSequelSeries", medium)    
+    compute_dependency_alpha("$medium/all/SequelSeries", "$medium/all/Dependencies", medium)    
     for task in ALL_TASKS
         compute_sequel_explicit_alpha("$medium/all/SequelSeries", "$medium/$task/SequelExplicit", task, medium)
-        compute_seen_items_alpha(task, medium)
-    end
-    compute_sequel_series_alpha("$medium/all/SequelSeries", medium)
-    compute_dependency_alpha("$medium/all/SequelSeries", "$medium/all/Dependencies", medium)           
+    end         
 end
