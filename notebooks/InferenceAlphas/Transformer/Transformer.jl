@@ -12,6 +12,14 @@ if !@isdefined TRANSFORMER_IFNDEF
     @nbinclude("../Alpha.ipynb")
     @nbinclude("../../TrainingAlphas/Transformer/Data.ipynb")
 
+    function dropitem(df::RatingsDataset, exclude)
+        if df.medium == exclude[:medium]
+            return filter(df, df.item .!= exclude[:item])
+        else
+            return df
+        end
+    end
+
     function get_training_data(df::RatingsDataset, media, cls_tokens, empty_tokens)
         function itemids(df, i)
             if media[df.source[i]] == "manga"
@@ -44,9 +52,9 @@ if !@isdefined TRANSFORMER_IFNDEF
         sentences
     end
 
-    function get_training_data(task, media, include_ptw, cls_tokens, empty_tokens)
+    function get_training_data(task, media, include_ptw, cls_tokens, empty_tokens, exclude)
         function get_df(task, content, medium)
-            df = get_raw_recommendee_split(content, medium)
+            df = dropitem(get_raw_recommendee_split(content, medium), exclude)
             if content != "explicit"
                 df.rating .= 11
             end
@@ -66,16 +74,15 @@ if !@isdefined TRANSFORMER_IFNDEF
         get_training_data(df, media, cls_tokens, empty_tokens)
     end
 
-    function featurize(sentences, task, medium, user, config)
-        if user in keys(sentences)
-            sentence = copy(sentences[user])
-        else
-            sentence = Vector{wordtype}()
+    function featurize(sentence, task, medium, config)
+        sentence = copy(sentence)
+        user = 1
+        if length(sentence) == 0
             push!(sentence, replace(config["cls_tokens"], :user, user))
-        end        
+        end
         featurize(;
             sentence = sentence,
-            task=task,
+            task = task,
             medium = medium,
             user = user,
             max_seq_len = config["max_sequence_length"],
@@ -134,7 +141,7 @@ if !@isdefined TRANSFORMER_IFNDEF
     end
 
     function save_features(sentences, task, medium, config, filename)
-        features = [featurize(sentences, task, medium, 1, config)]
+        features = [featurize(x, task, medium, config) for x in sentences]
 
         d = Dict{String,AbstractArray}()
         collate = MLUtils.batch
@@ -159,29 +166,39 @@ if !@isdefined TRANSFORMER_IFNDEF
         end
     end
 
-    function compute_alpha_ptw(username, task, medium, version, ptw)
+    function compute_alpha_excludes(username, task, medium, version)
         sourcedir = get_data_path(joinpath("alphas", medium, task, "Transformer", version))
         outdir =
             joinpath(recommendee_alpha_basepath(), medium, task, "Transformer", version)
-
         f = open(joinpath(sourcedir, "config.json"))
         config = JSON.parse(f)
         close(f)
 
-        sentences = get_training_data(
-            task,
-            config["media"],
-            ptw,
-            config["cls_tokens"],
-            config["empty_tokens"],
-        )
-
+        excludes = []
+        for m in ALL_MEDIUMS
+            items = vcat([get_recommendee_split(x, m).item for x in ["implicit", "ptw"]]...)
+            for i in items
+                push!(excludes, (item = i, medium = m))
+            end
+        end
+        pushfirst!(excludes, (item = 0, medium = medium))
+        sentences = []
+        for exclude in excludes
+            data = get_training_data(
+                task,
+                config["media"],
+                config["include_ptw_impressions"],
+                config["cls_tokens"],
+                config["empty_tokens"],
+                exclude,
+            )
+            push!(sentences, data[1])
+        end
         fn = joinpath(outdir, "inference.h5")
         mkpath(dirname(fn))
         save_features(sentences, task, medium, config, fn)
 
         run(`python3 Transformer.py --username $username --medium $medium --task $task`)
-
         file = HDF5.h5open(joinpath(outdir, "embeddings.h5"), "r")
         embeddings = read(file["embedding"])
         item_weight = read(file["$(medium)_item_weight"])'
@@ -190,46 +207,38 @@ if !@isdefined TRANSFORMER_IFNDEF
         rating_bias = read(file["$(medium)_rating_bias"])
         close(file)
 
-        rating_preds = rating_weight * embeddings[:, 1] + rating_bias
-        item_preds = softmax(item_weight * embeddings[:, 1] + item_bias)
-
-        suffix = ptw ? "ptw" : "noptw"
-        write_recommendee_alpha(
-            rating_preds[1:num_items(medium)],
-            medium,
-            "$medium/$task/Transformer/$version/explicit/$suffix",
+        rating_preds = rating_weight * embeddings .+ rating_bias
+        item_preds = softmax(item_weight * embeddings .+ item_bias, dims = 1)
+        write_recommendee_params(
+            Dict("excludes" => excludes, "alpha" => rating_preds[1:num_items(medium), :]),
+            "$medium/$task/Transformer/$version/explicit",
         )
-
-        write_recommendee_alpha(
-            item_preds[1:num_items(medium)],
-            medium,
-            "$medium/$task/Transformer/$version/implicit/$suffix",
+        write_recommendee_params(
+            Dict("excludes" => excludes, "alpha" => item_preds[1:num_items(medium), :]),
+            "$medium/$task/Transformer/$version/implicit",
         )
     end
-    
+
     function compute_alpha(username, task, medium, version)
-        # the model never sees instances of a ptw item being watched.
-        # therefore, the predictions for ptw items are biased.
-        # we adjust for this by making preds for ptw items using
-        # a filtered list that does not include ptw items.
-        for ptw in [false, true]
-            compute_alpha_ptw(username, task, medium, version, ptw)
-        end
-        ptw_items = get_recommendee_split("ptw", medium).item
+        compute_alpha_excludes(username, task, medium, version)
         for content in ["explicit", "implicit"]
+            params = read_recommendee_params("$medium/$task/Transformer/$version/$content")
+            excludes = params["excludes"]
+            alphas = params["alpha"]
+            # the model never sees instances of a ptw item being watched.
+            # we adjust for this by making preds for ptw items using
+            # a filtered list that does not include ptw items.        
+            preds = alphas[:, 1]
+            ptw_items = get_recommendee_split("ptw", medium).item
+            for item in ptw_items
+                idx = findfirst(x -> x == (item = item, medium = medium), excludes)
+                preds[item] = alphas[item, idx]
+            end
             outdir = "$medium/$task/Transformer/$version/$content"
-            pred_ptw = read_recommendee_alpha("$outdir/ptw", "all", medium).rating
-            pred_noptw = read_recommendee_alpha("$outdir/noptw", "all", medium).rating
-            preds = pred_ptw
-            preds[ptw_items] = pred_noptw[ptw_items]
             if content == "implicit"
                 preds ./= sum(preds)
             end
-            write_recommendee_alpha(
-                preds,
-                medium,
-                outdir,
-            )            
+            write_recommendee_alpha(preds, medium, outdir)
         end
     end
 end

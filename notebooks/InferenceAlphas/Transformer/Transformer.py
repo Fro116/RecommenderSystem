@@ -36,8 +36,15 @@ class InferenceDataset(Dataset):
         positions = self.positions[i]
         return embeds, mask, positions
     
-
+    
+def to_device(data, device):
+    if isinstance(data, (list, tuple)):
+        return [to_device(x, device) for x in data]
+    return data.to(device)
+    
+    
 def save_embeddings(username, medium, task):
+    device = torch.device("cuda")
     source_dir = get_data_path(os.path.join("alphas", medium, task, "Transformer", "v1"))
     model_file = os.path.join(source_dir, "model.pt")    
     config_file = os.path.join(source_dir, "config.json")
@@ -45,6 +52,7 @@ def save_embeddings(username, medium, task):
     model_config = create_model_config(training_config)
     model = TransformerModel(model_config)
     model.load_state_dict(load_model(model_file, map_location="cpu"))
+    model = model.to(device)
     model.eval()
     warnings.filterwarnings("ignore")
     
@@ -53,17 +61,20 @@ def save_embeddings(username, medium, task):
     )    
     dataloader = DataLoader(
         InferenceDataset(os.path.join(outdir, "inference.h5")),
-        batch_size=1,
+        batch_size=16,
+        shuffle=False,
     )    
+    embeddings = []
     with torch.no_grad():
-        embedding = (
-            model(*next(iter(dataloader)), None, None, None, embed_only=True)
-            .to(torch.float32)
-            .numpy()
-        )    
+        for data in dataloader:
+            embeddings.append(
+                model(*to_device(data, device), None, None, None, embed_only=True)
+                .to("cpu").detach().to(torch.float32).numpy()
+            )    
+    embeddings = np.vstack(embeddings)            
         
     f = h5py.File(os.path.join(outdir, "embeddings.h5"), "w")
-    f.create_dataset("embedding", data=embedding)
+    f.create_dataset("embedding", data=embeddings)
     detach = lambda x: x.to("cpu").detach().numpy()
     f.create_dataset(
         "anime_item_weight", data=detach(model.classifier[0][0].weight)
@@ -81,7 +92,7 @@ def save_embeddings(username, medium, task):
         "manga_rating_weight", data=detach(model.classifier[3].weight)
     )
     f.create_dataset("manga_rating_bias", data=detach(model.classifier[3].bias))
-    f.close()        
+    f.close()                
     
     
 parser = argparse.ArgumentParser(description="Transformer")
