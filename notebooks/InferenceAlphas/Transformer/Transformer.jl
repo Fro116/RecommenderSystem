@@ -12,14 +12,6 @@ if !@isdefined TRANSFORMER_IFNDEF
     @nbinclude("../Alpha.ipynb")
     @nbinclude("../../TrainingAlphas/Transformer/Data.ipynb")
 
-    function dropitem(df::RatingsDataset, exclude)
-        if df.medium == exclude[:medium]
-            return filter(df, df.item .!= exclude[:item])
-        else
-            return df
-        end
-    end
-
     function get_training_data(df::RatingsDataset, media, cls_tokens, empty_tokens)
         function itemids(df, i)
             if media[df.source[i]] == "manga"
@@ -52,9 +44,16 @@ if !@isdefined TRANSFORMER_IFNDEF
         sentences
     end
 
-    function get_training_data(task, media, include_ptw, cls_tokens, empty_tokens, exclude)
+    function get_training_data(
+        task,
+        media,
+        include_ptw,
+        cls_tokens,
+        empty_tokens,
+        noise::Perturbation,
+    )
         function get_df(task, content, medium)
-            df = dropitem(get_raw_recommendee_split(content, medium), exclude)
+            df = perturb_recommendee_split(content, medium, noise; raw=true)
             if content != "explicit"
                 df.rating .= 11
             end
@@ -166,6 +165,12 @@ if !@isdefined TRANSFORMER_IFNDEF
         end
     end
 
+    function get_perturbations(medium)
+        ptw_items = get_recommendee_split("ptw", medium).item
+        noise = [DropItem(item, medium) for item in ptw_items]
+        vcat(Identity(), noise)
+    end
+
     function compute_alpha_excludes(username, task, medium, version)
         sourcedir = get_data_path(joinpath("alphas", medium, task, "Transformer", version))
         outdir =
@@ -174,26 +179,19 @@ if !@isdefined TRANSFORMER_IFNDEF
         config = JSON.parse(f)
         close(f)
 
-        excludes = []
-        for m in ALL_MEDIUMS
-            items = vcat([get_recommendee_split(x, m).item for x in ["implicit", "ptw"]]...)
-            for i in items
-                push!(excludes, (item = i, medium = m))
-            end
-        end
-        pushfirst!(excludes, (item = 0, medium = medium))
-        sentences = []
-        for exclude in excludes
-            data = get_training_data(
-                task,
-                config["media"],
-                config["include_ptw_impressions"],
-                config["cls_tokens"],
-                config["empty_tokens"],
-                exclude,
+        noise = get_perturbations(medium)
+        sentences = [
+            data for x in noise for data in values(
+                get_training_data(
+                    task,
+                    config["media"],
+                    config["include_ptw_impressions"],
+                    config["cls_tokens"],
+                    config["empty_tokens"],
+                    x,
+                ),
             )
-            push!(sentences, data[1])
-        end
+        ]
         fn = joinpath(outdir, "inference.h5")
         mkpath(dirname(fn))
         save_features(sentences, task, medium, config, fn)
@@ -210,11 +208,11 @@ if !@isdefined TRANSFORMER_IFNDEF
         rating_preds = rating_weight * embeddings .+ rating_bias
         item_preds = softmax(item_weight * embeddings .+ item_bias, dims = 1)
         write_recommendee_params(
-            Dict("excludes" => excludes, "alpha" => rating_preds[1:num_items(medium), :]),
+            Dict("alpha" => rating_preds[1:num_items(medium), :]),
             "$medium/$task/Transformer/$version/explicit",
         )
         write_recommendee_params(
-            Dict("excludes" => excludes, "alpha" => item_preds[1:num_items(medium), :]),
+            Dict("alpha" => item_preds[1:num_items(medium), :]),
             "$medium/$task/Transformer/$version/implicit",
         )
     end
@@ -223,15 +221,15 @@ if !@isdefined TRANSFORMER_IFNDEF
         compute_alpha_excludes(username, task, medium, version)
         for content in ["explicit", "implicit"]
             params = read_recommendee_params("$medium/$task/Transformer/$version/$content")
-            excludes = params["excludes"]
             alphas = params["alpha"]
             # the model never sees instances of a ptw item being watched.
             # we adjust for this by making preds for ptw items using
-            # a filtered list that does not include ptw items.        
-            preds = alphas[:, 1]
+            # a perturbed list that does not include that item.
+            noise = get_perturbations(medium)            
+            preds = alphas[:, findfirst(x -> x == Identity(), noise)]
             ptw_items = get_recommendee_split("ptw", medium).item
             for item in ptw_items
-                idx = findfirst(x -> x == (item = item, medium = medium), excludes)
+                idx = findfirst(x -> x == DropItem(item, medium), noise)
                 preds[item] = alphas[item, idx]
             end
             outdir = "$medium/$task/Transformer/$version/$content"

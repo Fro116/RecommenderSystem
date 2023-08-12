@@ -10,52 +10,45 @@ if !@isdefined NEURAL_IFNDEF
     @nbinclude("../../TrainingAlphas/Neural/Helpers/Hyperparameters.ipynb")
     @nbinclude("../../TrainingAlphas/Neural/Helpers/Models.ipynb")
 
-    function dropitem(df::RatingsDataset, exclude)
-        if df.medium == exclude[:medium]
-            return filter(df, df.item .!= exclude[:item])
-        else
-            return df
-        end
-    end
-
     function explicit_inputs(
         input_alphas::Vector{String},
         task::String,
         medium::String,
-        exclude,
     )
-        df = dropitem(get_recommendee_split("explicit", medium), exclude)
-        residual = dropitem(
-            read_recommendee_alpha(input_alphas, task, "explicit", medium, false),
-            exclude,
-        )
+        df = get_recommendee_split("explicit", medium)
+        residual = read_recommendee_alpha(input_alphas, task, "explicit", medium, false)
         inputs = zeros(Float32, num_items(medium))
-        inputs[df.item] .= df.rating - residual.rating
+        for i = 1:length(df.item)
+            inputs[df.item[i]] = df.rating[i] - residual.rating[i]
+        end
         inputs
     end
 
-    function implicit_inputs(medium::String, exclude)
-        df = dropitem(get_recommendee_split("implicit", medium), exclude)
+    function implicit_inputs(medium::String)
+        df = get_recommendee_split("implicit", medium)
         inputs = zeros(Float32, num_items(medium))
         inputs[df.item] .= df.rating
         inputs
     end
 
-    function universal_inputs(input_alphas::Vector{String}, task::String, exclude)
+    function universal_inputs(
+        input_alphas::Vector{String},
+        task::String,
+    )
         @assert length(input_alphas) == length(ALL_MEDIUMS)
         inputs = []
         for i = 1:length(ALL_MEDIUMS)
-            push!(inputs, explicit_inputs(input_alphas[i:i], task, ALL_MEDIUMS[i], exclude))
+            push!(inputs, explicit_inputs(input_alphas[i:i], task, ALL_MEDIUMS[i]))
         end
         for x in ALL_MEDIUMS
-            push!(inputs, implicit_inputs(x, exclude))
+            push!(inputs, implicit_inputs(x))
         end
         reduce(vcat, inputs)
     end
 
-    function get_recommendee_inputs(hyp, task, exclude)
+    function get_recommendee_inputs(hyp, task)
         if hyp.input_data == "universal"
-            return universal_inputs(hyp.input_alphas, task, exclude)
+            return universal_inputs(hyp.input_alphas, task)
         else
             @assert false
         end
@@ -65,24 +58,11 @@ if !@isdefined NEURAL_IFNDEF
     function compute_alpha(name, task, medium)
         name = "$medium/$task/$name"
         params = read_params_memoized(name)
-        excludes = []
-        for m in ALL_MEDIUMS
-            items = vcat([get_recommendee_split(x, m).item for x in ["implicit", "ptw"]]...)
-            for i in items
-                push!(excludes, (item = i, medium = m))
-            end
-        end
-        pushfirst!(excludes, (item=0, medium=medium))
-        inputs = []
-        for exclude in excludes
-            push!(inputs, get_recommendee_inputs(params["hyp"], task, exclude))
-        end
+        inputs = get_recommendee_inputs(params["hyp"], task)
         m = params["m"]
-        x = hcat(inputs...)
         activation = params["hyp"].implicit ? softmax : identity
-        preds = activation(m(x))
-        write_recommendee_alpha(preds[:, 1], medium, name)
-        write_recommendee_params(Dict("excludes" => excludes, "alpha" => preds), name)
+        preds = activation(m(inputs))
+        write_recommendee_alpha(preds, medium, name)
     end
 end
 
