@@ -6,7 +6,7 @@ Details on the recommender system can be found by inspecting the source code at 
 2. Finetuning the model on recent data
 3. Training a learning-to-rank model on preference relations
 4. Reranking the outputs to generate a list of recommendations
-5. Explaining why the items were recommended to a user
+5. Explaining why the items were recommended
 
 See [BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding](https://arxiv.org/pdf/1810.04805.pdf), [Deep Neural Networks for YouTube Recommendations](https://static.googleusercontent.com/media/research.google.com/en//pubs/archive/45530.pdf), [Position-Aware ListMLE: A Sequential Learning Process for Ranking](https://auai.org/uai2014/proceedings/individuals/164.pdf), [Deep Learning for Recommender Systems: A Netflix Case Study](https://ojs.aaai.org/index.php/aimagazine/article/view/18140), and [A Survey on Trustworthy Recommender Systems](https://arxiv.org/pdf/2207.12515.pdf) for relevant prior work.
 
