@@ -154,7 +154,7 @@ def compute_attributions(username, medium, task, coefs, items):
             target=item,
             internal_batch_size=16,
             additional_forward_args=(model, positions, mask, coefs, medium),
-            n_steps=50,  # TODO drop to 20
+            n_steps=20,
         )
         attributions[item] = cpu(attrs.sum(dim=2))
     return attributions, cpu(inputs[0]), cpu(inputs[1])

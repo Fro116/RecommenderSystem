@@ -547,7 +547,7 @@ def run_process(rank, world_size, name, epochs, model_init):
     setup_multiprocessing(rank, world_size)
 
     outdir = get_temp_path(os.path.join("alphas", name))
-    logger = get_logger(outdir, rank) # TODO logging inside jl notebooks
+    logger = get_logger(outdir, rank)
     config_file = os.path.join(outdir, "config.json")
     training_config = create_training_config(config_file, epochs)
     model_config = create_model_config(training_config)
