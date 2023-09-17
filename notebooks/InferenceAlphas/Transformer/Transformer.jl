@@ -208,11 +208,17 @@ if !@isdefined TRANSFORMER_IFNDEF
         rating_preds = rating_weight * embeddings .+ rating_bias
         item_preds = softmax(item_weight * embeddings .+ item_bias, dims = 1)
         write_recommendee_params(
-            Dict("alpha" => rating_preds[1:num_items(medium), :]),
+            Dict(
+                "alpha" => rating_preds[1:num_items(medium), :],
+                "noise" => noise,                
+            ),
             "$medium/$task/Transformer/$version/explicit",
         )
         write_recommendee_params(
-            Dict("alpha" => item_preds[1:num_items(medium), :]),
+            Dict(
+                "alpha" => item_preds[1:num_items(medium), :],
+                "noise" => noise,
+            ),
             "$medium/$task/Transformer/$version/implicit",
         )
     end
@@ -222,10 +228,10 @@ if !@isdefined TRANSFORMER_IFNDEF
         for content in ["explicit", "implicit"]
             params = read_recommendee_params("$medium/$task/Transformer/$version/$content")
             alphas = params["alpha"]
+            noise = params["noise"]
             # the model never sees instances of a ptw item being watched.
             # we adjust for this by making preds for ptw items using
             # a perturbed list that does not include that item.
-            noise = get_perturbations(medium)            
             preds = alphas[:, findfirst(x -> x == Identity(), noise)]
             ptw_items = get_recommendee_split("ptw", medium).item
             for item in ptw_items

@@ -1,4 +1,4 @@
-exec(open("../TrainingAlphas/Transformer/Transformer.py").read())
+exec(open("../../TrainingAlphas/Transformer/Transformer.py").read())
 
 import argparse
 import json
@@ -104,7 +104,7 @@ def get_baseline(medium, task, inputs, positions):
     for i in [0, 1]:
         for j in range(1, end_of_seq_pos):
             if inputs[i][0, j] != empty_tokens[i]:
-                baseline_inputs[i][0, j] = mask_tokens[i]
+                baseline_inputs[i][0, j] = mask_tokens[i] 
     return baseline_inputs
 
 
@@ -162,7 +162,7 @@ def compute_attributions(username, medium, task, coefs, items):
 
 def save_attributions(username, medium, task, coefs, items):
     cache_fn = (
-        f"../../data/recommendations/{username}/"
+        f"../../../data/recommendations/{username}/"
         f"explanations/{medium}/integrated_gradients.json"
     )
     cache = {"attributions": {}}
