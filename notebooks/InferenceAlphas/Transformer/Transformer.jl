@@ -58,10 +58,7 @@ if !@isdefined TRANSFORMER_IFNDEF
                 df.rating .= 11
             end
             df.source .= findfirst(x -> x == df.medium, media)
-            Threads.@threads for i = 1:length(df.timestamp)
-                # TODO handle timestamps > 1
-                df.timestamp[i] = universal_timestamp(df.timestamp[i], df.medium)
-            end
+            # TODO handle timestamps > 1
             @set df.medium = ""
         end
         contents = ["explicit", "implicit"]
