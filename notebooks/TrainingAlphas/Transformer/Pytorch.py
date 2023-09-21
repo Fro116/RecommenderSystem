@@ -496,6 +496,7 @@ def publish_model(outdir):
     modelfn = os.path.join(outdir, f"model.pt")
     shutil.copyfile(checkpoint, modelfn + "~")
     os.rename(modelfn + "~", modelfn)
+    os.remove(checkpoint)
 
 
 # Distributed Data Parallel
