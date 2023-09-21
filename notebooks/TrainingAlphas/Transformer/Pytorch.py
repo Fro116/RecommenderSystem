@@ -32,16 +32,16 @@ from tqdm.auto import tqdm
 
 # Logging
 def get_logger(outdir, rank):
-    logger = logging.getLogger(f"pretrain.{rank}")
+    logger = logging.getLogger(f"pytorch.{rank}")
     logger.setLevel(logging.DEBUG)
     formatter = logging.Formatter(
         "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
     version = 0
-    filename = os.path.join(outdir, f"pretrain.{rank}.log")
+    filename = os.path.join(outdir, f"pytorch.{rank}.log")
     while os.path.exists(filename):
         version += 1
-        filename = os.path.join(outdir, f"pretrain.{rank}.log.{version}")
+        filename = os.path.join(outdir, f"pytorch.{rank}.log.{version}")
 
     streams = [logging.FileHandler(filename, "w")]
     if rank == 0:
@@ -496,7 +496,11 @@ def publish_model(outdir):
     modelfn = os.path.join(outdir, f"model.pt")
     shutil.copyfile(checkpoint, modelfn + "~")
     os.rename(modelfn + "~", modelfn)
-    os.remove(checkpoint)
+
+
+def delete_checkpoints(outdir):
+    for fn in glob.glob(os.path.join(outdir, f"model.*.pt")):
+        os.remove(fn)    
 
 
 # Distributed Data Parallel
@@ -548,7 +552,6 @@ def run_process(rank, world_size, name, epochs, model_init):
     setup_multiprocessing(rank, world_size)
 
     outdir = get_temp_path(os.path.join("alphas", name))
-    logger = get_logger(outdir, rank)
     config_file = os.path.join(outdir, "config.json")
     training_config = create_training_config(config_file, epochs)
     model_config = create_model_config(training_config)
@@ -573,7 +576,6 @@ def run_process(rank, world_size, name, epochs, model_init):
     model = TransformerModel(model_config).to(rank)
     starting_epoch = initialize_model(model, model_init, outdir)
     if world_size == 1:
-        # TODO fix recompilation errors by experimenting with dynamic=True and also try max-autotune
         model = torch.compile(model)
     model = DDP(
         model, device_ids=[rank], output_device=rank, find_unused_parameters=True
@@ -587,8 +589,8 @@ def run_process(rank, world_size, name, epochs, model_init):
         else None
     )
 
-    if starting_epoch > 0:
-        logger.info(f"Resuming training from epoch {starting_epoch}")
+    logger = get_logger(outdir, rank)        
+    logger.info(f"Starting training from epoch {starting_epoch}")
     initial_loss = evaluate_metrics(
         rank, world_size, outdir, model, dataloaders["validation"], training_config
     )
@@ -633,7 +635,8 @@ def run_process(rank, world_size, name, epochs, model_init):
         record_predictions(
             rank, world_size, model, outdir, dataloaders["validation"], "test"
         )
-
+        
+    delete_checkpoints(outdir)
     dist.destroy_process_group()
 
 
