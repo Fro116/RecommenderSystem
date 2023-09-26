@@ -154,9 +154,8 @@ class TransformerModel(nn.Module):
         return (torch.square(x - y) * w).sum() / w.sum()
 
     def pretrain_lossfn(self, embed, lossfn, classifier, positions, labels, weights):
-        weight_sum = weights.sum()
-        if not torch.is_nonzero(weight_sum):
-            return weight_sum
+        if not torch.is_nonzero(weights.sum()):
+            return torch.tensor([0.0], device = embed.get_device(), requires_grad=True)
         bp = torch.nonzero(weights, as_tuple=True)
         embed = embed[bp[0], bp[1], :]
         labels = labels[bp[0], bp[1]]
@@ -175,9 +174,8 @@ class TransformerModel(nn.Module):
         return losses
 
     def finetune_lossfn(self, embed, lossfn, classifier, labels, weights):
-        weight_sum = weights.sum()
-        if not torch.is_nonzero(weight_sum):
-            return weight_sum
+        if not torch.is_nonzero(weights.sum()):
+            return torch.tensor([0.0], device = embed.get_device(), requires_grad=True)
         preds = classifier(embed)
         return lossfn(preds, labels, weights)
 
@@ -197,15 +195,16 @@ class TransformerModel(nn.Module):
     
     
 # Configs
-def get_batch_size():
+def get_batch_size(causal):
     gpu_mem = int(
         round(
             torch.cuda.get_device_properties(torch.device("cuda")).total_memory
             / 2**30
         )
     )
-    mult = max(round(gpu_mem / 20), 1)
-    return 16 * mult
+    gpu_mult = max(round(gpu_mem / 20), 1)
+    batch_size = 8 if causal else 16    
+    return batch_size * gpu_mult
 
 
 def create_training_config(config_file, epochs):
@@ -234,7 +233,7 @@ def create_training_config(config_file, epochs):
         "num_epochs": epochs,
         "training_epoch_size": int(config["training_epoch_size"]),
         "validation_epoch_size": int(config["validation_epoch_size"]),
-        "batch_size": get_batch_size(),
+        "batch_size": get_batch_size(config["causal"]),
         "warmup_ratio": 0.06,
         "mode": config["mode"],
         # data

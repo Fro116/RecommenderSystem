@@ -33,7 +33,7 @@ from tqdm.auto import tqdm
 # Logging
 def get_logger(outdir, rank):
     logger = logging.getLogger(f"pytorch.{rank}")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG)    
     formatter = logging.Formatter(
         "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
@@ -43,7 +43,7 @@ def get_logger(outdir, rank):
         version += 1
         filename = os.path.join(outdir, f"pytorch.{rank}.log.{version}")
 
-    streams = [logging.FileHandler(filename, "w")]
+    streams = [logging.FileHandler(filename, "a")]
     if rank == 0:
         streams.append(logging.StreamHandler())
     for stream in streams:
@@ -93,8 +93,21 @@ class PretrainDataset(Dataset):
             for task in ["item", "rating"]
         ]
 
+        self.causal = f["causal"][0]
+        self.causal_mask = None
+
     def __len__(self):
         return self.length
+
+    def make_causal(self, mask):
+        N = mask.shape[0]
+        if self.causal_mask is None or self.causal_mask.shape[0] != N:
+            causal_mask = np.full((N, N), False)
+            for i in range(N):
+                for j in range(i + 1, N):
+                    causal_mask[i, j] = True
+            self.causal_mask = causal_mask
+        return mask | self.causal_mask
 
     def __getitem__(self, i):
         embeds = [x[i, :] for x in self.embeddings]
@@ -102,6 +115,8 @@ class PretrainDataset(Dataset):
         # a true value means that the tokens will not attend to each other
         mask = self.mask[i, :]
         mask = mask.reshape(1, mask.size) != mask.reshape(mask.size, 1)
+        if self.causal:
+            mask = self.make_causal(mask)
 
         positions = [x[i, :] for x in self.positions]
         labels = [x[i, :] for x in self.labels]
@@ -152,9 +167,21 @@ class FinetuneDataset(Dataset):
                 for task in ["item", "rating"]
             ]
         ]
+        self.causal = f["causal"][0]
+        self.causal_mask = None
 
     def __len__(self):
         return self.length
+
+    def make_causal(self, mask):
+        N = mask.shape[0]
+        if self.causal_mask is None or self.causal_mask.shape[0] != N:
+            causal_mask = np.full((N, N), False)
+            for i in range(N):
+                for j in range(i + 1, N):
+                    causal_mask[i, j] = True
+            self.causal_mask = causal_mask
+        return mask | self.causal_mask
 
     def __getitem__(self, i):
         embeds = [x[i, :] for x in self.embeddings]
@@ -162,9 +189,10 @@ class FinetuneDataset(Dataset):
         # a true value means that the tokens will not attend to each other
         mask = self.mask[i, :]
         mask = mask.reshape(1, mask.size) != mask.reshape(mask.size, 1)
+        if self.causal:
+            mask = self.make_causal(mask)
 
         user = self.mask[i, 0]
-
         positions = self.positions[i]
         labels = [x[i, :].toarray().flatten() for x in self.labels]
         weights = [x[i, :].toarray().flatten() for x in self.weights]
@@ -436,21 +464,13 @@ def record_predictions(rank, world_size, model, outdir, dataloader, usertag):
     f.create_dataset("users", data=np.hstack(user_batches))
     f.create_dataset("embedding", data=np.vstack(embed_batches))
     detach = lambda x: x.to("cpu").detach().numpy()
-    f.create_dataset(
-        "anime_item_weight", data=detach(model.classifier[0][0].weight)
-    )
+    f.create_dataset("anime_item_weight", data=detach(model.classifier[0][0].weight))
     f.create_dataset("anime_item_bias", data=detach(model.classifier[0][0].bias))
-    f.create_dataset(
-        "anime_rating_weight", data=detach(model.classifier[1].weight)
-    )
+    f.create_dataset("anime_rating_weight", data=detach(model.classifier[1].weight))
     f.create_dataset("anime_rating_bias", data=detach(model.classifier[1].bias))
-    f.create_dataset(
-        "manga_item_weight", data=detach(model.classifier[2][0].weight)
-    )
+    f.create_dataset("manga_item_weight", data=detach(model.classifier[2][0].weight))
     f.create_dataset("manga_item_bias", data=detach(model.classifier[2][0].bias))
-    f.create_dataset(
-        "manga_rating_weight", data=detach(model.classifier[3].weight)
-    )
+    f.create_dataset("manga_rating_weight", data=detach(model.classifier[3].weight))
     f.create_dataset("manga_rating_bias", data=detach(model.classifier[3].bias))
     f.close()
 
@@ -500,7 +520,7 @@ def publish_model(outdir):
 
 def delete_checkpoints(outdir):
     for fn in glob.glob(os.path.join(outdir, f"model.*.pt")):
-        os.remove(fn)    
+        os.remove(fn)
 
 
 # Distributed Data Parallel
@@ -552,6 +572,7 @@ def run_process(rank, world_size, name, epochs, model_init):
     setup_multiprocessing(rank, world_size)
 
     outdir = get_temp_path(os.path.join("alphas", name))
+    logger = get_logger(outdir, rank)
     config_file = os.path.join(outdir, "config.json")
     training_config = create_training_config(config_file, epochs)
     model_config = create_model_config(training_config)
@@ -575,7 +596,7 @@ def run_process(rank, world_size, name, epochs, model_init):
 
     model = TransformerModel(model_config).to(rank)
     starting_epoch = initialize_model(model, model_init, outdir)
-    if world_size == 1:
+    if training_config["mode"] == "finetune":
         model = torch.compile(model)
     model = DDP(
         model, device_ids=[rank], output_device=rank, find_unused_parameters=True
@@ -589,7 +610,6 @@ def run_process(rank, world_size, name, epochs, model_init):
         else None
     )
 
-    logger = get_logger(outdir, rank)        
     logger.info(f"Starting training from epoch {starting_epoch}")
     initial_loss = evaluate_metrics(
         rank, world_size, outdir, model, dataloaders["validation"], training_config
@@ -635,7 +655,7 @@ def run_process(rank, world_size, name, epochs, model_init):
         record_predictions(
             rank, world_size, model, outdir, dataloaders["validation"], "test"
         )
-        
+
     delete_checkpoints(outdir)
     dist.destroy_process_group()
 
