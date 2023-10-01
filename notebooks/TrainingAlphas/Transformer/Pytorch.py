@@ -296,10 +296,6 @@ def to_device(data, device):
     return data.to(device)
 
 
-def get_temp_path(file):
-    return get_data_path(file)
-
-
 # Training
 class EarlyStopper:
     def __init__(self, patience, rtol):
@@ -571,7 +567,7 @@ def get_dataloader(
 def run_process(rank, world_size, name, epochs, model_init):
     setup_multiprocessing(rank, world_size)
 
-    outdir = get_temp_path(os.path.join("alphas", name))
+    outdir = get_data_path(os.path.join("alphas", name))
     logger = get_logger(outdir, rank)
     config_file = os.path.join(outdir, "config.json")
     training_config = create_training_config(config_file, epochs)
@@ -661,7 +657,7 @@ def run_process(rank, world_size, name, epochs, model_init):
 
 
 def cleanup_previous_runs(name):
-    outdir = get_temp_path(os.path.join("alphas", name, "training"))
+    outdir = get_data_path(os.path.join("alphas", name, "training"))
     for x in os.listdir(outdir):
         if "read" in x:
             os.remove(os.path.join(outdir, x))
