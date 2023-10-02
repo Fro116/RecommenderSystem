@@ -489,9 +489,8 @@ def initialize_model(model, model_init, outdir):
         model.load_state_dict(load_model(model_fn))
     checkpoint, epoch = load_checkpoints(outdir)
     if checkpoint is not None:
-        starting_epoch = epoch + 1
         model.load_state_dict(load_model(checkpoint))
-    return starting_epoch
+    return epoch
 
 
 def save_model(rank, world_size, model, epoch, outdir):
@@ -591,7 +590,7 @@ def run_process(rank, world_size, name, epochs, model_init):
     }
 
     model = TransformerModel(model_config).to(rank)
-    starting_epoch = initialize_model(model, model_init, outdir)
+    starting_epoch = initialize_model(model, model_init, outdir) + 1
     if training_config["mode"] == "finetune":
         model = torch.compile(model)
     model = DDP(

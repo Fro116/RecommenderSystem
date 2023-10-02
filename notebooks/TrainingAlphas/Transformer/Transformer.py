@@ -227,7 +227,7 @@ def create_training_config(config_file, epochs):
         "hidden_size": 768,
         "max_sequence_length": config["max_sequence_length"],
         # training
-        "peak_learning_rate": 1e-4 if config["mode"] == "pretrain" else 1e-5,
+        "peak_learning_rate": 1e-4 if config["mode"] == "pretrain" else 1e-6,
         "weight_decay": 1e-2,
         "num_epochs": epochs,
         "training_epoch_size": int(config["training_epoch_size"]),
