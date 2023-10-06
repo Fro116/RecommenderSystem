@@ -360,7 +360,7 @@ def create_learning_rate_schedule(optimizer, config, world_size):
 def train_epoch(
     rank, world_size, outdir, model, dataloader, config, optimizer, scheduler, scaler
 ):
-    training_loss = 0.0
+    training_losses = [0.0 for _ in range(4)]
     training_steps = 0
     progress = tqdm(
         desc=f"Batches",
@@ -371,20 +371,23 @@ def train_epoch(
     for data in dataloader:
         optimizer.zero_grad(set_to_none=True)
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-            loss = sum(model(*to_device(data, rank)))
+            tloss = model(*to_device(data, rank))
+            loss = sum(tloss)
+            for i in range(len(training_losses)):
+                training_losses[i] += float(tloss[i])
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
         if scheduler is not None:
             scheduler.step()
-        training_loss += float(loss)
         training_steps += 1
         progress.update()
     progress.close()
 
-    training_loss = training_loss / training_steps
-    tensor_losses = torch.tensor([training_loss]).to(rank)
-    dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM)
+    training_losses = [x / training_steps for x in training_losses]
+    tensor_losses = torch.tensor(training_losses).to(rank)
+    if world_size > 1:
+        dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM)
     tensor_losses /= world_size
     return [float(x) for x in tensor_losses]
 
@@ -392,7 +395,6 @@ def train_epoch(
 def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
     losses = [0.0 for _ in range(4)]
     steps = 0
-    # since we're not taking gradients, we can use bigger batches
     progress = tqdm(
         desc=f"Batches",
         total=len(dataloader),
@@ -404,8 +406,8 @@ def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
         with torch.no_grad():
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                 loss = model(*to_device(data, rank))
-                for i in range(len(losses)):
-                    losses[i] += float(loss[i])
+            for i in range(len(losses)):
+                losses[i] += float(loss[i])
         steps += 1
         progress.update()
     progress.close()
@@ -413,7 +415,8 @@ def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
     for i in range(len(losses)):
         losses[i] /= steps
     tensor_losses = torch.tensor(losses).to(rank)
-    dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM)
+    if world_size > 1:
+        dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM)
     tensor_losses /= world_size
     return [float(x) for x in tensor_losses]
 
@@ -497,7 +500,9 @@ def save_model(rank, world_size, model, epoch, outdir):
     # atomically save model
     if rank == 0:
         checkpoint = os.path.join(outdir, f"model.{epoch}.pt")
-        torch.save(model.module.state_dict(), checkpoint + "~")
+        if world_size > 1:
+            model = model.module
+        torch.save(model.state_dict(), checkpoint + "~")
         os.rename(checkpoint + "~", checkpoint)
         previous_checkpoints = glob.glob(os.path.join(outdir, f"model.*.pt"))
         for fn in previous_checkpoints:
@@ -564,7 +569,8 @@ def get_dataloader(
 
 
 def run_process(rank, world_size, name, epochs, model_init):
-    setup_multiprocessing(rank, world_size)
+    if world_size > 1:
+        setup_multiprocessing(rank, world_size)
 
     outdir = get_data_path(os.path.join("alphas", name))
     logger = get_logger(outdir, rank)
@@ -581,21 +587,21 @@ def run_process(rank, world_size, name, epochs, model_init):
             outdir,
             training_config["mode"],
             x,
-            training_config["batch_size"] * (1 if x == "training" else 2),
+            training_config["batch_size"] * (2 if x == "validation" else 1),
             training_config[f"num_{x}_shards"],
             training_config[f"{x}_epoch_size"],
             num_workers=training_config["num_dataloader_workers"],
         )
         for x in ["training", "validation"]
     }
-
     model = TransformerModel(model_config).to(rank)
     starting_epoch = initialize_model(model, model_init, outdir) + 1
     if training_config["mode"] == "finetune":
         model = torch.compile(model)
-    model = DDP(
-        model, device_ids=[rank], output_device=rank, find_unused_parameters=True
-    )
+    if world_size > 1:
+        model = DDP(
+            model, device_ids=[rank], output_device=rank, find_unused_parameters=True
+        )
     optimizer = create_optimizer(model, training_config)
     scheduler = create_learning_rate_schedule(optimizer, training_config, world_size)
     scaler = torch.cuda.amp.GradScaler()
@@ -672,8 +678,9 @@ parser.add_argument("--gpus", type=int, help="number of gpus to use")
 parser.add_argument("--epochs", type=int, help="number of epochs to use")
 args = parser.parse_args()
 if __name__ == "__main__":
-    name = "all/Transformer/v0" if args.outdir is None else args.outdir
     gpus = torch.cuda.device_count() if args.gpus is None else args.gpus
-    epochs = 1 if args.epochs is None else args.epochs
-    cleanup_previous_runs(name)
-    mp.spawn(run_process, args=(gpus, name, epochs, args.initialize), nprocs=gpus)
+    cleanup_previous_runs(args.outdir)
+    if gpus > 1:
+        mp.spawn(run_process, args=(gpus, args.outdir, args.epochs, args.initialize), nprocs=gpus)
+    else:
+        run_process(0, gpus, args.outdir, args.epochs, args.initialize)
