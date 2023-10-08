@@ -33,7 +33,7 @@ from tqdm.auto import tqdm
 # Logging
 def get_logger(outdir, rank):
     logger = logging.getLogger(f"pytorch.{rank}")
-    logger.setLevel(logging.DEBUG)    
+    logger.setLevel(logging.DEBUG)
     formatter = logging.Formatter(
         "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
@@ -357,8 +357,32 @@ def create_learning_rate_schedule(optimizer, config, world_size):
         assert False
 
 
+def make_task_weights(losses):
+    weights = []
+    for i in range(len(losses)):
+        if losses[i] > 0:
+            weights.append(1 / losses[i])
+        else:
+            weights.append(0)
+    norm = sum(weights) / len(weights)
+    if norm == 0:
+        return [1 for _ in range(len(losses))]
+    else:
+        return [x / norm for x in weights]
+    return weights
+
+
 def train_epoch(
-    rank, world_size, outdir, model, dataloader, config, optimizer, scheduler, scaler
+    rank,
+    world_size,
+    outdir,
+    model,
+    dataloader,
+    config,
+    optimizer,
+    scheduler,
+    scaler,
+    task_weights,
 ):
     training_losses = [0.0 for _ in range(4)]
     training_steps = 0
@@ -372,14 +396,16 @@ def train_epoch(
         optimizer.zero_grad(set_to_none=True)
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             tloss = model(*to_device(data, rank))
-            loss = sum(tloss)
+            scaled_loss = [tloss[i] * task_weights[i] for i in range(len(task_weights))]
+            loss = sum(scaled_loss)
             for i in range(len(training_losses)):
                 training_losses[i] += float(tloss[i])
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        if scheduler is not None:
-            scheduler.step()
+        if torch.is_nonzero(loss):
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            if scheduler is not None:
+                scheduler.step()
         training_steps += 1
         progress.update()
     progress.close()
@@ -618,6 +644,7 @@ def run_process(rank, world_size, name, epochs, model_init):
     if stopper:
         stopper(sum(initial_loss))
     logger.info(f"Initial Loss: {sum(initial_loss)}, {initial_loss}")
+    task_weights = make_task_weights(initial_loss)
 
     for epoch in range(starting_epoch, training_config["num_epochs"]):
         training_loss = train_epoch(
@@ -630,14 +657,18 @@ def run_process(rank, world_size, name, epochs, model_init):
             optimizer,
             scheduler,
             scaler,
+            task_weights,
         )
-        logger.info(f"Epoch: {epoch}, Training Loss: {training_loss}")
+        logger.info(
+            f"Epoch: {epoch}, Training Loss: {sum(training_loss)}, {training_loss}"
+        )
         validation_loss = evaluate_metrics(
             rank, world_size, outdir, model, dataloaders["validation"], training_config
         )
         logger.info(
             f"Epoch: {epoch}, Validation Loss: {sum(validation_loss)}, {validation_loss}"
         )
+        task_weights = make_task_weights(validation_loss)
         if stopper:
             stopper(sum(validation_loss))
             if stopper.save_model:
@@ -681,6 +712,10 @@ if __name__ == "__main__":
     gpus = torch.cuda.device_count() if args.gpus is None else args.gpus
     cleanup_previous_runs(args.outdir)
     if gpus > 1:
-        mp.spawn(run_process, args=(gpus, args.outdir, args.epochs, args.initialize), nprocs=gpus)
+        mp.spawn(
+            run_process,
+            args=(gpus, args.outdir, args.epochs, args.initialize),
+            nprocs=gpus,
+        )
     else:
         run_process(0, gpus, args.outdir, args.epochs, args.initialize)
