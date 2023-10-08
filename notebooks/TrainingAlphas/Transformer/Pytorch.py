@@ -677,7 +677,8 @@ def run_process(rank, world_size, name, epochs, model_init):
                 break
         else:
             save_model(rank, world_size, model, epoch, outdir)
-    publish_model(outdir)
+    if rank == 0:
+        publish_model(outdir)
 
     if training_config["mode"] == "finetune" and rank == 0:
         model = TransformerModel(model_config).to(rank)
