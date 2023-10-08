@@ -689,7 +689,8 @@ def run_process(rank, world_size, name, epochs, model_init):
         )
 
     delete_checkpoints(outdir)
-    dist.destroy_process_group()
+    if world_size > 1:
+        dist.destroy_process_group()
 
 
 def cleanup_previous_runs(name):
