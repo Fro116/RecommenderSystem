@@ -92,33 +92,17 @@ class PretrainDataset(Dataset):
             for medium in ["anime", "manga"]
             for task in ["item", "rating"]
         ]
-
-        self.causal = f["causal"][0]
-        self.causal_mask = None
         f.close()
 
     def __len__(self):
         return self.length
 
-    def make_causal(self, mask):
-        N = mask.shape[0]
-        if self.causal_mask is None or self.causal_mask.shape[0] != N:
-            causal_mask = np.full((N, N), False)
-            for i in range(N):
-                for j in range(i + 1, N):
-                    causal_mask[i, j] = True
-            self.causal_mask = causal_mask
-        return mask | self.causal_mask
-
     def __getitem__(self, i):
-        embeds = [x[i, :] for x in self.embeddings]
-
         # a true value means that the tokens will not attend to each other
         mask = self.mask[i, :]
         mask = mask.reshape(1, mask.size) != mask.reshape(mask.size, 1)
-        if self.causal:
-            mask = self.make_causal(mask)
 
+        embeds = [x[i, :] for x in self.embeddings]
         positions = [x[i, :] for x in self.positions]
         labels = [x[i, :] for x in self.labels]
         weights = [x[i, :] for x in self.weights]
@@ -168,33 +152,18 @@ class FinetuneDataset(Dataset):
                 for task in ["item", "rating"]
             ]
         ]
-        self.causal = f["causal"][0]
-        self.causal_mask = None
         f.close()
 
     def __len__(self):
         return self.length
 
-    def make_causal(self, mask):
-        N = mask.shape[0]
-        if self.causal_mask is None or self.causal_mask.shape[0] != N:
-            causal_mask = np.full((N, N), False)
-            for i in range(N):
-                for j in range(i + 1, N):
-                    causal_mask[i, j] = True
-            self.causal_mask = causal_mask
-        return mask | self.causal_mask
-
     def __getitem__(self, i):
-        embeds = [x[i, :] for x in self.embeddings]
-
         # a true value means that the tokens will not attend to each other
         mask = self.mask[i, :]
         mask = mask.reshape(1, mask.size) != mask.reshape(mask.size, 1)
-        if self.causal:
-            mask = self.make_causal(mask)
-
         user = self.mask[i, 0]
+
+        embeds = [x[i, :] for x in self.embeddings]
         positions = self.positions[i]
         labels = [x[i, :].toarray().flatten() for x in self.labels]
         weights = [x[i, :].toarray().flatten() for x in self.weights]

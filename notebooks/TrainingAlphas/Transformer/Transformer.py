@@ -194,7 +194,7 @@ class TransformerModel(nn.Module):
     
     
 # Configs
-def get_batch_size(causal):
+def get_batch_size():
     gpu_mem = int(
         round(
             torch.cuda.get_device_properties(torch.device("cuda")).total_memory
@@ -202,7 +202,7 @@ def get_batch_size(causal):
         )
     )
     gpu_mult = max(round(gpu_mem / 20), 1)
-    batch_size = 8 if causal else 16    
+    batch_size = 16
     return batch_size * gpu_mult
 
 
@@ -232,7 +232,7 @@ def create_training_config(config_file, epochs):
         "num_epochs": epochs,
         "training_epoch_size": int(config["training_epoch_size"]),
         "validation_epoch_size": int(config["validation_epoch_size"]),
-        "batch_size": get_batch_size(config["causal"]),
+        "batch_size": get_batch_size(),
         "warmup_ratio": 0.06,
         "mode": config["mode"],
         # data
