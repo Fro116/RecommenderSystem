@@ -95,6 +95,7 @@ class PretrainDataset(Dataset):
 
         self.causal = f["causal"][0]
         self.causal_mask = None
+        f.close()
 
     def __len__(self):
         return self.length
@@ -169,6 +170,7 @@ class FinetuneDataset(Dataset):
         ]
         self.causal = f["causal"][0]
         self.causal_mask = None
+        f.close()
 
     def __len__(self):
         return self.length
@@ -396,16 +398,15 @@ def train_epoch(
         optimizer.zero_grad(set_to_none=True)
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             tloss = model(*to_device(data, rank))
-            scaled_loss = [tloss[i] * task_weights[i] for i in range(len(task_weights))]
-            loss = sum(scaled_loss)
             for i in range(len(training_losses)):
                 training_losses[i] += float(tloss[i])
-        if torch.is_nonzero(loss):
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            if scheduler is not None:
-                scheduler.step()
+            loss = sum(tloss[i] * task_weights[i] for i in range(len(task_weights)))
+            tloss = None
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        if scheduler is not None:
+            scheduler.step()
         training_steps += 1
         progress.update()
     progress.close()
@@ -565,7 +566,7 @@ def get_dataloader(
     batch_size,
     num_data_shards,
     epoch_size,
-    num_workers=0,
+    num_workers,
 ):
     dataset = StreamingDataset(
         rank,
@@ -613,7 +614,7 @@ def run_process(rank, world_size, name, epochs, model_init):
             outdir,
             training_config["mode"],
             x,
-            training_config["batch_size"] * (2 if x == "validation" else 1),
+            training_config["batch_size"],
             training_config[f"num_{x}_shards"],
             training_config[f"{x}_epoch_size"],
             num_workers=training_config["num_dataloader_workers"],
