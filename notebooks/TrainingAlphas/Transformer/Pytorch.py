@@ -493,30 +493,28 @@ def initialize_model(model, model_init, outdir):
 
 
 def save_model(rank, world_size, model, epoch, outdir):
-    # atomically save model
-    if rank == 0:
-        checkpoint = os.path.join(outdir, f"model.{epoch}.pt")
-        if world_size > 1:
-            model = model.module
-        torch.save(model.state_dict(), checkpoint + "~")
-        os.rename(checkpoint + "~", checkpoint)
-        previous_checkpoints = glob.glob(os.path.join(outdir, f"model.*.pt"))
-        for fn in previous_checkpoints:
-            if fn != checkpoint:
-                os.remove(fn)
+    if rank != 0:
+        return
+    checkpoint = os.path.join(outdir, f"model.{epoch}.pt")
+    if world_size > 1:
+        model = model.module
+    torch.save(model.state_dict(), checkpoint + "~")
+    os.rename(checkpoint + "~", checkpoint)
+    previous_checkpoints = glob.glob(os.path.join(outdir, f"model.*.pt"))
+    for fn in previous_checkpoints:
+        if fn != checkpoint:
+            os.remove(fn)
 
 
-def publish_model(outdir):
+def publish_model(outdir, rank):
+    if rank != 0:
+        return
     checkpoint, epoch = load_checkpoints(outdir)
     assert checkpoint is not None
     modelfn = os.path.join(outdir, f"model.pt")
     shutil.copyfile(checkpoint, modelfn + "~")
     os.rename(modelfn + "~", modelfn)
-
-
-def delete_checkpoints(outdir):
-    for fn in glob.glob(os.path.join(outdir, f"model.*.pt")):
-        os.remove(fn)
+    os.remove(checkpoint)
 
 
 # Distributed Data Parallel
@@ -647,8 +645,6 @@ def run_process(rank, world_size, name, epochs, model_init):
                 break
         else:
             save_model(rank, world_size, model, epoch, outdir)
-    if rank == 0:
-        publish_model(outdir)
 
     if training_config["mode"] == "finetune" and rank == 0:
         model = TransformerModel(model_config).to(rank)
@@ -659,7 +655,7 @@ def run_process(rank, world_size, name, epochs, model_init):
             rank, world_size, model, outdir, dataloaders["validation"], "test"
         )
 
-    delete_checkpoints(outdir)
+    publish_model(outdir)
     if world_size > 1:
         dist.destroy_process_group()
 
