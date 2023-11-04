@@ -481,15 +481,15 @@ def load_checkpoints(outdir):
     return checkpoint, epoch
 
 
-def initialize_model(model, model_init, outdir):
-    starting_epoch = 0
+def initialize_model(model, model_init, outdir, logger):
+    model_paths = [os.path.join(outdir, "model.pt")]
     if model_init is not None:
-        model_fn = get_data_path(os.path.join("alphas", model_init, "model.pt"))
-        model.load_state_dict(load_model(model_fn))
-    checkpoint, epoch = load_checkpoints(outdir)
-    if checkpoint is not None:
-        model.load_state_dict(load_model(checkpoint))
-    return epoch
+        model_paths.append(get_data_path(os.path.join("alphas", model_init, "model.pt")))
+    for path in model_paths:
+        if os.path.exists(path):
+            logger.info(f"loading model from {path}")
+            model.load_state_dict(load_model(path))
+            return
 
 
 def save_model(rank, world_size, model, epoch, outdir):
@@ -508,7 +508,7 @@ def save_model(rank, world_size, model, epoch, outdir):
 
 def publish_model(outdir, rank):
     if rank != 0:
-        return
+        return    
     checkpoint, epoch = load_checkpoints(outdir)
     assert checkpoint is not None
     modelfn = os.path.join(outdir, f"model.pt")
@@ -589,7 +589,7 @@ def run_process(rank, world_size, name, epochs, model_init):
         for x in ["training", "validation"]
     }
     model = TransformerModel(model_config).to(rank)
-    starting_epoch = initialize_model(model, model_init, outdir) + 1
+    initialize_model(model, model_init, outdir, logger)
     if training_config["mode"] == "finetune":
         model = torch.compile(model)
     if world_size > 1:
@@ -605,7 +605,6 @@ def run_process(rank, world_size, name, epochs, model_init):
         else None
     )
 
-    logger.info(f"Starting training from epoch {starting_epoch}")
     initial_loss = evaluate_metrics(
         rank, world_size, outdir, model, dataloaders["validation"], training_config
     )
@@ -614,7 +613,7 @@ def run_process(rank, world_size, name, epochs, model_init):
     logger.info(f"Initial Loss: {sum(initial_loss)}, {initial_loss}")
     task_weights = make_task_weights(initial_loss)
 
-    for epoch in range(starting_epoch, training_config["num_epochs"]):
+    for epoch in range(training_config["num_epochs"]):
         training_loss = train_epoch(
             rank,
             world_size,
@@ -645,17 +644,16 @@ def run_process(rank, world_size, name, epochs, model_init):
                 break
         else:
             save_model(rank, world_size, model, epoch, outdir)
+    publish_model(outdir)
 
     if training_config["mode"] == "finetune" and rank == 0:
         model = TransformerModel(model_config).to(rank)
-        epoch = initialize_model(model, model_init, outdir)
+        initialize_model(model, model_init, outdir, logger)
         model = torch.compile(model)
-        logger.info(f"Initializing from epoch {epoch}")
         record_predictions(
             rank, world_size, model, outdir, dataloaders["validation"], "test"
         )
 
-    publish_model(outdir)
     if world_size > 1:
         dist.destroy_process_group()
 
