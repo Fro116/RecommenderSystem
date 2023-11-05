@@ -97,6 +97,9 @@ def to_sparse_tensor(csr):
     return torch.sparse_csr_tensor(csr.indptr, csr.indices, csr.data, csr.shape)
 
 
+def get_device():
+    return "cuda"
+
 def to_device(data, device):
     return [to_sparse_tensor(x).to(device).to_dense() for x in data[:-1]]
 
@@ -270,7 +273,7 @@ def train(config, outdir, logger, training, test):
     }
 
     logger.info(f"Initializing model")
-    device = "cuda"
+    device = get_device()
     model = create_model(config, outdir, device)
 
     starting_epoch = 0
@@ -314,7 +317,7 @@ def record_predictions(model, outdir, dataloader):
         mininterval=1,
     )
     model.eval()
-    device = "cuda"
+    device = get_device()
     for data in dataloader:
         with torch.no_grad():
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
@@ -354,7 +357,7 @@ def run_process(name, mode):
     elif mode == "finetune":
         train(config, outdir, logger, "validation", "test")
     elif mode == "inference":
-        model = create_model(config, outdir, "cuda")
+        model = create_model(config, outdir, get_device())
         dataloader = get_dataloader(
             outdir,
             "inference",
