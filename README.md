@@ -1,5 +1,5 @@
 # RecommenderSystem
-This is an anime and manga recommender system based off of MyAnimeList, AniList and Kitsu user ratings. This codebase has been used to train a model on over 1.25 billion user-item interactions. See the notebook in `notebooks/README.ipynb` for usage instructions.
+This is an anime and manga recommender system based off of MyAnimeList, AniList, Kitsu, and AnimePlanet user ratings. This codebase has been used to train a model on over 1.3 billion user-item interactions. See the notebook in `notebooks/README.ipynb` for usage instructions.
 
 Details on the recommender system can be found by inspecting the source code at `notebooks/TrainingAlphas`. At a high level, there are five main steps:
 1. Pretraining a transformer model on watch histories
