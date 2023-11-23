@@ -24,31 +24,46 @@ class BagOfWordsModel(nn.Module):
             nn.ReLU(),
             nn.Linear(256, self.output_size),
         )
-        self.content = config["content"]
-        if config["content"] == "explicit":
-            self.lossfn = self.rating_lossfn
-        elif config["content"] == "implicit":
+        self.metric = config["metric"]
+        if config["metric"] == "rating":
+            self.lossfn = self.mse
+        elif config["metric"] in ["watch", "plantowatch"]:
             self.logsoftmax = nn.LogSoftmax(dim=-1)
             self.softmax = nn.Softmax(dim=-1)
-            self.lossfn = self.crossentropy_lossfn
+            self.lossfn = self.crossentropy
+        elif config["metric"] == "drop":
+            self.sigmoid = nn.Sigmoid()
+            self.lossfn = self.binarycrossentropy
         else:
             assert False
 
-    def rating_lossfn(self, x, y, w):
-        return (torch.square(x - y) * w).sum() / w.sum()
+    def mse(self, x, y, w):
+        return (torch.square(x - y) * w).sum()
 
-    def crossentropy_lossfn(self, x, y, w):
+    def crossentropy(self, x, y, w):
         x = self.logsoftmax(x)
-        return (-x * y * w).sum() / w.sum()
+        return (-x * y * w).sum()
+
+    def binarycrossentropy(self, x, y, w):
+        torch.nn.functional.binary_cross_entropy_with_logits(
+            input = x,
+            target = y,
+            weight = w,
+            reduction = "sum",
+        )        
+        # x = self.sigmoid(x)
+        # return (w * -(y * torch.log(x) + (1 - y) * torch.log(1 - x))).sum()
 
     def forward(self, inputs, labels, weights, mask, evaluate, predict):
         if predict:
             x = self.model(inputs)
-            if self.content == "implicit":
+            if self.metric in ["watch", "plantowatch"]:
                 x = self.softmax(x)
+            elif self.metric == "drop":
+                x = self.sigmoid(x)
             return x
         if evaluate:
-            if self.content == "explicit":
+            if self.metric == "rating":
                 # return the full path of loss values
                 x = self.model(inputs)
                 return (
@@ -56,7 +71,7 @@ class BagOfWordsModel(nn.Module):
                     self.lossfn(0 * x, labels, weights),
                     self.lossfn(-1 * x, labels, weights),
                 )
-            elif self.content == "implicit":
+            elif self.metric in ["watch", "plantowatch", "drop"]:
                 return self.lossfn(self.model(inputs), labels, weights)
         if mask:
             masks = [
@@ -76,7 +91,7 @@ def create_training_config(config_file, mode):
         # model
         "input_sizes": config["input_sizes"],
         "output_size_index": config["output_size_index"],
-        "content": config["content"],
+        "metric": config["metric"],
         # training
         "peak_learning_rate": 4e-5 if mode == "pretrain" else 4e-6,  # TODO scan
         "weight_decay": 1e-2,

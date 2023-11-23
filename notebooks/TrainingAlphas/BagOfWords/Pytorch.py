@@ -65,7 +65,12 @@ class BagOfWordsDataset(Dataset):
         self.labels = self.process_sparse_matrix(f, "labels")
         self.weights = self.process_sparse_matrix(f, "weights")
         self.users = f["users"][:]
-        self.valid_indices = f["valid_users"][:] - 1
+        valid_users = set(f["valid_users"][:])
+        valid_indices = []
+        for i in range(len(self.users)):
+            if self.users[i] in valid_users:
+                valid_indices.append(i)
+        self.valid_indices = valid_indices
         self.index = len(self.valid_indices)
         f.close()
 
@@ -99,6 +104,7 @@ def to_sparse_tensor(csr):
 
 def get_device():
     return "cuda"
+
 
 def to_device(data, device):
     return [to_sparse_tensor(x).to(device).to_dense() for x in data[:-1]]
@@ -178,7 +184,7 @@ class EarlyStopper:
 
 def train_epoch(outdir, model, dataloader, config, optimizer, scaler, device):
     training_loss = 0.0
-    training_steps = 0
+    training_weights = 0
     progress = tqdm(
         desc=f"Batches",
         total=len(dataloader),
@@ -187,22 +193,21 @@ def train_epoch(outdir, model, dataloader, config, optimizer, scaler, device):
     for data in dataloader:
         optimizer.zero_grad(set_to_none=True)
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            dev_data = to_device(data, device)
             loss = model(
-                *to_device(data, device),
+                *dev_data,
                 mask=config["mask"],
                 evaluate=False,
                 predict=False,
             )
+            training_weights += 1
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
         training_loss += float(loss)
-        training_steps += 1
         progress.update()
     progress.close()
-
-    training_loss = training_loss / training_steps
-    return training_loss
+    return training_loss / training_weights
 
 
 def minimize_quadratic(x, y):
@@ -215,8 +220,8 @@ def minimize_quadratic(x, y):
 
 
 def evaluate_metrics(outdir, model, dataloader, config, device):
-    losses = [0.0, 0.0, 0.0] if config["content"] == "explicit" else 0.0
-    steps = 0
+    losses = [0.0, 0.0, 0.0] if config["metric"] == "rating" else 0.0
+    weights = 0.0
     progress = tqdm(
         desc=f"Batches",
         total=len(dataloader),
@@ -226,23 +231,22 @@ def evaluate_metrics(outdir, model, dataloader, config, device):
     for data in dataloader:
         with torch.no_grad():
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                loss = model(
-                    *to_device(data, device), mask=False, evaluate=True, predict=False
-                )
-                if config["content"] == "explicit":
+                dev_data = to_device(data, device)
+                loss = model(*dev_data, mask=False, evaluate=True, predict=False)
+                if config["metric"] == "rating":
                     for i in range(len(losses)):
                         losses[i] += float(loss[i])
                 else:
                     losses += float(loss)
-        steps += 1
+                weights += float(dev_data[-1].sum())
         progress.update()
     progress.close()
     model.train()
-    if config["content"] == "explicit":
+    if config["metric"] == "rating":
         miny, minx = minimize_quadratic([1, 0, -1], losses)
-        return (miny / steps, minx)
+        return (miny / weights, minx)
     else:
-        return (losses / steps,)
+        return (losses / weights,)
 
 
 def save_model(model, outdir):
