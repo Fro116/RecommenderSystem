@@ -26,7 +26,9 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
 
-# Logging
+exec(open("./BagOfWords.py").read())
+
+
 def get_logger(outdir):
     logger = logging.getLogger(f"pytorch")
     logger.setLevel(logging.DEBUG)
@@ -46,11 +48,6 @@ def get_logger(outdir):
     return logger
 
 
-# Shared
-exec(open("./BagOfWords.py").read())
-
-
-# Data
 class BagOfWordsDataset(Dataset):
     def __init__(self, file, basename, shuffle):
         self.filename = file
@@ -231,6 +228,7 @@ def evaluate_metrics(outdir, model, dataloader, config, device):
     for data in dataloader:
         with torch.no_grad():
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                users = data[-1]
                 dev_data = to_device(data, device)
                 loss = model(*dev_data, mask=False, evaluate=True, predict=False)
                 if config["metric"] == "rating":
@@ -263,13 +261,17 @@ def create_model(config, outdir, device):
     return model
 
 
+def get_batch_size(batch_size, epoch_size, num_workers):
+    worker_size = int(round(epoch_size / num_workers / 3)) # ensure that each worker gets sampled
+    return max(min(batch_size, worker_size), 1)
+        
 def train(config, outdir, logger, training, test):
-    logger.info(f"Training on {training} data. Early stopping on {test} data")
+    logger.info(f"Training on {training} data. Early stopping on {test} data") 
     dataloaders = {
         x: get_dataloader(
             outdir,
             y,
-            config["batch_size"],
+            get_batch_size(config["batch_size"], config[f"epoch_size_{y}"], config["num_data_shards"]),
             num_workers=config["num_data_shards"],
             shuffle=x == "training",
         )

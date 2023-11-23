@@ -87,7 +87,7 @@ class BagOfWordsModel(nn.Module):
 
 def create_training_config(config_file, mode):
     config = json.load(open(config_file, "r"))
-    config = {
+    training_config = {
         # model
         "input_sizes": config["input_sizes"],
         "output_size_index": config["output_size_index"],
@@ -101,7 +101,10 @@ def create_training_config(config_file, mode):
         # data
         "num_data_shards": config["num_shards"],
     }
-    return config
+    for split in ["training", "validation", "test"]:
+        key = f"epoch_size_{split}"
+        training_config[key] = config[key]
+    return training_config
 
 
 # I/O
