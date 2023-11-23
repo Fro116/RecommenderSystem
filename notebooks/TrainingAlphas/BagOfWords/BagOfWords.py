@@ -45,14 +45,12 @@ class BagOfWordsModel(nn.Module):
         return (-x * y * w).sum()
 
     def binarycrossentropy(self, x, y, w):
-        torch.nn.functional.binary_cross_entropy_with_logits(
+        return torch.nn.functional.binary_cross_entropy_with_logits(
             input = x,
             target = y,
             weight = w,
             reduction = "sum",
-        )        
-        # x = self.sigmoid(x)
-        # return (w * -(y * torch.log(x) + (1 - y) * torch.log(1 - x))).sum()
+        )
 
     def forward(self, inputs, labels, weights, mask, evaluate, predict):
         if predict:
