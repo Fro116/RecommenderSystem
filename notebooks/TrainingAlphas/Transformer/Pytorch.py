@@ -30,7 +30,9 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 
 
-# Logging
+exec(open("./Transformer.py").read())
+
+
 def get_logger(outdir, rank):
     logger = logging.getLogger(f"pytorch.{rank}")
     logger.setLevel(logging.DEBUG)
@@ -52,45 +54,43 @@ def get_logger(outdir, rank):
     return logger
 
 
-# Shared
-exec(open("./Transformer.py").read())
-
-
-# Data
 class PretrainDataset(Dataset):
     def __init__(self, file):
         self.filename = file
         f = h5py.File(file, "r")
-        self.length = f["anime"].shape[0]
+        # itemid, rating, updated_at, status, position, user
+
+        self.length = f["itemid"].shape[0]
         self.embeddings = [
-            f["anime"][:] - 1,
-            f["manga"][:] - 1,
+            f["itemid"][:],
             f["rating"][:].reshape(*f["rating"].shape, 1).astype(np.float32),
-            f["timestamp"][:].reshape(*f["timestamp"].shape, 1).astype(np.float32),
-            f["status"][:] - 1,
-            f["completion"][:].reshape(*f["completion"].shape, 1).astype(np.float32),
-            f["position"][:] - 1,
+            f["updated_at"][:].reshape(*f["updated_at"].shape, 1).astype(np.float32),
+            f["status"][:],
+            f["position"][:],
         ]
-        self.mask = f["user"][:]
+        self.mask = f["userid"][:]
 
         def process_position(x):
-            x = x[:].astype(np.int64) - 1
+            x = x[:].astype(np.int64)
             return x.reshape(*x.shape, 1)
 
+        ALL_MEDIUMS = ["manga", "anime"]
+        ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
+
         self.positions = [
-            process_position(f[f"positions_{medium}_{task}"])
-            for medium in ["anime", "manga"]
-            for task in ["item", "rating"]
+            process_position(f[f"positions_{medium}_{metric}"])
+            for medium in ALL_MEDIUMS            
+            for metric in ALL_METRICS            
         ]
         self.labels = [
-            np.expand_dims(f[f"labels_{medium}_{task}"][:], axis=-1)
-            for medium in ["anime", "manga"]
-            for task in ["item", "rating"]
+            np.expand_dims(f[f"labels_{medium}_{metric}"][:], axis=-1)
+            for medium in ALL_MEDIUMS            
+            for metric in ALL_METRICS            
         ]
         self.weights = [
-            np.expand_dims(f[f"weights_{medium}_{task}"][:], axis=-1)
-            for medium in ["anime", "manga"]
-            for task in ["item", "rating"]
+            np.expand_dims(f[f"weights_{medium}_{metric}"][:], axis=-1)
+            for medium in ALL_MEDIUMS            
+            for metric in ALL_METRICS            
         ]
         f.close()
 
@@ -101,7 +101,6 @@ class PretrainDataset(Dataset):
         # a true value means that the tokens will not attend to each other
         mask = self.mask[i, :]
         mask = mask.reshape(1, mask.size) != mask.reshape(mask.size, 1)
-
         embeds = [x[i, :] for x in self.embeddings]
         positions = [x[i, :] for x in self.positions]
         labels = [x[i, :] for x in self.labels]
@@ -109,65 +108,65 @@ class PretrainDataset(Dataset):
         return embeds, mask, positions, labels, weights
 
 
-class FinetuneDataset(Dataset):
-    def __init__(self, file):
-        self.filename = file
-        f = h5py.File(file, "r")
-        self.length = f["anime"].shape[0]
-        self.embeddings = [
-            f["anime"][:] - 1,
-            f["manga"][:] - 1,
-            f["rating"][:].reshape(*f["rating"].shape, 1).astype(np.float32),
-            f["timestamp"][:].reshape(*f["timestamp"].shape, 1).astype(np.float32),
-            f["status"][:] - 1,
-            f["completion"][:].reshape(*f["completion"].shape, 1).astype(np.float32),
-            f["position"][:] - 1,
-        ]
-        self.mask = f["user"][:]
+# class FinetuneDataset(Dataset):
+#     def __init__(self, file):
+#         self.filename = file
+#         f = h5py.File(file, "r")
+#         self.length = f["anime"].shape[0]
+#         self.embeddings = [
+#             f["anime"][:] - 1,
+#             f["manga"][:] - 1,
+#             f["rating"][:].reshape(*f["rating"].shape, 1).astype(np.float32),
+#             f["timestamp"][:].reshape(*f["timestamp"].shape, 1).astype(np.float32),
+#             f["status"][:] - 1,
+#             f["completion"][:].reshape(*f["completion"].shape, 1).astype(np.float32),
+#             f["position"][:] - 1,
+#         ]
+#         self.mask = f["userid"][:]
 
-        def process_position(x):
-            return x[:].flatten().astype(np.int64) - 1
+#         def process_position(x):
+#             return x[:].flatten().astype(np.int64) - 1
 
-        def process_sparse_matrix(f, name):
-            i = f[f"{name}_i"][:] - 1
-            j = f[f"{name}_j"][:] - 1
-            v = f[f"{name}_v"][:]
-            m, n = f[f"{name}_size"][:]
-            return scipy.sparse.coo_matrix((v, (j, i)), shape=(n, m)).tocsr()
+#         def process_sparse_matrix(f, name):
+#             i = f[f"{name}_i"][:] - 1
+#             j = f[f"{name}_j"][:] - 1
+#             v = f[f"{name}_v"][:]
+#             m, n = f[f"{name}_size"][:]
+#             return scipy.sparse.coo_matrix((v, (j, i)), shape=(n, m)).tocsr()
 
-        self.positions = process_position(f["positions"])
-        self.labels = [
-            process_sparse_matrix(f, name)
-            for name in [
-                f"labels_{medium}_{task}"
-                for medium in ["anime", "manga"]
-                for task in ["item", "rating"]
-            ]
-        ]
-        self.weights = [
-            process_sparse_matrix(f, name)
-            for name in [
-                f"weights_{medium}_{task}"
-                for medium in ["anime", "manga"]
-                for task in ["item", "rating"]
-            ]
-        ]
-        f.close()
+#         self.positions = process_position(f["positions"])
+#         self.labels = [
+#             process_sparse_matrix(f, name)
+#             for name in [
+#                 f"labels_{medium}_{task}"
+#                 for medium in ["anime", "manga"]
+#                 for task in ["item", "rating"]
+#             ]
+#         ]
+#         self.weights = [
+#             process_sparse_matrix(f, name)
+#             for name in [
+#                 f"weights_{medium}_{task}"
+#                 for medium in ["anime", "manga"]
+#                 for task in ["item", "rating"]
+#             ]
+#         ]
+#         f.close()
 
-    def __len__(self):
-        return self.length
+#     def __len__(self):
+#         return self.length
 
-    def __getitem__(self, i):
-        # a true value means that the tokens will not attend to each other
-        mask = self.mask[i, :]
-        mask = mask.reshape(1, mask.size) != mask.reshape(mask.size, 1)
-        user = self.mask[i, 0]
+#     def __getitem__(self, i):
+#         # a true value means that the tokens will not attend to each other
+#         mask = self.mask[i, :]
+#         mask = mask.reshape(1, mask.size) != mask.reshape(mask.size, 1)
+#         user = self.mask[i, 0]
 
-        embeds = [x[i, :] for x in self.embeddings]
-        positions = self.positions[i]
-        labels = [x[i, :].toarray().flatten() for x in self.labels]
-        weights = [x[i, :].toarray().flatten() for x in self.weights]
-        return embeds, mask, positions, labels, weights, user
+#         embeds = [x[i, :] for x in self.embeddings]
+#         positions = self.positions[i]
+#         labels = [x[i, :].toarray().flatten() for x in self.labels]
+#         weights = [x[i, :].toarray().flatten() for x in self.weights]
+#         return embeds, mask, positions, labels, weights, user
 
 
 class StreamingDataset(Dataset):
@@ -267,7 +266,6 @@ def to_device(data, device):
     return data.to(device)
 
 
-# Training
 class EarlyStopper:
     def __init__(self, patience, rtol):
         self.patience = patience
@@ -311,7 +309,7 @@ def create_optimizer(model, config):
 def create_learning_rate_schedule(optimizer, config, world_size):
     if config["mode"] == "pretrain":
         steps_per_epoch = math.ceil(
-            config["training_epoch_size"] / (config["batch_size"] * world_size)
+            config["training_epoch_size"] / (config["training_batch_size"] * world_size)
         )
         total_steps = config["num_epochs"] * steps_per_epoch
         warmup_ratio = config["warmup_ratio"]
@@ -355,7 +353,7 @@ def train_epoch(
     scaler,
     task_weights,
 ):
-    training_losses = [0.0 for _ in range(4)]
+    training_losses = [0.0 for _ in range(8)]
     training_steps = 0
     progress = tqdm(
         desc=f"Batches",
@@ -367,9 +365,9 @@ def train_epoch(
         optimizer.zero_grad(set_to_none=True)
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             tloss = model(*to_device(data, rank))
-            for i in range(len(training_losses)):
+            for i in range(len(tloss)):
                 training_losses[i] += float(tloss[i])
-            loss = sum(tloss[i] * task_weights[i] for i in range(len(task_weights)))
+            loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
             tloss = None
         scaler.scale(loss).backward()
         scaler.step(optimizer)
@@ -389,7 +387,7 @@ def train_epoch(
 
 
 def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
-    losses = [0.0 for _ in range(4)]
+    losses = [0.0 for _ in range(8)]
     steps = 0
     progress = tqdm(
         desc=f"Batches",
@@ -402,7 +400,7 @@ def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
         with torch.no_grad():
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                 loss = model(*to_device(data, rank))
-            for i in range(len(losses)):
+            for i in range(len(loss)):
                 losses[i] += float(loss[i])
         steps += 1
         progress.update()
@@ -484,7 +482,9 @@ def load_checkpoints(outdir):
 def initialize_model(model, model_init, outdir, logger):
     model_paths = [os.path.join(outdir, "model.pt")]
     if model_init is not None:
-        model_paths.append(get_data_path(os.path.join("alphas", model_init, "model.pt")))
+        model_paths.append(
+            get_data_path(os.path.join("alphas", model_init, "model.pt"))
+        )
     for path in model_paths:
         if os.path.exists(path):
             logger.info(f"loading model from {path}")
@@ -508,7 +508,7 @@ def save_model(rank, world_size, model, epoch, outdir):
 
 def publish_model(outdir, rank):
     if rank != 0:
-        return    
+        return
     checkpoint, epoch = load_checkpoints(outdir)
     assert checkpoint is not None
     modelfn = os.path.join(outdir, f"model.pt")
@@ -517,7 +517,6 @@ def publish_model(outdir, rank):
     os.remove(checkpoint)
 
 
-# Distributed Data Parallel
 def setup_multiprocessing(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "12355"
@@ -581,7 +580,7 @@ def run_process(rank, world_size, name, epochs, model_init):
             outdir,
             training_config["mode"],
             x,
-            training_config["batch_size"],
+            training_config[f"{x}_batch_size"],
             training_config[f"num_{x}_shards"],
             training_config[f"{x}_epoch_size"],
             num_workers=training_config["num_dataloader_workers"],
@@ -646,13 +645,13 @@ def run_process(rank, world_size, name, epochs, model_init):
             save_model(rank, world_size, model, epoch, outdir)
     publish_model(outdir)
 
-    if training_config["mode"] == "finetune" and rank == 0:
-        model = TransformerModel(model_config).to(rank)
-        initialize_model(model, model_init, outdir, logger)
-        model = torch.compile(model)
-        record_predictions(
-            rank, world_size, model, outdir, dataloaders["validation"], "test"
-        )
+    # if training_config["mode"] == "finetune" and rank == 0:
+    #     model = TransformerModel(model_config).to(rank)
+    #     initialize_model(model, model_init, outdir, logger)
+    #     model = torch.compile(model)
+    #     record_predictions(
+    #         rank, world_size, model, outdir, dataloaders["validation"], "test"
+    #     )
 
     if world_size > 1:
         dist.destroy_process_group()
@@ -665,7 +664,6 @@ def cleanup_previous_runs(name):
             os.remove(os.path.join(outdir, x))
 
 
-# Main
 parser = argparse.ArgumentParser(description="PytorchPretrain")
 parser.add_argument("--outdir", type=str, help="name of the data directory")
 parser.add_argument(
