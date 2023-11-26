@@ -29,7 +29,6 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 
-
 exec(open("./Transformer.py").read())
 
 
@@ -79,18 +78,18 @@ class PretrainDataset(Dataset):
 
         self.positions = [
             process_position(f[f"positions_{medium}_{metric}"])
-            for medium in ALL_MEDIUMS            
-            for metric in ALL_METRICS            
+            for medium in ALL_MEDIUMS
+            for metric in ALL_METRICS
         ]
         self.labels = [
             np.expand_dims(f[f"labels_{medium}_{metric}"][:], axis=-1)
-            for medium in ALL_MEDIUMS            
-            for metric in ALL_METRICS            
+            for medium in ALL_MEDIUMS
+            for metric in ALL_METRICS
         ]
         self.weights = [
             np.expand_dims(f[f"weights_{medium}_{metric}"][:], axis=-1)
-            for medium in ALL_MEDIUMS            
-            for metric in ALL_METRICS            
+            for medium in ALL_MEDIUMS
+            for metric in ALL_METRICS
         ]
         f.close()
 
@@ -174,7 +173,6 @@ class StreamingDataset(Dataset):
         self,
         rank,
         world_size,
-        num_workers,
         outdir,
         split,
         batch_size,
@@ -192,29 +190,21 @@ class StreamingDataset(Dataset):
         chunk_size = batch_size * world_size
         rounding = math.floor if split == "validation" else math.ceil
         self.max_size = chunk_size * rounding(max_size / chunk_size)
-        self.num_workers = num_workers
-        self.data = [
-            {
-                "dataset": None,
-                "start_index": 0,
-                "epoch": 0,
-                "shard": 1,
-                "prev_item": 0,
-            }
-            for _ in range(self.num_workers)
-        ]
+        self.data = {
+            "dataset": None,
+            "start_index": 0,
+            "epoch": 0,
+            "shard": 1,
+            "prev_item": 0,
+        }
 
     def advance_stream(self):
         # wait for the data shard to be written
-        workerid = torch.utils.data.get_worker_info().id
         basefile = os.path.join(
-            self.outdir, "training", f'{self.split}.{self.data[workerid]["shard"]}.h5'
+            self.outdir, "training", f'{self.split}.{self.data["shard"]}.h5'
         )
         completion_file = basefile + ".complete"
-        num_workers = torch.utils.data.get_worker_info().num_workers
-        read_file = (
-            basefile + f".read.{self.rank}.{workerid}.{self.world_size}.{num_workers}"
-        )
+        read_file = basefile + f".read.{self.rank}.{self.world_size}"
         while os.path.exists(read_file) or not os.path.exists(completion_file):
             time.sleep(1)
 
@@ -228,13 +218,11 @@ class StreamingDataset(Dataset):
             assert False
         open(read_file, "w").close()
 
-        if self.data[workerid]["dataset"]:
-            self.data[workerid]["start_index"] += len(self.data[workerid]["dataset"])
-        self.data[workerid]["dataset"] = dataset
-        self.data[workerid]["shard"] = (
-            1
-            if self.data[workerid]["shard"] == self.num_shards
-            else self.data[workerid]["shard"] + 1
+        if self.data["dataset"]:
+            self.data["start_index"] += len(self.data["dataset"])
+        self.data["dataset"] = dataset
+        self.data["shard"] = (
+            1 if self.data["shard"] == self.num_shards else self.data["shard"] + 1
         )
 
     def __len__(self):
@@ -244,20 +232,17 @@ class StreamingDataset(Dataset):
         workerid = torch.utils.data.get_worker_info().id
 
         # if we're starting a new epoch
-        while (
-            i + self.data[workerid]["epoch"] * self.max_size
-            < self.data[workerid]["prev_item"]
-        ):
-            self.data[workerid]["epoch"] += 1
-        i += self.data[workerid]["epoch"] * self.max_size
-        self.data[workerid]["prev_item"] = i
+        while i + self.data["epoch"] * self.max_size < self.data["prev_item"]:
+            self.data["epoch"] += 1
+        i += self.data["epoch"] * self.max_size
+        self.data["prev_item"] = i
 
         # if we're loading a new shard
-        while self.data[workerid]["dataset"] is None or i >= self.data[workerid][
-            "start_index"
-        ] + len(self.data[workerid]["dataset"]):
+        while self.data["dataset"] is None or i >= self.data["start_index"] + len(
+            self.data["dataset"]
+        ):
             self.advance_stream()
-        return self.data[workerid]["dataset"][i - self.data[workerid]["start_index"]]
+        return self.data["dataset"][i - self.data["start_index"]]
 
 
 def to_device(data, device):
@@ -532,12 +517,10 @@ def get_dataloader(
     batch_size,
     num_data_shards,
     epoch_size,
-    num_workers,
 ):
     dataset = StreamingDataset(
         rank,
         world_size,
-        num_workers,
         outdir,
         split,
         batch_size,
@@ -551,7 +534,7 @@ def get_dataloader(
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
-        num_workers=num_workers,
+        num_workers=1,
         sampler=sampler,
         drop_last=False,
         shuffle=False,
@@ -583,7 +566,6 @@ def run_process(rank, world_size, name, epochs, model_init):
             training_config[f"{x}_batch_size"],
             training_config[f"num_{x}_shards"],
             training_config[f"{x}_epoch_size"],
-            num_workers=training_config["num_dataloader_workers"],
         )
         for x in ["training", "validation"]
     }

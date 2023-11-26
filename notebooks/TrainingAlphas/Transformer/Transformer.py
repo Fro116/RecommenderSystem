@@ -238,17 +238,12 @@ def create_training_config(config_file, epochs):
         "num_epochs": epochs,
         "warmup_ratio": 0.06,
         "mode": config["mode"],
-        # data
-        "num_dataloader_workers": config["num_dataloader_workers"],
     }
     for x in ["training", "validation"]:
         training_config[f"{x}_epoch_size"] = int(config[f"{x}_epoch_size"])
         training_config[f"num_{x}_shards"] = config[f"num_{x}_shards"]
         training_config[f"{x}_batch_size"] = get_batch_size()
     assert len(training_config["vocab_sizes"]) == len(training_config["vocab_types"])
-    assert (
-        training_config["num_dataloader_workers"] == 1
-    )  # todo don't make this configurable
     return training_config
 
 
