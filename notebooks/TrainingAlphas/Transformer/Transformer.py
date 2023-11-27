@@ -9,9 +9,9 @@ import torch.nn as nn
 
 # Models
 class DiscreteEmbed(nn.Module):
-    def __init__(self, vocab_size, embedding_size):
+    def __init__(self, vocab_size, embed_size):
         super(DiscreteEmbed, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_size)
+        self.embedding = nn.Embedding(vocab_size, embed_size)
 
     def forward(self, x):
         return self.embedding(x)
@@ -20,12 +20,7 @@ class DiscreteEmbed(nn.Module):
 class ContinuousEmbed(nn.Module):
     def __init__(self, vocab_size, embed_size):
         super(ContinuousEmbed, self).__init__()
-        hidden_size = math.ceil(embed_size / 64)
-        self.embedding = nn.Sequential(
-            nn.Linear(1, hidden_size),
-            nn.GELU(),
-            nn.Linear(hidden_size, embed_size),
-        )
+        self.embedding = nn.Linear(1, embed_size)
         self.scale = 1 / vocab_size
 
     def forward(self, x):
@@ -81,9 +76,21 @@ class TransformerModel(nn.Module):
         embeddings = []
         for size, dtype in zip(config["vocab_sizes"], config["vocab_types"]):
             if dtype == "int":
-                embeddings.append(DiscreteEmbed(size, config["embed_size"]))
+                embeddings.append(
+                    nn.Sequential(
+                        DiscreteEmbed(size, config["vocab_rank"]),
+                        nn.GELU(),
+                        nn.Linear(config["vocab_rank"], config["embed_size"]),
+                    )
+                )
             elif dtype == "float":
-                embeddings.append(ContinuousEmbed(size, config["embed_size"]))
+                embeddings.append(
+                    nn.Sequential(
+                        ContinuousEmbed(size, config["vocab_rank"]),
+                        nn.GELU(),
+                        nn.Linear(config["vocab_rank"], config["embed_size"]),
+                    )
+                )
             elif dtype == "none":
                 continue
             else:
@@ -103,25 +110,28 @@ class TransformerModel(nn.Module):
             dropout=config["dropout"],
         )
 
+        def create_head(config, medium):
+            return [
+                nn.Linear(config["embed_size"], config["vocab_rank"]),
+                nn.GELU(),
+                nn.Linear(
+                    config["vocab_rank"],
+                    config["media_sizes"][medium],
+                ),
+            ]
+
         # create classifier
         ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
         ALL_MEDIUMS = ["manga", "anime"]
-        self.classifier = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(
-                    config["embed_size"],
-                    config["media_sizes"][medium],
-                ),
-                nn.LogSoftmax(dim=-1),
-            )
-            if metric in ["watch", "plantowatch"]
-            else nn.Linear(
-                config["embed_size"],
-                config["media_sizes"][medium],
-            )
-            for medium in ALL_MEDIUMS            
-            for metric in ALL_METRICS
-        ])
+        self.classifier = nn.ModuleList(
+            [
+                nn.Sequential(*create_head(config, medium), nn.LogSoftmax(dim=-1))
+                if metric in ["watch", "plantowatch"]
+                else nn.Sequential(*create_head(config, medium))
+                for medium in ALL_MEDIUMS
+                for metric in ALL_METRICS
+            ]
+        )
 
         # create loss functions
         lossfn_map = {
@@ -131,16 +141,16 @@ class TransformerModel(nn.Module):
             "drop": self.binarycrossentropy,
         }
         self.lossfns = [
-            lossfn_map[metric]
-            for _ in ALL_MEDIUMS            
-            for metric in ALL_METRICS
+            lossfn_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
         ]
+        assert len(self.lossfns) == len(self.classifier)
         if config["mode"] == "pretrain":
             self.forward = self.pretrain_forward
         elif config["mode"] == "finetune":
             self.forward = self.finetune_forward
         else:
             assert False
+
 
     def mse(self, x, y, w):
         return (torch.square(x - y) * w).sum() / w.sum()
@@ -198,27 +208,21 @@ class TransformerModel(nn.Module):
 
 
 # Configs
-def get_batch_size():
-    gpu_mem = int(
-        round(
-            torch.cuda.get_device_properties(torch.device("cuda")).total_memory
-            / 2**30
-        )
-    )
-    gpu_mult = max(round(gpu_mem / 20), 1)
-    batch_size = 16
-    return batch_size * gpu_mult
-
-
-def get_batch_size():
-    gpu_mem = int(
-        round(
-            torch.cuda.get_device_properties(torch.device("cuda")).total_memory
-            / 2**30
-        )
-    )
-    gpu_mult = max(round(gpu_mem / 20), 1)
-    return 16 * gpu_mult
+def get_batch_size(split, mode):
+    if split == "training":
+        mult = 1
+    elif split == "validation":
+        mult = 2
+    else:
+        assert False
+    if mode == "pretrain":
+        # pretraining is done on 80gb gpus
+        return 48 * mult
+    elif mode == "finetune":
+        # finetuning is done on 24gb gpus
+        return 16 * mult
+    else:
+        assert False
 
 
 def create_training_config(config_file, epochs):
@@ -232,26 +236,28 @@ def create_training_config(config_file, epochs):
         "num_layers": 8,
         "hidden_size": 768,
         "max_sequence_length": config["max_sequence_length"],
+        "vocab_rank": 128,
         # training
         "peak_learning_rate": 1e-4 if config["mode"] == "pretrain" else 1e-6,
         "weight_decay": 1e-2,
         "num_epochs": epochs,
         "warmup_ratio": 0.06,
         "mode": config["mode"],
+        "dropout": 0.1,
     }
     for x in ["training", "validation"]:
         training_config[f"{x}_epoch_size"] = int(config[f"{x}_epoch_size"])
         training_config[f"num_{x}_shards"] = config[f"num_{x}_shards"]
-        training_config[f"{x}_batch_size"] = get_batch_size()
-    assert len(training_config["vocab_sizes"]) == len(training_config["vocab_types"])
+        training_config[f"{x}_batch_size"] = get_batch_size(x, config["mode"])
     return training_config
 
 
 def create_model_config(training_config):
     return {
-        "dropout": 0.1,
+        "dropout": training_config["dropout"],
         "activation": "gelu",
         "num_layers": training_config["num_layers"],
+        "vocab_rank": training_config["vocab_rank"],
         "embed_size": training_config["hidden_size"],
         "max_sequence_length": training_config["max_sequence_length"],
         "vocab_sizes": training_config["vocab_sizes"],
