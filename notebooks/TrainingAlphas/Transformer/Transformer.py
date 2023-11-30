@@ -6,12 +6,15 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
+ALL_MEDIUMS = ["manga", "anime"]
+
 
 # Models
 class DiscreteEmbed(nn.Module):
-    def __init__(self, vocab_size, embed_size):
+    def __init__(self, vocab_size, embedding_size):
         super(DiscreteEmbed, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_size)
+        self.embedding = nn.Embedding(vocab_size, embedding_size)
 
     def forward(self, x):
         return self.embedding(x)
@@ -20,7 +23,12 @@ class DiscreteEmbed(nn.Module):
 class ContinuousEmbed(nn.Module):
     def __init__(self, vocab_size, embed_size):
         super(ContinuousEmbed, self).__init__()
-        self.embedding = nn.Linear(1, embed_size)
+        hidden_size = math.ceil(embed_size / 64)
+        self.embedding = nn.Sequential(
+            nn.Linear(1, hidden_size),
+            nn.GELU(),
+            nn.Linear(hidden_size, embed_size),
+        )
         self.scale = 1 / vocab_size
 
     def forward(self, x):
@@ -76,21 +84,9 @@ class TransformerModel(nn.Module):
         embeddings = []
         for size, dtype in zip(config["vocab_sizes"], config["vocab_types"]):
             if dtype == "int":
-                embeddings.append(
-                    nn.Sequential(
-                        DiscreteEmbed(size, config["vocab_rank"]),
-                        nn.GELU(),
-                        nn.Linear(config["vocab_rank"], config["embed_size"]),
-                    )
-                )
+                embeddings.append(DiscreteEmbed(size, config["embed_size"]))
             elif dtype == "float":
-                embeddings.append(
-                    nn.Sequential(
-                        ContinuousEmbed(size, config["vocab_rank"]),
-                        nn.GELU(),
-                        nn.Linear(config["vocab_rank"], config["embed_size"]),
-                    )
-                )
+                embeddings.append(ContinuousEmbed(size, config["embed_size"]))
             elif dtype == "none":
                 continue
             else:
@@ -110,24 +106,21 @@ class TransformerModel(nn.Module):
             dropout=config["dropout"],
         )
 
-        def create_head(config, medium):
-            return [
-                nn.Linear(config["embed_size"], config["vocab_rank"]),
-                nn.GELU(),
-                nn.Linear(
-                    config["vocab_rank"],
-                    config["media_sizes"][medium],
-                ),
-            ]
-
         # create classifier
-        ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
-        ALL_MEDIUMS = ["manga", "anime"]
         self.classifier = nn.ModuleList(
             [
-                nn.Sequential(*create_head(config, medium), nn.LogSoftmax(dim=-1))
+                nn.Sequential(
+                    nn.Linear(
+                        config["embed_size"],
+                        config["media_sizes"][medium],
+                    ),
+                    nn.LogSoftmax(dim=-1),
+                )
                 if metric in ["watch", "plantowatch"]
-                else nn.Sequential(*create_head(config, medium))
+                else nn.Linear(
+                    config["embed_size"],
+                    config["media_sizes"][medium],
+                )
                 for medium in ALL_MEDIUMS
                 for metric in ALL_METRICS
             ]
@@ -143,14 +136,12 @@ class TransformerModel(nn.Module):
         self.lossfns = [
             lossfn_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
         ]
-        assert len(self.lossfns) == len(self.classifier)
         if config["mode"] == "pretrain":
             self.forward = self.pretrain_forward
         elif config["mode"] == "finetune":
             self.forward = self.finetune_forward
         else:
             assert False
-
 
     def mse(self, x, y, w):
         return (torch.square(x - y) * w).sum() / w.sum()
@@ -159,16 +150,21 @@ class TransformerModel(nn.Module):
         return (-x * y * w).sum() / w.sum()
 
     def binarycrossentropy(self, x, y, w):
-        return torch.nn.functional.binary_cross_entropy_with_logits(
-            input=x,
-            target=y,
-            weight=w,
-            reduction="mean",
+        return (
+            torch.nn.functional.binary_cross_entropy_with_logits(
+                input=x,
+                target=y,
+                weight=w,
+                reduction="sum",
+            )
+            / w.sum()
         )
 
     def pretrain_lossfn(self, embed, lossfn, classifier, positions, labels, weights):
         if not torch.is_nonzero(weights.sum()):
-            return torch.tensor([0.0], device=embed.get_device(), requires_grad=True)
+            return torch.tensor(
+                [0.0], device=embed.get_device(), requires_grad=embed.requires_grad
+            )
         bp = torch.nonzero(weights, as_tuple=True)
         embed = embed[bp[0], bp[1], :]
         labels = labels[bp[0], bp[1]]
@@ -186,25 +182,27 @@ class TransformerModel(nn.Module):
         )
         return losses
 
-    # def finetune_lossfn(self, embed, lossfn, classifier, labels, weights):
-    #     if not torch.is_nonzero(weights.sum()):
-    #         return torch.tensor([0.0], device=embed.get_device(), requires_grad=True)
-    #     preds = classifier(embed)
-    #     return lossfn(preds, labels, weights)
+    def finetune_lossfn(self, embed, lossfn, classifier, labels, weights):
+        if not torch.is_nonzero(weights.sum()):
+            return torch.tensor(
+                [0.0], device=embed.get_device(), requires_grad=embed.requires_grad
+            )
+        preds = classifier(embed)
+        return lossfn(preds, labels, weights)
 
-    # def finetune_forward(
-    #     self, inputs, mask, positions, labels, weights, users, embed_only=False
-    # ):
-    #     e = self.embed(inputs)
-    #     e = self.transformers(e, mask)
-    #     e = e[range(len(positions)), positions, :]
-    #     if embed_only:
-    #         return e
-    #     losses = tuple(
-    #         self.finetune_lossfn(e, *args)
-    #         for args in zip(self.lossfns, self.classifier, labels, weights)
-    #     )
-    #     return losses
+    def finetune_forward(
+        self, inputs, mask, positions, labels, weights, users, embed_only=False
+    ):
+        e = self.embed(inputs)
+        e = self.transformers(e, mask)
+        e = e[range(len(positions)), positions, :]
+        if embed_only:
+            return e
+        losses = tuple(
+            self.finetune_lossfn(e, *args)
+            for args in zip(self.lossfns, self.classifier, labels, weights)
+        )
+        return losses
 
 
 # Configs
@@ -236,7 +234,6 @@ def create_training_config(config_file, epochs):
         "num_layers": 8,
         "hidden_size": 768,
         "max_sequence_length": config["max_sequence_length"],
-        "vocab_rank": 128,
         # training
         "peak_learning_rate": 1e-4 if config["mode"] == "pretrain" else 1e-6,
         "weight_decay": 1e-2,
@@ -249,6 +246,7 @@ def create_training_config(config_file, epochs):
         training_config[f"{x}_epoch_size"] = int(config[f"{x}_epoch_size"])
         training_config[f"num_{x}_shards"] = config[f"num_{x}_shards"]
         training_config[f"{x}_batch_size"] = get_batch_size(x, config["mode"])
+    assert len(training_config["vocab_sizes"]) == len(training_config["vocab_types"])
     return training_config
 
 
@@ -257,7 +255,6 @@ def create_model_config(training_config):
         "dropout": training_config["dropout"],
         "activation": "gelu",
         "num_layers": training_config["num_layers"],
-        "vocab_rank": training_config["vocab_rank"],
         "embed_size": training_config["hidden_size"],
         "max_sequence_length": training_config["max_sequence_length"],
         "vocab_sizes": training_config["vocab_sizes"],

@@ -73,9 +73,6 @@ class PretrainDataset(Dataset):
             x = x[:].astype(np.int64)
             return x.reshape(*x.shape, 1)
 
-        ALL_MEDIUMS = ["manga", "anime"]
-        ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
-
         self.positions = [
             process_position(f[f"positions_{medium}_{metric}"])
             for medium in ALL_MEDIUMS
@@ -107,65 +104,56 @@ class PretrainDataset(Dataset):
         return embeds, mask, positions, labels, weights
 
 
-# class FinetuneDataset(Dataset):
-#     def __init__(self, file):
-#         self.filename = file
-#         f = h5py.File(file, "r")
-#         self.length = f["anime"].shape[0]
-#         self.embeddings = [
-#             f["anime"][:] - 1,
-#             f["manga"][:] - 1,
-#             f["rating"][:].reshape(*f["rating"].shape, 1).astype(np.float32),
-#             f["timestamp"][:].reshape(*f["timestamp"].shape, 1).astype(np.float32),
-#             f["status"][:] - 1,
-#             f["completion"][:].reshape(*f["completion"].shape, 1).astype(np.float32),
-#             f["position"][:] - 1,
-#         ]
-#         self.mask = f["userid"][:]
+class FinetuneDataset(Dataset):
+    def __init__(self, file):
+        self.filename = file
+        f = h5py.File(file, "r")
+        self.length = f["itemid"].shape[0]
+        self.embeddings = [
+            f["itemid"][:],
+            f["rating"][:].reshape(*f["rating"].shape, 1).astype(np.float32),
+            f["updated_at"][:].reshape(*f["updated_at"].shape, 1).astype(np.float32),
+            f["status"][:],
+            f["position"][:],
+        ]
+        self.mask = f["userid"][:]
 
-#         def process_position(x):
-#             return x[:].flatten().astype(np.int64) - 1
+        def process_position(x):
+            return x[:].flatten().astype(np.int64)
 
-#         def process_sparse_matrix(f, name):
-#             i = f[f"{name}_i"][:] - 1
-#             j = f[f"{name}_j"][:] - 1
-#             v = f[f"{name}_v"][:]
-#             m, n = f[f"{name}_size"][:]
-#             return scipy.sparse.coo_matrix((v, (j, i)), shape=(n, m)).tocsr()
+        def process_sparse_matrix(f, name):
+            i = f[f"{name}_i"][:]
+            j = f[f"{name}_j"][:]
+            v = f[f"{name}_v"][:]
+            m, n = f[f"{name}_size"][:]
+            return scipy.sparse.coo_matrix((v, (j, i)), shape=(n, m)).tocsr()
 
-#         self.positions = process_position(f["positions"])
-#         self.labels = [
-#             process_sparse_matrix(f, name)
-#             for name in [
-#                 f"labels_{medium}_{task}"
-#                 for medium in ["anime", "manga"]
-#                 for task in ["item", "rating"]
-#             ]
-#         ]
-#         self.weights = [
-#             process_sparse_matrix(f, name)
-#             for name in [
-#                 f"weights_{medium}_{task}"
-#                 for medium in ["anime", "manga"]
-#                 for task in ["item", "rating"]
-#             ]
-#         ]
-#         f.close()
+        self.positions = process_position(f["positions"])
+        self.labels = [
+            process_sparse_matrix(f, f"labels_{medium}_{metric}")
+            for medium in ALL_MEDIUMS
+            for metric in ALL_METRICS
+        ]
+        self.weights = [
+            process_sparse_matrix(f, f"weights_{medium}_{metric}")
+            for medium in ALL_MEDIUMS
+            for metric in ALL_METRICS
+        ]
+        f.close()
 
-#     def __len__(self):
-#         return self.length
+    def __len__(self):
+        return self.length
 
-#     def __getitem__(self, i):
-#         # a true value means that the tokens will not attend to each other
-#         mask = self.mask[i, :]
-#         mask = mask.reshape(1, mask.size) != mask.reshape(mask.size, 1)
-#         user = self.mask[i, 0]
-
-#         embeds = [x[i, :] for x in self.embeddings]
-#         positions = self.positions[i]
-#         labels = [x[i, :].toarray().flatten() for x in self.labels]
-#         weights = [x[i, :].toarray().flatten() for x in self.weights]
-#         return embeds, mask, positions, labels, weights, user
+    def __getitem__(self, i):
+        # a true value means that the tokens will not attend to each other
+        mask = self.mask[i, :]
+        mask = mask.reshape(1, mask.size) != mask.reshape(mask.size, 1)
+        user = self.mask[i, 0]
+        embeds = [x[i, :] for x in self.embeddings]
+        positions = self.positions[i]
+        labels = [x[i, :].toarray().flatten() for x in self.labels]
+        weights = [x[i, :].toarray().flatten() for x in self.weights]
+        return embeds, mask, positions, labels, weights, user
 
 
 class StreamingDataset(Dataset):
@@ -442,14 +430,15 @@ def record_predictions(rank, world_size, model, outdir, dataloader, usertag):
     f.create_dataset("users", data=np.hstack(user_batches))
     f.create_dataset("embedding", data=np.vstack(embed_batches))
     detach = lambda x: x.to("cpu").detach().numpy()
-    f.create_dataset("anime_item_weight", data=detach(model.classifier[0][0].weight))
-    f.create_dataset("anime_item_bias", data=detach(model.classifier[0][0].bias))
-    f.create_dataset("anime_rating_weight", data=detach(model.classifier[1].weight))
-    f.create_dataset("anime_rating_bias", data=detach(model.classifier[1].bias))
-    f.create_dataset("manga_item_weight", data=detach(model.classifier[2][0].weight))
-    f.create_dataset("manga_item_bias", data=detach(model.classifier[2][0].bias))
-    f.create_dataset("manga_rating_weight", data=detach(model.classifier[3].weight))
-    f.create_dataset("manga_rating_bias", data=detach(model.classifier[3].bias))
+    i = 0
+    for medium in ALL_MEDIUMS:
+        for metric in ALL_METRICS:
+            head = model.classifier[i]
+            if metric in ["watch", "plantowatch"]:
+                head = head[0]
+            f.create_dataset(f"{medium}_{metric}_weight", data=detach(head.weight))
+            f.create_dataset(f"{medium}_{metric}_bias", data=detach(head.bias))
+            i += 1
     f.close()
 
 
@@ -465,11 +454,10 @@ def load_checkpoints(outdir):
 
 
 def initialize_model(model, model_init, outdir, logger):
-    model_paths = [os.path.join(outdir, "model.pt")]
     if model_init is not None:
-        model_paths.append(
-            get_data_path(os.path.join("alphas", model_init, "model.pt"))
-        )
+        model_paths = [get_data_path(os.path.join("alphas", model_init, "model.pt"))]
+    else:
+        model_paths = [os.path.join(outdir, "model.pt")]
     for path in model_paths:
         if os.path.exists(path):
             logger.info(f"loading model from {path}")
@@ -627,13 +615,13 @@ def run_process(rank, world_size, name, epochs, model_init):
             save_model(rank, world_size, model, epoch, outdir)
     publish_model(outdir, rank)
 
-    # if training_config["mode"] == "finetune" and rank == 0:
-    #     model = TransformerModel(model_config).to(rank)
-    #     initialize_model(model, model_init, outdir, logger)
-    #     model = torch.compile(model)
-    #     record_predictions(
-    #         rank, world_size, model, outdir, dataloaders["validation"], "test"
-    #     )
+    if training_config["mode"] == "finetune" and rank == 0:
+        model = TransformerModel(model_config).to(rank)
+        initialize_model(model, None, outdir, logger)
+        model = torch.compile(model)
+        record_predictions(
+            rank, world_size, model, outdir, dataloaders["validation"], "test"
+        )
 
     if world_size > 1:
         dist.destroy_process_group()
