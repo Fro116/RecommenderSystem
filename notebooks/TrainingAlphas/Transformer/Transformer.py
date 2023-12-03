@@ -247,7 +247,6 @@ def create_training_config(config_file, epochs):
     for x in ["training", "validation"]:
         training_config[f"{x}_epoch_size"] = int(config[f"{x}_epoch_size"])
         training_config[f"{x}_batch_size"] = get_batch_size(x, config["mode"])
-    assert len(training_config["vocab_sizes"]) == len(training_config["vocab_types"])
     return training_config
 
 

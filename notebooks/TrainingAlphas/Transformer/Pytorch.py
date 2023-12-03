@@ -9,12 +9,9 @@ os.environ["OMP_NUM_THREADS"] = "1"
 
 import argparse
 import glob
-import json
 import logging
 import math
-import random
 import shutil
-import time
 
 import h5py
 import numpy as np
@@ -33,6 +30,7 @@ exec(open("./Transformer.py").read())
 
 
 def get_logger(outdir, rank):
+    # writes to file and also writes to stdout if rank==0
     logger = logging.getLogger(f"pytorch.{rank}")
     logger.setLevel(logging.DEBUG)
     formatter = logging.Formatter(
@@ -57,7 +55,6 @@ class PretrainDataset(Dataset):
     def __init__(self, file):
         self.filename = file
         f = h5py.File(file, "r")
-        # itemid, rating, updated_at, status, position, user
 
         self.length = f["itemid"].shape[0]
         self.embeddings = [
@@ -433,8 +430,7 @@ def save_model(rank, world_size, model, epoch, outdir):
     checkpoint = os.path.join(outdir, f"model.{epoch}.pt")
     if world_size > 1:
         model = model.module
-    torch.save(model.state_dict(), checkpoint + "~")
-    os.rename(checkpoint + "~", checkpoint)
+    torch.save(model.state_dict(), checkpoint)
     previous_checkpoints = glob.glob(os.path.join(outdir, f"model.*.pt"))
     for fn in previous_checkpoints:
         if fn != checkpoint:
@@ -447,8 +443,7 @@ def publish_model(outdir, rank):
     checkpoint, epoch = load_checkpoints(outdir)
     assert checkpoint is not None
     modelfn = os.path.join(outdir, f"model.pt")
-    shutil.copyfile(checkpoint, modelfn + "~")
-    os.rename(modelfn + "~", modelfn)
+    shutil.copyfile(checkpoint, modelfn)
     os.remove(checkpoint)
 
 
