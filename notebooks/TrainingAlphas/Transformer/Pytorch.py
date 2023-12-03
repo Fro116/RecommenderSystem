@@ -159,78 +159,40 @@ class FinetuneDataset(Dataset):
 class StreamingDataset(Dataset):
     def __init__(
         self,
-        rank,
-        world_size,
         outdir,
-        split,
-        batch_size,
-        num_shards,
+        epoch_size,
+        chunk_size,
         mode,
-        max_size,
     ):
-        self.rank = rank
-        self.world_size = world_size
         self.outdir = outdir
-        self.split = split
-        self.batch_size = batch_size
-        self.num_shards = num_shards
+        self.epoch_size = epoch_size
+        self.chunk_size = chunk_size
         self.mode = mode
-        chunk_size = batch_size * world_size
-        rounding = math.floor if split == "validation" else math.ceil
-        self.max_size = chunk_size * rounding(max_size / chunk_size)
-        self.data = {
-            "dataset": None,
-            "start_index": 0,
-            "epoch": 0,
-            "shard": 1,
-            "prev_item": 0,
-        }
-
-    def advance_stream(self):
-        # wait for the data shard to be written
-        basefile = os.path.join(
-            self.outdir, "training", f'{self.split}.{self.data["shard"]}.h5'
-        )
-        completion_file = basefile + ".complete"
-        read_file = basefile + f".read.{self.rank}.{self.world_size}"
-        while os.path.exists(read_file) or not os.path.exists(completion_file):
-            time.sleep(1)
-
-        # read the data shard
-        data_file = completion_file[: -len(".complete")]
-        if self.mode == "pretrain":
-            dataset = PretrainDataset(data_file)
-        elif self.mode == "finetune":
-            dataset = FinetuneDataset(data_file)
-        else:
-            assert False
-        open(read_file, "w").close()
-
-        if self.data["dataset"]:
-            self.data["start_index"] += len(self.data["dataset"])
-        self.data["dataset"] = dataset
-        self.data["shard"] = (
-            1 if self.data["shard"] == self.num_shards else self.data["shard"] + 1
-        )
+        self.epoch = 0
+        self.chunk = -1
+        self.dataset = None
+        self.last_index = -1
 
     def __len__(self):
-        return self.max_size
+        return self.epoch_size
 
     def __getitem__(self, i):
-        workerid = torch.utils.data.get_worker_info().id
+        if i < self.last_index:
+            self.epoch += 1
+            self.chunk = -1
+        self.last_index = i
 
-        # if we're starting a new epoch
-        while i + self.data["epoch"] * self.max_size < self.data["prev_item"]:
-            self.data["epoch"] += 1
-        i += self.data["epoch"] * self.max_size
-        self.data["prev_item"] = i
-
-        # if we're loading a new shard
-        while self.data["dataset"] is None or i >= self.data["start_index"] + len(
-            self.data["dataset"]
-        ):
-            self.advance_stream()
-        return self.data["dataset"][i - self.data["start_index"]]
+        chunk, index = divmod(i, self.chunk_size)
+        if self.chunk != chunk:
+            self.chunk = chunk
+            file = os.path.join(self.outdir, str(self.epoch), f"{chunk}.h5")
+            if self.mode == "pretrain":
+                self.dataset = PretrainDataset(file)
+            elif self.mode == "finetune":
+                self.dataset = FinetuneDataset(file)
+            else:
+                assert False
+        return self.dataset[index]
 
 
 def to_device(data, device):
@@ -502,19 +464,15 @@ def get_dataloader(
     outdir,
     mode,
     split,
-    batch_size,
-    num_data_shards,
     epoch_size,
+    chunk_size,
+    batch_size,
 ):
     dataset = StreamingDataset(
-        rank,
-        world_size,
-        outdir,
-        split,
-        batch_size,
-        num_data_shards,
-        mode,
+        os.path.join(outdir, split),
         epoch_size,
+        chunk_size,
+        mode,
     )
     sampler = DistributedSampler(
         dataset, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False
@@ -551,9 +509,9 @@ def run_process(rank, world_size, name, epochs, model_init):
             outdir,
             training_config["mode"],
             x,
-            training_config[f"{x}_batch_size"],
-            training_config[f"num_{x}_shards"],
             training_config[f"{x}_epoch_size"],
+            training_config[f"chunk_size"],
+            training_config[f"{x}_batch_size"],
         )
         for x in ["training", "validation"]
     }
@@ -578,7 +536,7 @@ def run_process(rank, world_size, name, epochs, model_init):
         rank, world_size, outdir, model, dataloaders["validation"], training_config
     )
     if stopper:
-        stopper(sum(initial_loss))
+        stopper(sum(initial_loss))  # TODO should this be weighted?
     logger.info(f"Initial Loss: {sum(initial_loss)}, {initial_loss}")
     task_weights = make_task_weights(initial_loss)
 
