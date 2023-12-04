@@ -223,7 +223,7 @@ def get_batch_size(split, mode):
         assert False
 
 
-def create_training_config(config_file, epochs):
+def create_training_config(config_file):
     config = json.load(open(config_file, "r"))
     training_config = {
         # tokenization
@@ -237,7 +237,7 @@ def create_training_config(config_file, epochs):
         # training
         "peak_learning_rate": 1e-4 if config["mode"] == "pretrain" else 1e-6,
         "weight_decay": 1e-2,
-        "num_epochs": epochs,
+        "num_epochs": 64 if config["mode"] == "pretrain" else 16,
         "warmup_ratio": 0.06,
         "mode": config["mode"],
         "dropout": 0.1,

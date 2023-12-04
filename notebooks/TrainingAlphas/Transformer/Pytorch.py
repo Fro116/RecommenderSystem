@@ -28,31 +28,6 @@ from tqdm.auto import tqdm
 
 exec(open("./Transformer.py").read())
 
-# logging
-
-
-def get_logger(outdir, rank):
-    # writes to file and also writes to stdout if rank==0
-    logger = logging.getLogger(f"pytorch.{rank}")
-    logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    version = 0
-    filename = os.path.join(outdir, f"pytorch.{rank}.log")
-    while os.path.exists(filename):
-        version += 1
-        filename = os.path.join(outdir, f"pytorch.{rank}.log.{version}")
-
-    streams = [logging.FileHandler(filename, "a")]
-    if rank == 0:
-        streams.append(logging.StreamHandler())
-    for stream in streams:
-        stream.setFormatter(formatter)
-        logger.addHandler(stream)
-    return logger
-
-
 # datasets
 
 
@@ -188,6 +163,11 @@ class StreamingDataset(Dataset):
         if self.chunk != chunk:
             self.chunk = chunk
             file = os.path.join(self.outdir, str(self.epoch), f"{chunk}.h5")
+            if not os.path.exists(file):
+                # can happen if it's the last batch of the last epoch
+                # and DistributedSampler has drop_last=False
+                self.epoch = 0
+                file = os.path.join(self.outdir, str(self.epoch), f"{chunk}.h5")
             if self.mode == "pretrain":
                 self.dataset = PretrainDataset(file)
             elif self.mode == "finetune":
@@ -209,11 +189,17 @@ def to_device(data, device):
 class EarlyStopper:
     def __init__(self, patience, rtol):
         self.patience = patience
+        self.rtol = rtol
+        self.reset()
+
+    def reset(self):
         self.counter = 0
         self.best_score = float("inf")
         self.early_stop = False
         self.save_model = False
-        self.rtol = rtol
+
+    def update(self, values, weights):
+        self(sum(x * y for (x, y) in zip(values, weights)))
 
     def __call__(self, score):
         if score > self.best_score * (1 - self.rtol):
@@ -395,6 +381,27 @@ def record_predictions(rank, model, outdir, dataloader):
 # checkpoints
 
 
+def get_logger(outdir, rank):
+    # writes to file and to stdout if rank==0
+    logger = logging.getLogger(f"pytorch.{rank}")
+    if rank != 0:
+        return logger
+    logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    version = 0
+    filename = os.path.join(outdir, f"pytorch.log")
+    while os.path.exists(filename):
+        version += 1
+        filename = os.path.join(outdir, f"pytorch.log.{version}")
+    streams = [logging.FileHandler(filename, "a"), logging.StreamHandler()]
+    for stream in streams:
+        stream.setFormatter(formatter)
+        logger.addHandler(stream)
+    return logger
+
+
 def initialize_model(model, name, logger):
     path = get_data_path(os.path.join("alphas", name, "model.pt"))
     logger.info(f"loading model from {path}")
@@ -448,12 +455,12 @@ def get_dataloader(
     return dataloader
 
 
-def run_process(rank, world_size, name, epochs, model_init):
+def run_process(rank, world_size, name, model_init):
     setup_multiprocessing(rank, world_size)
     outdir = get_data_path(os.path.join("alphas", name))
     logger = get_logger(outdir, rank)
     config_file = os.path.join(outdir, "config.json")
-    training_config = create_training_config(config_file, epochs)
+    training_config = create_training_config(config_file)
     model_config = create_model_config(training_config)
     torch.cuda.set_device(rank)
     torch.set_float32_matmul_precision("high")
@@ -488,11 +495,10 @@ def run_process(rank, world_size, name, epochs, model_init):
     )
 
     initial_loss = evaluate_metrics(rank, model, dataloaders["validation"])
-    if stopper:
-        stopper(sum(initial_loss))  # TODO should this be weighted?
     logger.info(f"Initial Loss: {sum(initial_loss)}, {initial_loss}")
     task_weights = make_task_weights(initial_loss)
-    task_weights = [1 for _ in range(8)]
+    if stopper:
+        stopper.update(initial_loss, task_weights)
 
     for epoch in range(training_config["num_epochs"]):
         training_loss = train_epoch(
@@ -511,15 +517,18 @@ def run_process(rank, world_size, name, epochs, model_init):
         logger.info(
             f"Epoch: {epoch}, Validation Loss: {sum(validation_loss)}, {validation_loss}"
         )
-        task_weights = make_task_weights(validation_loss)
         if stopper:
-            stopper(sum(validation_loss))
+            stopper.update(validation_loss, task_weights)
             if stopper.save_model:
                 save_model(rank, model, outdir)
-            if stopper.early_stop:
+                task_weights = make_task_weights(validation_loss)
+                stopper.reset()
+                stopper.update(validation_loss, task_weights)
+            elif stopper.early_stop:
                 break
         else:
             save_model(rank, model, outdir)
+            task_weights = make_task_weights(validation_loss)
 
     if training_config["mode"] == "finetune" and rank == 0:
         model = TransformerModel(model_config).to(rank)
@@ -543,16 +552,12 @@ parser.add_argument(
     "--initialize", type=str, help="initialize training from a model checkpoint"
 )
 parser.add_argument("--gpus", type=int, help="number of gpus to use")
-parser.add_argument("--epochs", type=int, help="number of epochs to use")
 args = parser.parse_args()
 if __name__ == "__main__":
     gpus = torch.cuda.device_count() if args.gpus is None else args.gpus
     cleanup_previous_runs(args.outdir)
-    if gpus > 1:
-        mp.spawn(
-            run_process,
-            args=(gpus, args.outdir, args.epochs, args.initialize),
-            nprocs=gpus,
-        )
-    else:
-        run_process(0, gpus, args.outdir, args.epochs, args.initialize)
+    mp.spawn(
+        run_process,
+        args=(gpus, args.outdir, args.initialize),
+        nprocs=gpus,
+    )
