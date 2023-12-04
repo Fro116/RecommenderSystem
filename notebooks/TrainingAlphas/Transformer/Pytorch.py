@@ -28,6 +28,8 @@ from tqdm.auto import tqdm
 
 exec(open("./Transformer.py").read())
 
+# logging
+
 
 def get_logger(outdir, rank):
     # writes to file and also writes to stdout if rank==0
@@ -49,6 +51,9 @@ def get_logger(outdir, rank):
         stream.setFormatter(formatter)
         logger.addHandler(stream)
     return logger
+
+
+# datasets
 
 
 class PretrainDataset(Dataset):
@@ -192,6 +197,9 @@ class StreamingDataset(Dataset):
         return self.dataset[index]
 
 
+# training
+
+
 def to_device(data, device):
     if isinstance(data, (list, tuple)):
         return [to_device(x, device) for x in data]
@@ -239,6 +247,7 @@ def create_optimizer(model, config):
 
 
 def create_learning_rate_schedule(optimizer, config, world_size):
+    # TODO try cosine annealing
     if config["mode"] == "pretrain":
         steps_per_epoch = math.ceil(
             config["training_epoch_size"] / (config["training_batch_size"] * world_size)
@@ -273,19 +282,24 @@ def make_task_weights(losses):
     return weights
 
 
+def reduce_mean(rank, x, w):
+    x = torch.tensor(x).to(rank)
+    w = torch.tensor(w).to(rank)
+    dist.all_reduce(x, op=dist.ReduceOp.SUM)
+    dist.all_reduce(w, op=dist.ReduceOp.SUM)
+    return [float(v) / float(w[0]) for v in x]
+
+
 def train_epoch(
     rank,
-    world_size,
-    outdir,
     model,
     dataloader,
-    config,
     optimizer,
     scheduler,
     scaler,
     task_weights,
 ):
-    training_losses = [0.0 for _ in range(8)]
+    training_losses = [0.0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
     training_steps = 0
     progress = tqdm(
         desc=f"Batches",
@@ -300,7 +314,6 @@ def train_epoch(
             for i in range(len(tloss)):
                 training_losses[i] += float(tloss[i])
             loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
-            tloss = None
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
@@ -309,17 +322,11 @@ def train_epoch(
         training_steps += 1
         progress.update()
     progress.close()
-
-    training_losses = [x / training_steps for x in training_losses]
-    tensor_losses = torch.tensor(training_losses).to(rank)
-    if world_size > 1:
-        dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM)
-    tensor_losses /= world_size
-    return [float(x) for x in tensor_losses]
+    return reduce_mean(rank, training_losses, [training_steps])
 
 
-def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
-    losses = [0.0 for _ in range(8)]
+def evaluate_metrics(rank, model, dataloader):
+    losses = [0.0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
     steps = 0
     progress = tqdm(
         desc=f"Batches",
@@ -338,50 +345,34 @@ def evaluate_metrics(rank, world_size, outdir, model, dataloader, config):
         progress.update()
     progress.close()
     model.train()
-    for i in range(len(losses)):
-        losses[i] /= steps
-    tensor_losses = torch.tensor(losses).to(rank)
-    if world_size > 1:
-        dist.all_reduce(tensor_losses, op=dist.ReduceOp.SUM)
-    tensor_losses /= world_size
-    return [float(x) for x in tensor_losses]
+    return reduce_mean(rank, losses, [steps])
 
 
-def record_predictions(rank, world_size, model, outdir, dataloader, usertag):
+def record_predictions(rank, model, outdir, dataloader):
     assert rank == 0
-
-    f = h5py.File(os.path.join(outdir, "training", "users.h5"), "r")
-    all_users = f[usertag][:]
-    f.close()
 
     user_batches = []
     embed_batches = []
-    seen_users = set()
     progress = tqdm(
         desc=f"Batches",
-        total=len(all_users),
+        total=len(dataloader),
         mininterval=1,
         disable=rank != 0,
     )
     model.eval()
-    while len(seen_users) < len(all_users):
-        for data in dataloader:
-            with torch.no_grad():
-                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                    x = (
-                        model(*to_device(data, rank), embed_only=True)
-                        .to("cpu")
-                        .to(torch.float32)
-                        .numpy()
-                    )
-                    users = data[-1].numpy()
-                    user_batches.append(users)
-                    embed_batches.append(x)
-                    new_users = len(seen_users | set(users)) - len(seen_users)
-                    seen_users |= set(users)
-                    progress.update(new_users)
-            if len(seen_users) >= len(all_users):
-                break
+    for data in dataloader:
+        with torch.no_grad():
+            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                x = (
+                    model(*to_device(data, rank), embed_only=True)
+                    .to("cpu")
+                    .to(torch.float32)
+                    .numpy()
+                )
+                users = data[-1].numpy()
+                user_batches.append(users)
+                embed_batches.append(x)
+                progress.update()
     progress.close()
     model.train()
 
@@ -401,50 +392,23 @@ def record_predictions(rank, world_size, model, outdir, dataloader, usertag):
     f.close()
 
 
-def load_checkpoints(outdir):
-    checkpoint = None
-    epoch = -1
-    for x in glob.glob(os.path.join(outdir, f"model.*.pt")):
-        trial = int(os.path.basename(x).split(".")[1])
-        if trial > epoch:
-            epoch = trial
-            checkpoint = x
-    return checkpoint, epoch
+# checkpoints
 
 
-def initialize_model(model, model_init, outdir, logger):
-    if model_init is not None:
-        model_paths = [get_data_path(os.path.join("alphas", model_init, "model.pt"))]
-    else:
-        model_paths = [os.path.join(outdir, "model.pt")]
-    for path in model_paths:
-        if os.path.exists(path):
-            logger.info(f"loading model from {path}")
-            model.load_state_dict(load_model(path))
-            return
+def initialize_model(model, name, logger):
+    path = get_data_path(os.path.join("alphas", name, "model.pt"))
+    logger.info(f"loading model from {path}")
+    model.load_state_dict(load_model(path))
 
 
-def save_model(rank, world_size, model, epoch, outdir):
+def save_model(rank, model, outdir):
     if rank != 0:
         return
-    checkpoint = os.path.join(outdir, f"model.{epoch}.pt")
-    if world_size > 1:
-        model = model.module
-    torch.save(model.state_dict(), checkpoint)
-    previous_checkpoints = glob.glob(os.path.join(outdir, f"model.*.pt"))
-    for fn in previous_checkpoints:
-        if fn != checkpoint:
-            os.remove(fn)
+    fn = os.path.join(outdir, "model.pt")
+    torch.save(model.module.state_dict(), fn)
 
 
-def publish_model(outdir, rank):
-    if rank != 0:
-        return
-    checkpoint, epoch = load_checkpoints(outdir)
-    assert checkpoint is not None
-    modelfn = os.path.join(outdir, f"model.pt")
-    shutil.copyfile(checkpoint, modelfn)
-    os.remove(checkpoint)
+# multiprocessing
 
 
 def setup_multiprocessing(rank, world_size):
@@ -458,13 +422,12 @@ def get_dataloader(
     world_size,
     outdir,
     mode,
-    split,
     epoch_size,
     chunk_size,
     batch_size,
 ):
     dataset = StreamingDataset(
-        os.path.join(outdir, split),
+        outdir,
         epoch_size,
         chunk_size,
         mode,
@@ -486,9 +449,7 @@ def get_dataloader(
 
 
 def run_process(rank, world_size, name, epochs, model_init):
-    if world_size > 1:
-        setup_multiprocessing(rank, world_size)
-
+    setup_multiprocessing(rank, world_size)
     outdir = get_data_path(os.path.join("alphas", name))
     logger = get_logger(outdir, rank)
     config_file = os.path.join(outdir, "config.json")
@@ -501,9 +462,8 @@ def run_process(rank, world_size, name, epochs, model_init):
         x: get_dataloader(
             rank,
             world_size,
-            outdir,
+            os.path.join(outdir, x),
             training_config["mode"],
-            x,
             training_config[f"{x}_epoch_size"],
             training_config[f"chunk_size"],
             training_config[f"{x}_batch_size"],
@@ -511,13 +471,13 @@ def run_process(rank, world_size, name, epochs, model_init):
         for x in ["training", "validation"]
     }
     model = TransformerModel(model_config).to(rank)
-    initialize_model(model, model_init, outdir, logger)
+    if model_init is not None:
+        initialize_model(model, model_init, logger)
     if training_config["mode"] == "finetune":
         model = torch.compile(model)
-    if world_size > 1:
-        model = DDP(
-            model, device_ids=[rank], output_device=rank, find_unused_parameters=True
-        )
+    model = DDP(
+        model, device_ids=[rank], output_device=rank, find_unused_parameters=True
+    )
     optimizer = create_optimizer(model, training_config)
     scheduler = create_learning_rate_schedule(optimizer, training_config, world_size)
     scaler = torch.cuda.amp.GradScaler()
@@ -527,22 +487,18 @@ def run_process(rank, world_size, name, epochs, model_init):
         else None
     )
 
-    initial_loss = evaluate_metrics(
-        rank, world_size, outdir, model, dataloaders["validation"], training_config
-    )
+    initial_loss = evaluate_metrics(rank, model, dataloaders["validation"])
     if stopper:
         stopper(sum(initial_loss))  # TODO should this be weighted?
     logger.info(f"Initial Loss: {sum(initial_loss)}, {initial_loss}")
     task_weights = make_task_weights(initial_loss)
+    task_weights = [1 for _ in range(8)]
 
     for epoch in range(training_config["num_epochs"]):
         training_loss = train_epoch(
             rank,
-            world_size,
-            outdir,
             model,
             dataloaders["training"],
-            training_config,
             optimizer,
             scheduler,
             scaler,
@@ -551,9 +507,7 @@ def run_process(rank, world_size, name, epochs, model_init):
         logger.info(
             f"Epoch: {epoch}, Training Loss: {sum(training_loss)}, {training_loss}"
         )
-        validation_loss = evaluate_metrics(
-            rank, world_size, outdir, model, dataloaders["validation"], training_config
-        )
+        validation_loss = evaluate_metrics(rank, model, dataloaders["validation"])
         logger.info(
             f"Epoch: {epoch}, Validation Loss: {sum(validation_loss)}, {validation_loss}"
         )
@@ -561,23 +515,19 @@ def run_process(rank, world_size, name, epochs, model_init):
         if stopper:
             stopper(sum(validation_loss))
             if stopper.save_model:
-                save_model(rank, world_size, model, epoch, outdir)
+                save_model(rank, model, outdir)
             if stopper.early_stop:
                 break
         else:
-            save_model(rank, world_size, model, epoch, outdir)
-    publish_model(outdir, rank)
+            save_model(rank, model, outdir)
 
     if training_config["mode"] == "finetune" and rank == 0:
         model = TransformerModel(model_config).to(rank)
-        initialize_model(model, None, outdir, logger)
+        initialize_model(model, name, logger)
         model = torch.compile(model)
-        record_predictions(
-            rank, world_size, model, outdir, dataloaders["validation"], "test"
-        )
+        record_predictions(rank, model, outdir, dataloaders["validation"])
 
-    if world_size > 1:
-        dist.destroy_process_group()
+    dist.destroy_process_group()
 
 
 def cleanup_previous_runs(name):
