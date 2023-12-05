@@ -12,6 +12,7 @@ import glob
 import logging
 import math
 import shutil
+import time
 
 import h5py
 import numpy as np
@@ -134,16 +135,11 @@ class FinetuneDataset(Dataset):
 
 
 class StreamingDataset(Dataset):
-    def __init__(
-        self,
-        outdir,
-        epoch_size,
-        chunk_size,
-        mode,
-    ):
+    def __init__(self, outdir, epoch_size, chunk_size, mode, epochs):
         self.outdir = outdir
         self.epoch_size = epoch_size
         self.chunk_size = chunk_size
+        self.num_epochs = epochs
         self.mode = mode
         self.epoch = 0
         self.chunk = -1
@@ -156,6 +152,8 @@ class StreamingDataset(Dataset):
     def __getitem__(self, i):
         if i < self.last_index:
             self.epoch += 1
+            if self.epoch == self.num_epochs:
+                self.epoch = 0
             self.chunk = -1
         self.last_index = i
 
@@ -164,10 +162,7 @@ class StreamingDataset(Dataset):
             self.chunk = chunk
             file = os.path.join(self.outdir, str(self.epoch), f"{chunk}.h5")
             if not os.path.exists(file):
-                # can happen if it's the last batch of the last epoch
-                # and DistributedSampler has drop_last=False
-                self.epoch = 0
-                file = os.path.join(self.outdir, str(self.epoch), f"{chunk}.h5")
+                time.sleep(1)
             if self.mode == "pretrain":
                 self.dataset = PretrainDataset(file)
             elif self.mode == "finetune":
@@ -197,9 +192,6 @@ class EarlyStopper:
         self.best_score = float("inf")
         self.early_stop = False
         self.save_model = False
-
-    def update(self, values, weights):
-        self(sum(x * y for (x, y) in zip(values, weights)))
 
     def __call__(self, score):
         if score > self.best_score * (1 - self.rtol):
@@ -253,6 +245,10 @@ def create_learning_rate_schedule(optimizer, config, world_size):
         assert False
 
 
+def wsum(values, weights):
+    return sum(x * y for (x, y) in zip(values, weights))
+
+
 def make_task_weights(losses):
     weights = []
     for i in range(len(losses)):
@@ -260,7 +256,7 @@ def make_task_weights(losses):
             weights.append(1 / losses[i])
         else:
             weights.append(0)
-    norm = sum(weights) / len(weights)
+    norm = wsum(losses, weights) / len(weights)
     if norm == 0:
         return [1 for _ in range(len(losses))]
     else:
@@ -432,12 +428,14 @@ def get_dataloader(
     epoch_size,
     chunk_size,
     batch_size,
+    epochs,
 ):
     dataset = StreamingDataset(
         outdir,
         epoch_size,
         chunk_size,
         mode,
+        epochs,
     )
     sampler = DistributedSampler(
         dataset, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False
@@ -474,6 +472,7 @@ def run_process(rank, world_size, name, model_init):
             training_config[f"{x}_epoch_size"],
             training_config[f"chunk_size"],
             training_config[f"{x}_batch_size"],
+            training_config["num_epochs"],
         )
         for x in ["training", "validation"]
     }
@@ -495,10 +494,13 @@ def run_process(rank, world_size, name, model_init):
     )
 
     initial_loss = evaluate_metrics(rank, model, dataloaders["validation"])
-    logger.info(f"Initial Loss: {sum(initial_loss)}, {initial_loss}")
+    logger.info(
+        f"Initial Loss: {sum(validation_loss)},"
+        f" {wsum(validation_loss, task_weights)}, {validation_loss}"
+    )
     task_weights = make_task_weights(initial_loss)
     if stopper:
-        stopper.update(initial_loss, task_weights)
+        stopper(wsum(initial_loss, task_weights))
 
     for epoch in range(training_config["num_epochs"]):
         training_loss = train_epoch(
@@ -511,19 +513,21 @@ def run_process(rank, world_size, name, model_init):
             task_weights,
         )
         logger.info(
-            f"Epoch: {epoch}, Training Loss: {sum(training_loss)}, {training_loss}"
+            f"Epoch: {epoch}, Training Loss: {sum(training_loss)},"
+            f" {wsum(training_loss, task_weights)}"
         )
         validation_loss = evaluate_metrics(rank, model, dataloaders["validation"])
         logger.info(
-            f"Epoch: {epoch}, Validation Loss: {sum(validation_loss)}, {validation_loss}"
+            f"Epoch: {epoch}, Validation Loss: {sum(validation_loss)},"
+            f" {wsum(validation_loss, task_weights)}, {validation_loss}"
         )
         if stopper:
-            stopper.update(validation_loss, task_weights)
+            stopper(wsum(validation_loss, task_weights))
             if stopper.save_model:
                 save_model(rank, model, outdir)
                 task_weights = make_task_weights(validation_loss)
                 stopper.reset()
-                stopper.update(validation_loss, task_weights)
+                stopper(wsum(validation_loss, task_weights))
             elif stopper.early_stop:
                 break
         else:
