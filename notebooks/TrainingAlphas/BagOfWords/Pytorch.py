@@ -25,7 +25,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
-
 exec(open("./BagOfWords.py").read())
 
 
@@ -262,16 +261,23 @@ def create_model(config, outdir, device):
 
 
 def get_batch_size(batch_size, epoch_size, num_workers):
-    worker_size = int(round(epoch_size / num_workers / 3)) # ensure that each worker gets sampled
+    worker_size = int(
+        round(epoch_size / num_workers / 3)
+    )  # ensure that each worker gets sampled
     return max(min(batch_size, worker_size), 1)
-        
+
+
 def train(config, outdir, logger, training, test):
-    logger.info(f"Training on {training} data. Early stopping on {test} data") 
+    logger.info(f"Training on {training} data. Early stopping on {test} data")
     dataloaders = {
         x: get_dataloader(
             outdir,
             y,
-            get_batch_size(config["batch_size"], config[f"epoch_size_{y}"], config["num_data_shards"]),
+            get_batch_size(
+                config["batch_size"],
+                config[f"epoch_size_{y}"],
+                config["num_data_shards"],
+            ),
             num_workers=config["num_data_shards"],
             shuffle=x == "training",
         )
@@ -317,32 +323,37 @@ def train(config, outdir, logger, training, test):
 def record_predictions(model, outdir, dataloader):
     user_batches = []
     embed_batches = []
-    progress = tqdm(
-        desc=f"Batches",
-        total=len(dataloader),
-        mininterval=1,
-    )
     model.eval()
     device = get_device()
-    for data in dataloader:
-        with torch.no_grad():
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                x = (
-                    model(
-                        *to_device(data, device),
-                        mask=False,
-                        evaluate=False,
-                        predict=True,
+
+    found_users = set()
+    while len(found_users) < len(dataloader.dataset):
+        # so we don't miss any users from having num_dataloader_workers > 1
+        progress = tqdm(
+            desc=f"Batches",
+            total=len(dataloader),
+            mininterval=1,
+        )
+        for data in dataloader:
+            with torch.no_grad():
+                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                    x = (
+                        model(
+                            *to_device(data, device),
+                            mask=False,
+                            evaluate=False,
+                            predict=True,
+                        )
+                        .to("cpu")
+                        .to(torch.float32)
+                        .numpy()
                     )
-                    .to("cpu")
-                    .to(torch.float32)
-                    .numpy()
-                )
-                users = data[-1].todense()
-                user_batches.append(users)
-                embed_batches.append(x)
-                progress.update(1)
-    progress.close()
+                    users = data[-1].todense()
+                    found_users |= set(np.asarray(users).flatten())
+                    user_batches.append(users)
+                    embed_batches.append(x)
+                    progress.update(1)
+        progress.close()
     model.train()
 
     f = h5py.File(os.path.join(outdir, "predictions.h5"), "w")
@@ -367,8 +378,12 @@ def run_process(name, mode):
         dataloader = get_dataloader(
             outdir,
             "inference",
-            config["batch_size"],
-            num_workers=1,
+            get_batch_size(
+                config["batch_size"],
+                config["epoch_size_test"],
+                config["num_data_shards"],
+            ),
+            num_workers=config["num_data_shards"],
             shuffle=False,
         )
         record_predictions(model, outdir, dataloader)

@@ -15,8 +15,9 @@ class BagOfWordsModel(nn.Module):
         self.input_sizes = config["input_sizes"]
         self.output_size_index = config["output_size_index"] - 1
         self.output_size = self.input_sizes[self.output_size_index]
+        self.input_fields = 4
         self.model = nn.Sequential(
-            nn.Linear(sum(self.input_sizes) * 2, 1024),
+            nn.Linear(sum(self.input_sizes) * self.input_fields, 1024),
             nn.ReLU(),
             nn.Linear(1024, 512),
             nn.ReLU(),
@@ -76,7 +77,7 @@ class BagOfWordsModel(nn.Module):
                 torch.rand(inputs.shape[0], x, device=inputs.device) > self.mask_rate
                 for x in self.input_sizes
             ]
-            input_mask = torch.cat([masks[0], masks[1], masks[0], masks[1]], 1)
+            input_mask = torch.cat([masks[0], masks[1]] * self.input_fields, 1)
             output_mask = ~masks[self.output_size_index]
             inputs = inputs * input_mask
             weights = weights * output_mask
