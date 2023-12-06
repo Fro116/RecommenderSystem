@@ -250,18 +250,19 @@ def wsum(values, weights):
 
 
 def make_task_weights(losses):
-    weights = []
-    for i in range(len(losses)):
-        if losses[i] > 0:
-            weights.append(1 / losses[i])
-        else:
-            weights.append(0)
-    norm = wsum(losses, weights) / len(weights)
-    if norm == 0:
-        return [1 for _ in range(len(losses))]
-    else:
-        return [x / norm for x in weights]
-    return weights
+    return [1 if y in ["rating", "watch"] else 0 for x in ALL_MEDIUMS for y in ALL_METRICS]
+    # weights = []
+    # for i in range(len(losses)):
+    #     if losses[i] > 0:
+    #         weights.append(1 / losses[i])
+    #     else:
+    #         weights.append(0)
+    # norm = wsum(losses, weights) / len(weights)
+    # if norm == 0:
+    #     return [1 for _ in range(len(losses))]
+    # else:
+    #     return [x / norm for x in weights]
+    # return weights
 
 
 def reduce_mean(rank, x, w):
@@ -443,7 +444,7 @@ def get_dataloader(
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
-        num_workers=1,
+        num_workers=4,
         sampler=sampler,
         drop_last=False,
         shuffle=False,
@@ -494,11 +495,11 @@ def run_process(rank, world_size, name, model_init):
     )
 
     initial_loss = evaluate_metrics(rank, model, dataloaders["validation"])
-    logger.info(
-        f"Initial Loss: {sum(validation_loss)},"
-        f" {wsum(validation_loss, task_weights)}, {validation_loss}"
-    )
     task_weights = make_task_weights(initial_loss)
+    logger.info(
+        f"Initial Loss: {sum(initial_loss)},"
+        f" {wsum(initial_loss, task_weights)}, {initial_loss}"
+    )
     if stopper:
         stopper(wsum(initial_loss, task_weights))
 
@@ -514,7 +515,7 @@ def run_process(rank, world_size, name, model_init):
         )
         logger.info(
             f"Epoch: {epoch}, Training Loss: {sum(training_loss)},"
-            f" {wsum(training_loss, task_weights)}"
+            f" {wsum(training_loss, task_weights)} {training_loss}"
         )
         validation_loss = evaluate_metrics(rank, model, dataloaders["validation"])
         logger.info(
