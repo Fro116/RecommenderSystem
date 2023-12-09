@@ -42,7 +42,7 @@ if !@isdefined COMPRESS_SPLITS_IFNDEF
         @assert inference == isnothing(file)
         if inference
             data["userid"] = Int32[0 for _ = 1:num_items(medium)]
-            data["medium"] = Int32.(1:num_items(medium))
+            data["mediaid"] = Int32.(1:num_items(medium))
         else
             type_parser =
                 (_, name) ->
