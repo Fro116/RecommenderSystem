@@ -1,0 +1,5 @@
+mode: research
+
+ProcessData:
+  KnowledgeCutoff:
+    cutoff_days: 7

@@ -26,7 +26,8 @@ if !@isdefined COMPRESS_SPLITS_IFNDEF
             "mediaid" => Int32[],
             "status" => Int32[],
             "rating" => Float32[],
-            "order" => Int32[],
+            "backward_order" => Int32[],
+            "forward_order" => Int32[],
             "updated_at" => Float32[],
             "created_at" => Float32[],
             "started_at" => Float32[],
@@ -56,9 +57,10 @@ if !@isdefined COMPRESS_SPLITS_IFNDEF
 
         # rename columns
         data["itemid"] = data["mediaid"]
-        data["update_order"] = data["order"]
+        data["update_order"] = data["backward_order"]
         delete!(data, "mediaid")
-        delete!(data, "order")
+        delete!(data, "backward_order")
+        delete!(data, "forward_order")
         data
     end
 
