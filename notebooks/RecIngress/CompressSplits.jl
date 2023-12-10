@@ -65,18 +65,18 @@ if !@isdefined COMPRESS_SPLITS_IFNDEF
     end
 
     function save_dataset(username, medium)
-        dir = "../../data/recommendations"
+        dir = "../../data/recommendations/$username/"
         for split in ["rec_training", "rec_inference"]
-            stem = "$dir/$username/$medium.$split"
+            stem = "$dir$medium.$split"
             if split == "rec_training"
                 dataset =
-                    get_dataset(false, medium, "$dir/$username/user_$(medium)_list.csv")
+                    get_dataset(false, medium, "$dir/user_$(medium)_list.csv")
             elseif split == "rec_inference"
                 dataset = get_dataset(true, medium, nothing)
             else
                 @assert false
             end
-            split_save("$dir/$username/$split.$medium", dataset)
+            split_save("$dir/splits/$split.$medium", dataset)
         end
     end
 end
