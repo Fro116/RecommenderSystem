@@ -5,6 +5,8 @@ if !@isdefined BASELINE_IFNDEF
     @nbinclude("../../TrainingAlphas/Alpha.ipynb")
     @nbinclude("../../TrainingAlphas/Rating/BaselineHelper.ipynb")
 
+    get_training_counts(col) = get_counts(getfield(training, col))
+
     function train_model(training, λ, μ, a)
         if length(training.rating) == 0
             return μ
