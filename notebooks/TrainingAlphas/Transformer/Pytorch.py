@@ -250,19 +250,21 @@ def wsum(values, weights):
 
 
 def make_task_weights(losses):
-    return [1 if y in ["rating", "watch"] else 0 for x in ALL_MEDIUMS for y in ALL_METRICS]
-    # weights = []
-    # for i in range(len(losses)):
-    #     if losses[i] > 0:
-    #         weights.append(1 / losses[i])
-    #     else:
-    #         weights.append(0)
-    # norm = wsum(losses, weights) / len(weights)
-    # if norm == 0:
-    #     return [1 for _ in range(len(losses))]
-    # else:
-    #     return [x / norm for x in weights]
-    # return weights
+    metric_weight = {
+        "rating": 1,
+        "watch": 1,
+        "plantowatch": 1,
+        "drop": 1,
+    }
+    task_weights = [metric_weight[y] for _ in ALL_MEDIUMS for y in ALL_METRICS]
+    # rescale tasks so they contribute equally to loss
+    weights = []
+    for i in range(len(losses)):
+        if losses[i] > 0:
+            weights.append(1 / losses[i])
+        else:
+            weights.append(0)
+    return [x * w for (x, w) in zip(weights, task_weights)]
 
 
 def reduce_mean(rank, x, w):
