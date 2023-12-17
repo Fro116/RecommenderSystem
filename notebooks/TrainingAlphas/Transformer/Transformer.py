@@ -209,7 +209,7 @@ class TransformerModel(nn.Module):
 def get_batch_size(split, mode):
     if split == "training":
         mult = 1
-    elif split == "validation":
+    elif split in ["validation", "test"]:
         mult = 2
     else:
         assert False
@@ -243,8 +243,9 @@ def create_training_config(config_file):
         "dropout": 0.1,
         # data
         "chunk_size": config["batch_size"],
+        "splits": ["training", "validation"] + (["test"] if config["mode"] == "finetune" else [])
     }
-    for x in ["training", "validation"]:
+    for x in training_config["splits"]:
         training_config[f"{x}_epoch_size"] = int(config[f"{x}_epoch_size"])
         training_config[f"{x}_batch_size"] = get_batch_size(x, config["mode"])
     return training_config

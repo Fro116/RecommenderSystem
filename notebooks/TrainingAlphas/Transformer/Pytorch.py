@@ -252,11 +252,15 @@ def wsum(values, weights):
 def make_task_weights(losses):
     metric_weight = {
         "rating": 1,
-        "watch": 1,
-        "plantowatch": 1,
-        "drop": 1,
+        "watch": 5,
+        "plantowatch": 0.1,
+        "drop": 0.1,
     }
-    task_weights = [metric_weight[y] for _ in ALL_MEDIUMS for y in ALL_METRICS]
+    medium_weight = {
+        "anime": 2,
+        "manga": 1,
+    }
+    task_weights = [medium_weight[x] * metric_weight[y] for x in ALL_MEDIUMS for y in ALL_METRICS]
     # rescale tasks so they contribute equally to loss
     weights = []
     for i in range(len(losses)):
@@ -477,7 +481,7 @@ def run_process(rank, world_size, name, model_init):
             training_config[f"{x}_batch_size"],
             training_config["num_epochs"],
         )
-        for x in ["training", "validation"]
+        for x in training_config["splits"]
     }
     model = TransformerModel(model_config).to(rank)
     if model_init is not None:
@@ -499,7 +503,7 @@ def run_process(rank, world_size, name, model_init):
     initial_loss = evaluate_metrics(rank, model, dataloaders["validation"])
     task_weights = make_task_weights(initial_loss)
     logger.info(
-        f"Initial Loss: {sum(initial_loss)},"
+        f"Initial Loss:"
         f" {wsum(initial_loss, task_weights)}, {initial_loss}"
     )
     if stopper:
@@ -516,12 +520,12 @@ def run_process(rank, world_size, name, model_init):
             task_weights,
         )
         logger.info(
-            f"Epoch: {epoch}, Training Loss: {sum(training_loss)},"
+            f"Epoch: {epoch}, Training Loss:"
             f" {wsum(training_loss, task_weights)} {training_loss}"
         )
         validation_loss = evaluate_metrics(rank, model, dataloaders["validation"])
         logger.info(
-            f"Epoch: {epoch}, Validation Loss: {sum(validation_loss)},"
+            f"Epoch: {epoch}, Validation Loss:"
             f" {wsum(validation_loss, task_weights)}, {validation_loss}"
         )
         if stopper:
@@ -541,7 +545,7 @@ def run_process(rank, world_size, name, model_init):
         model = TransformerModel(model_config).to(rank)
         initialize_model(model, name, logger)
         model = torch.compile(model)
-        record_predictions(rank, model, outdir, dataloaders["validation"])
+        record_predictions(rank, model, outdir, dataloaders["test"])
 
     dist.destroy_process_group()
 
