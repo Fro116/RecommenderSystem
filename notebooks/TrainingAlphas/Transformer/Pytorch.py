@@ -33,26 +33,30 @@ exec(open("./Transformer.py").read())
 
 
 class PretrainDataset(Dataset):
-    def __init__(self, file):
+    def __init__(self, file, vocab_names, vocab_types):
         self.filename = file
         f = h5py.File(file, "r")
 
+        def process(x, dtype):
+            if dtype == "float":
+                return f[x][:].reshape(*f[x].shape, 1).astype(np.float32)
+            elif dtype == "int":
+                return f[x][:]
+            else:
+                assert False
+
         self.length = f["itemid"].shape[0]
         self.embeddings = [
-            f["itemid"][:],
-            f["rating"][:].reshape(*f["rating"].shape, 1).astype(np.float32),
-            f["updated_at"][:].reshape(*f["updated_at"].shape, 1).astype(np.float32),
-            f["status"][:],
-            f["position"][:],
+            process(x, y) for (x, y) in zip(vocab_names, vocab_types) if x != "userid"
         ]
         self.mask = f["userid"][:]
 
-        def process_position(x):
+        def process_positions(x):
             x = x[:].astype(np.int64)
             return x.reshape(*x.shape, 1)
 
         self.positions = [
-            process_position(f[f"positions_{medium}_{metric}"])
+            process_positions(f[f"positions_{medium}_{metric}"])
             for medium in ALL_MEDIUMS
             for metric in ALL_METRICS
         ]
@@ -83,16 +87,21 @@ class PretrainDataset(Dataset):
 
 
 class FinetuneDataset(Dataset):
-    def __init__(self, file):
+    def __init__(self, file, vocab_names, vocab_types):
         self.filename = file
         f = h5py.File(file, "r")
+
+        def process(x, dtype):
+            if dtype == "float":
+                return f[x][:].reshape(*f[x].shape, 1).astype(np.float32)
+            elif dtype == "int":
+                return f[x][:]
+            else:
+                assert False
+
         self.length = f["itemid"].shape[0]
         self.embeddings = [
-            f["itemid"][:],
-            f["rating"][:].reshape(*f["rating"].shape, 1).astype(np.float32),
-            f["updated_at"][:].reshape(*f["updated_at"].shape, 1).astype(np.float32),
-            f["status"][:],
-            f["position"][:],
+            process(x, y) for (x, y) in zip(vocab_names, vocab_types) if x != "userid"
         ]
         self.mask = f["userid"][:]
 
@@ -135,19 +144,41 @@ class FinetuneDataset(Dataset):
 
 
 class StreamingDataset(Dataset):
-    def __init__(self, outdir, epoch_size, chunk_size, mode, epochs):
+    def __init__(
+        self,
+        outdir,
+        split,
+        epoch_sizes,
+        chunk_size,
+        mode,
+        epochs,
+        vocab_names,
+        vocab_types,
+    ):
         self.outdir = outdir
-        self.epoch_size = epoch_size
+        self.split = split
+        self.epoch_sizes = epoch_sizes
         self.chunk_size = chunk_size
         self.num_epochs = epochs
         self.mode = mode
         self.epoch = 0
+        self.partition = 0
         self.chunk = -1
         self.dataset = None
         self.last_index = -1
+        self.vocab_names = vocab_names
+        self.vocab_types = vocab_types
 
     def __len__(self):
-        return self.epoch_size
+        return sum(self.epoch_sizes)
+
+    def calc_index(self, i):
+        p = 0
+        while i >= self.epoch_sizes[p]:
+            i -= self.epoch_sizes[p]
+            p += 1
+        chunk, index = divmod(i, self.chunk_size)
+        return p, chunk, index
 
     def __getitem__(self, i):
         if i < self.last_index:
@@ -157,16 +188,24 @@ class StreamingDataset(Dataset):
             self.chunk = -1
         self.last_index = i
 
-        chunk, index = divmod(i, self.chunk_size)
-        if self.chunk != chunk:
+        partition, chunk, index = self.calc_index(i)
+        if (self.partition, self.chunk) != (partition, chunk):
+            self.partition = partition
             self.chunk = chunk
-            file = os.path.join(self.outdir, str(self.epoch), f"{chunk}.h5")
+            file = os.path.join(
+                self.outdir,
+                str(self.partition),
+                self.split,
+                str(self.epoch),
+                f"{chunk}.h5",
+            )
+            args = (file, self.vocab_names, self.vocab_types)
             if not os.path.exists(file):
                 time.sleep(1)
             if self.mode == "pretrain":
-                self.dataset = PretrainDataset(file)
+                self.dataset = PretrainDataset(*args)
             elif self.mode == "finetune":
-                self.dataset = FinetuneDataset(file)
+                self.dataset = FinetuneDataset(*args)
             else:
                 assert False
         return self.dataset[index]
@@ -227,7 +266,8 @@ def create_optimizer(model, config):
 def create_learning_rate_schedule(optimizer, config, world_size):
     if config["mode"] == "pretrain":
         steps_per_epoch = math.ceil(
-            config["training_epoch_size"] / (config["training_batch_size"] * world_size)
+            sum(config["training_epoch_sizes"])
+            / (config["training_batch_size"] * world_size)
         )
         total_steps = config["num_epochs"] * steps_per_epoch
         warmup_steps = math.ceil(total_steps * config["warmup_ratio"])
@@ -239,8 +279,8 @@ def create_learning_rate_schedule(optimizer, config, world_size):
             * 0.5
             * (
                 1
-                + torch.cos(
-                    torch.pi * (x - warmup_steps) / (total_steps - warmup_steps)
+                + np.cos(
+                    np.pi * (x - warmup_steps) / (total_steps - warmup_steps)
                 )
             )
         )
@@ -317,10 +357,9 @@ def train_epoch(
             for i in range(len(tloss)):
                 training_losses[i] += float(tloss[i])
             loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
-            
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm)        
+        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm)
         scaler.step(optimizer)
         scaler.update()
         if scheduler is not None:
@@ -435,6 +474,15 @@ def save_model(rank, model, outdir):
     torch.save(model.module.state_dict(), fn)
 
 
+def print_model_size(model, logger):
+    groups = ["embeddings", "transformers", "classifiers"]
+    models = [model.embed, model.transformers, model.classifier]
+    for g, m in zip(groups, models):
+        model_parameters = filter(lambda p: p.requires_grad, m.parameters())
+        params = sum([np.prod(p.size()) for p in model_parameters])
+        logger.info(f"Loading {g} with {params} trainable params")
+
+
 # multiprocessing
 
 
@@ -448,18 +496,24 @@ def get_dataloader(
     rank,
     world_size,
     outdir,
+    split,
     mode,
-    epoch_size,
+    epoch_sizes,
     chunk_size,
     batch_size,
     epochs,
+    vocab_names,
+    vocab_types,
 ):
     dataset = StreamingDataset(
         outdir,
-        epoch_size,
+        split,
+        epoch_sizes,
         chunk_size,
         mode,
         epochs,
+        vocab_names,
+        vocab_types,
     )
     sampler = DistributedSampler(
         dataset, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False
@@ -481,8 +535,7 @@ def run_process(rank, world_size, name, model_init):
     setup_multiprocessing(rank, world_size)
     outdir = get_data_path(os.path.join("alphas", name))
     logger = get_logger(outdir, rank)
-    config_file = os.path.join(outdir, "config.json")
-    training_config = create_training_config(config_file)
+    training_config = create_training_config(outdir)
     model_config = create_model_config(training_config)
     torch.cuda.set_device(rank)
     torch.set_float32_matmul_precision("high")
@@ -491,12 +544,15 @@ def run_process(rank, world_size, name, model_init):
         x: get_dataloader(
             rank,
             world_size,
-            os.path.join(outdir, x),
+            outdir,
+            x,
             training_config["mode"],
-            training_config[f"{x}_epoch_size"],
+            training_config[f"{x}_epoch_sizes"],
             training_config[f"chunk_size"],
             training_config[f"{x}_batch_size"],
             training_config["num_epochs"],
+            training_config["vocab_names"],
+            training_config["vocab_types"],
         )
         for x in training_config["splits"]
     }
@@ -505,6 +561,7 @@ def run_process(rank, world_size, name, model_init):
         initialize_model(model, model_init, logger)
     if training_config["mode"] == "finetune":
         model = torch.compile(model)
+    print_model_size(model, logger)
     model = DDP(
         model, device_ids=[rank], output_device=rank, find_unused_parameters=True
     )
@@ -516,10 +573,11 @@ def run_process(rank, world_size, name, model_init):
         if training_config["mode"] == "finetune"
         else None
     )
+    
     task_weights = make_task_weights()
-
+    logger.info(f"Using task_weights {task_weights}")
     initial_loss = evaluate_metrics(rank, model, dataloaders["validation"])
-    logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")
+    logger.info(f"Initial Loss:" f" {wsum(initial_loss, task_weights)}, {initial_loss}")    
     if stopper:
         stopper(wsum(initial_loss, task_weights))
     for epoch in range(training_config["num_epochs"]):
@@ -560,13 +618,6 @@ def run_process(rank, world_size, name, model_init):
     dist.destroy_process_group()
 
 
-def cleanup_previous_runs(name):
-    outdir = get_data_path(os.path.join("alphas", name, "training"))
-    for x in os.listdir(outdir):
-        if "read" in x:
-            os.remove(os.path.join(outdir, x))
-
-
 parser = argparse.ArgumentParser(description="PytorchPretrain")
 parser.add_argument("--outdir", type=str, help="name of the data directory")
 parser.add_argument(
@@ -576,7 +627,6 @@ parser.add_argument("--gpus", type=int, help="number of gpus to use")
 args = parser.parse_args()
 if __name__ == "__main__":
     gpus = torch.cuda.device_count() if args.gpus is None else args.gpus
-    cleanup_previous_runs(args.outdir)
     mp.spawn(
         run_process,
         args=(gpus, args.outdir, args.initialize),

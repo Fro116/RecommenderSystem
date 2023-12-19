@@ -223,32 +223,51 @@ def get_batch_size(split, mode):
         assert False
 
 
-def create_training_config(config_file):
-    config = json.load(open(config_file, "r"))
-    training_config = {
-        # tokenization
-        "vocab_sizes": config["vocab_sizes"],
-        "vocab_types": config["vocab_types"],
-        "media_sizes": config["media_sizes"],
-        # model
-        "num_layers": 8,
-        "hidden_size": 768,
-        "max_sequence_length": config["max_sequence_length"],
-        # training
-        "peak_learning_rate": 1e-4 if config["mode"] == "pretrain" else 1e-6,
-        "weight_decay": 1e-2,
-        "num_epochs": 64 if config["mode"] == "pretrain" else 16,
-        "warmup_ratio": 0.06,
-        "mode": config["mode"],
-        "dropout": 0.1,
-        # data
-        "chunk_size": config["batch_size"],
-        "splits": ["training", "validation"] + (["test"] if config["mode"] == "finetune" else [])
-    }
-    for x in training_config["splits"]:
-        training_config[f"{x}_epoch_size"] = int(config[f"{x}_epoch_size"])
-        training_config[f"{x}_batch_size"] = get_batch_size(x, config["mode"])
-    return training_config
+def create_training_config(outdir):
+    config = {}
+
+    # setup data config
+    partition = 0
+    while os.path.exists(f"{outdir}/{partition}/config.json"):
+        c = json.load(open(f"{outdir}/{partition}/config.json", "r"))
+        partition += 1
+        data_config = {
+            "vocab_names": c["vocab_names"],
+            "vocab_sizes": c["vocab_sizes"],
+            "vocab_types": c["vocab_types"],
+            "media_sizes": c["media_sizes"],
+            "max_sequence_length": c["max_sequence_length"],
+            "mode": c["mode"],
+            "chunk_size": c["batch_size"],
+            "splits": [
+                x for x in ["training", "validation", "test"] if f"{x}_epoch_size" in c
+            ],
+        }
+        for k in data_config:
+            if k not in config:
+                config[k] = data_config[k]
+            else:
+                assert config[k] == data_config[k], k
+        for x in config["splits"]:
+            k1 = f"{x}_epoch_size"
+            k2 = k1 + "s"
+            if k2 not in config:
+                config[k2] = []
+            config[k2].append(c[k1])
+
+    # setup model config
+    config["num_layers"] = 8
+    config["hidden_size"] = 768
+    config["learning_rate"] = 2e-4 if config["mode"] == "pretrain" else 1e-6
+    config["adam_beta"] = (0.9, 0.95)
+    config["weight_decay"] = 0.1
+    config["num_epochs"] = 64 if config["mode"] == "pretrain" else 16
+    config["warmup_ratio"] = 0.01
+    config["dropout"] = 0.1
+    config["clip_norm"] = 1.0
+    for x in config["splits"]:
+        config[f"{x}_batch_size"] = get_batch_size(x, config["mode"])
+    return config
 
 
 def create_model_config(training_config):
