@@ -219,24 +219,30 @@ def create_optimizer(model, config):
             {"params": decay_parameters, "weight_decay": config["weight_decay"]},
             {"params": no_decay_parameters, "weight_decay": 0.0},
         ],
-        lr=config["peak_learning_rate"],
-        betas=(0.9, 0.999),
+        lr=config["learning_rate"],
+        betas=config["adam_beta"],
     )
 
 
 def create_learning_rate_schedule(optimizer, config, world_size):
-    # TODO try cosine annealing
     if config["mode"] == "pretrain":
         steps_per_epoch = math.ceil(
             config["training_epoch_size"] / (config["training_batch_size"] * world_size)
         )
         total_steps = config["num_epochs"] * steps_per_epoch
-        warmup_ratio = config["warmup_ratio"]
-        warmup_steps = math.ceil(total_steps * warmup_ratio)
+        warmup_steps = math.ceil(total_steps * config["warmup_ratio"])
         warmup_lambda = (
             lambda x: x / warmup_steps
-            if x < warmup_steps
-            else max(0, 1 - (x - warmup_steps) / (total_steps - warmup_steps))
+            if x <= warmup_steps
+            else 0.1
+            + 0.9
+            * 0.5
+            * (
+                1
+                + torch.cos(
+                    torch.pi * (x - warmup_steps) / (total_steps - warmup_steps)
+                )
+            )
         )
         return optim.lr_scheduler.LambdaLR(optimizer, warmup_lambda)
     elif config["mode"] == "finetune":
@@ -249,26 +255,33 @@ def wsum(values, weights):
     return sum(x * y for (x, y) in zip(values, weights))
 
 
-def make_task_weights(losses):
-    metric_weight = {
-        "rating": 1,
-        "watch": 5,
-        "plantowatch": 0.1,
-        "drop": 0.1,
-    }
+def make_task_weights():
     medium_weight = {
         "anime": 2,
         "manga": 1,
     }
-    task_weights = [medium_weight[x] * metric_weight[y] for x in ALL_MEDIUMS for y in ALL_METRICS]
-    # rescale tasks so they contribute equally to loss
-    weights = []
-    for i in range(len(losses)):
-        if losses[i] > 0:
-            weights.append(1 / losses[i])
-        else:
-            weights.append(0)
-    return [x * w for (x, w) in zip(weights, task_weights)]
+    metric_weight = {
+        "rating": 1,
+        "watch": 4,
+        "plantowatch": 1 / 4,
+        "drop": 1 / 4,
+    }
+    weights = [
+        medium_weight[x] * metric_weight[y] for x in ALL_MEDIUMS for y in ALL_METRICS
+    ]
+    weights = [x / sum(weights) for x in weights]
+    # rescale losses so each task is equally weighted
+    scale = [
+        1.036553297051344,
+        5.180758325289576,
+        5.87909245526433,
+        0.061069027408138736,
+        1.1299115263959014,
+        3.515180369672557,
+        4.851891694665132,
+        0.0673615127350479,
+    ]
+    return [(w / s) for (w, s) in zip(weights, scale)]
 
 
 def reduce_mean(rank, x, w):
@@ -287,6 +300,7 @@ def train_epoch(
     scheduler,
     scaler,
     task_weights,
+    clip_norm,
 ):
     training_losses = [0.0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
     training_steps = 0
@@ -303,7 +317,10 @@ def train_epoch(
             for i in range(len(tloss)):
                 training_losses[i] += float(tloss[i])
             loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
+            
         scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm)        
         scaler.step(optimizer)
         scaler.update()
         if scheduler is not None:
@@ -499,16 +516,12 @@ def run_process(rank, world_size, name, model_init):
         if training_config["mode"] == "finetune"
         else None
     )
+    task_weights = make_task_weights()
 
     initial_loss = evaluate_metrics(rank, model, dataloaders["validation"])
-    task_weights = make_task_weights(initial_loss)
-    logger.info(
-        f"Initial Loss:"
-        f" {wsum(initial_loss, task_weights)}, {initial_loss}"
-    )
+    logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")
     if stopper:
         stopper(wsum(initial_loss, task_weights))
-
     for epoch in range(training_config["num_epochs"]):
         training_loss = train_epoch(
             rank,
@@ -518,6 +531,7 @@ def run_process(rank, world_size, name, model_init):
             scheduler,
             scaler,
             task_weights,
+            training_config["clip_norm"],
         )
         logger.info(
             f"Epoch: {epoch}, Training Loss:"
@@ -532,14 +546,10 @@ def run_process(rank, world_size, name, model_init):
             stopper(wsum(validation_loss, task_weights))
             if stopper.save_model:
                 save_model(rank, model, outdir)
-                task_weights = make_task_weights(validation_loss)
-                stopper.reset()
-                stopper(wsum(validation_loss, task_weights))
             elif stopper.early_stop:
                 break
         else:
             save_model(rank, model, outdir)
-            task_weights = make_task_weights(validation_loss)
 
     if training_config["mode"] == "finetune" and rank == 0:
         model = TransformerModel(model_config).to(rank)
