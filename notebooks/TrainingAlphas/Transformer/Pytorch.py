@@ -45,7 +45,7 @@ class PretrainDataset(Dataset):
             else:
                 assert False
 
-        self.length = f["itemid"].shape[0]
+        self.length = f["userid"].shape[0]
         self.embeddings = [
             process(x, y) for (x, y) in zip(vocab_names, vocab_types) if x != "userid"
         ]
@@ -99,7 +99,7 @@ class FinetuneDataset(Dataset):
             else:
                 assert False
 
-        self.length = f["itemid"].shape[0]
+        self.length = f["userid"].shape[0]
         self.embeddings = [
             process(x, y) for (x, y) in zip(vocab_names, vocab_types) if x != "userid"
         ]
@@ -474,13 +474,35 @@ def save_model(rank, model, outdir):
     torch.save(model.module.state_dict(), fn)
 
 
+def compile(model, mode):
+    if mode == "finetune":
+       return torch.compile(model)
+    elif mode == "pretrain":
+        # # TODO test if there is any speedup on A100
+        # # we mask a variable number of tokens in each batch,
+        # # so we can't compile the whole model
+        # model.embed = torch.compile(model.embed)
+        # model.transformers = torch.compile(model.transformers)
+        # for i in range(len(model.classifier)):
+        #     model.classifier[i] = torch.compile(model.classifier[i]) 
+        return model
+    else:
+        assert False
+
+
 def print_model_size(model, logger):
-    groups = ["embeddings", "transformers", "classifiers"]
-    models = [model.embed, model.transformers, model.classifier]
-    for g, m in zip(groups, models):
+    num_params = []
+    for m in [model, model.embed, model.transformers, model.classifier]:
         model_parameters = filter(lambda p: p.requires_grad, m.parameters())
-        params = sum([np.prod(p.size()) for p in model_parameters])
-        logger.info(f"Loading {g} with {params} trainable params")
+        params = sum(dict((p.data_ptr(), p.numel()) for p in model_parameters).values())
+        num_params.append(params)
+    logger.info(f"Loading model with {num_params[0]} unique trainable params")
+    for n, p in zip(["Embeddings", "Transformers", "Classifiers"], num_params[1:]):
+        logger.info(f"{n} have {p} trainable params")
+    logger.info(
+        f"{sum(num_params[1:]) - num_params[0]} params are shared between "
+        "embeddings and classifiers"
+    )
 
 
 # multiprocessing
@@ -536,7 +558,9 @@ def run_process(rank, world_size, name, model_init):
     outdir = get_data_path(os.path.join("alphas", name))
     logger = get_logger(outdir, rank)
     training_config = create_training_config(outdir)
+    logger.info(f"Training config: {training_config}")
     model_config = create_model_config(training_config)
+    logger.info(f"Model config: {model_config}")
     torch.cuda.set_device(rank)
     torch.set_float32_matmul_precision("high")
 
@@ -559,8 +583,7 @@ def run_process(rank, world_size, name, model_init):
     model = TransformerModel(model_config).to(rank)
     if model_init is not None:
         initialize_model(model, model_init, logger)
-    if training_config["mode"] == "finetune":
-        model = torch.compile(model)
+    model = compile(model, training_config["mode"])
     print_model_size(model, logger)
     model = DDP(
         model, device_ids=[rank], output_device=rank, find_unused_parameters=True
@@ -612,7 +635,7 @@ def run_process(rank, world_size, name, model_init):
     if training_config["mode"] == "finetune" and rank == 0:
         model = TransformerModel(model_config).to(rank)
         initialize_model(model, name, logger)
-        model = torch.compile(model)
+        model = compile(model, training_config["mode"])
         record_predictions(rank, model, outdir, dataloaders["test"])
 
     dist.destroy_process_group()

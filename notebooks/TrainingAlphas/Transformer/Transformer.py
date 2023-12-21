@@ -11,19 +11,10 @@ ALL_MEDIUMS = ["manga", "anime"]
 
 
 # Models
-class DiscreteEmbed(nn.Module):
-    def __init__(self, vocab_size, embedding_size):
-        super(DiscreteEmbed, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embedding_size)
-
-    def forward(self, x):
-        return self.embedding(x)
-
-
 class ContinuousEmbed(nn.Module):
     def __init__(self, vocab_size, embed_size):
         super(ContinuousEmbed, self).__init__()
-        hidden_size = math.ceil(embed_size / 64)
+        hidden_size = math.ceil(embed_size / 4)
         self.embedding = nn.Sequential(
             nn.Linear(1, hidden_size),
             nn.GELU(),
@@ -84,7 +75,7 @@ class TransformerModel(nn.Module):
         embeddings = []
         for size, dtype in zip(config["vocab_sizes"], config["vocab_types"]):
             if dtype == "int":
-                embeddings.append(DiscreteEmbed(size, config["embed_size"]))
+                embeddings.append(nn.Embedding(size, config["embed_size"]))
             elif dtype == "float":
                 embeddings.append(ContinuousEmbed(size, config["embed_size"]))
             elif dtype == "none":
@@ -106,21 +97,35 @@ class TransformerModel(nn.Module):
             dropout=config["dropout"],
         )
 
-        # create classifier
+        # create classifiers
+        metric_models = {
+            m: nn.Linear(
+                config["embed_size"],
+                config["embed_size"],
+            )
+            for m in ALL_METRICS
+        }
+        medium_models = {}
+        for i, m in enumerate(ALL_MEDIUMS):
+            linear = nn.Linear(
+                config["embed_size"],
+                config["vocab_sizes"][i],
+            )
+            self.embed.embeddings[i].weight = linear.weight # weight tying
+            medium_models[m] = linear
+
+        def create_head(medium, metric):
+            base = [
+                metric_models[metric],
+                medium_models[medium],
+            ]
+            if metric in ["watch", "plantowatch"]:
+                base.append(nn.LogSoftmax(dim=-1))
+            return nn.Sequential(*base)
+
         self.classifier = nn.ModuleList(
             [
-                nn.Sequential(
-                    nn.Linear(
-                        config["embed_size"],
-                        config["media_sizes"][medium],
-                    ),
-                    nn.LogSoftmax(dim=-1),
-                )
-                if metric in ["watch", "plantowatch"]
-                else nn.Linear(
-                    config["embed_size"],
-                    config["media_sizes"][medium],
-                )
+                create_head(medium, metric)
                 for medium in ALL_MEDIUMS
                 for metric in ALL_METRICS
             ]
@@ -215,7 +220,7 @@ def get_batch_size(split, mode):
         assert False
     if mode == "pretrain":
         # pretraining is done on 80gb gpus
-        return 96 * mult
+        return 96 * mult 
     elif mode == "finetune":
         # finetuning is done on 24gb gpus
         return 16 * mult
@@ -257,7 +262,8 @@ def create_training_config(outdir):
 
     # setup model config
     config["num_layers"] = 8
-    config["hidden_size"] = 768
+    config["embed_size"] = 768
+    config["num_attention_heads"] = 12
     config["learning_rate"] = 2e-4 if config["mode"] == "pretrain" else 1e-6
     config["adam_beta"] = (0.9, 0.95)
     config["weight_decay"] = 0.1
@@ -270,19 +276,19 @@ def create_training_config(outdir):
     return config
 
 
-def create_model_config(training_config):
+def create_model_config(config):
     return {
-        "dropout": training_config["dropout"],
+        "dropout": config["dropout"],
         "activation": "gelu",
-        "num_layers": training_config["num_layers"],
-        "embed_size": training_config["hidden_size"],
-        "max_sequence_length": training_config["max_sequence_length"],
-        "vocab_sizes": training_config["vocab_sizes"],
-        "vocab_types": training_config["vocab_types"],
-        "media_sizes": training_config["media_sizes"],
-        "num_attention_heads": int(training_config["hidden_size"] / 64),
-        "intermediate_size": training_config["hidden_size"] * 4,
-        "mode": training_config["mode"],
+        "num_layers": config["num_layers"],
+        "embed_size": config["embed_size"],
+        "max_sequence_length": config["max_sequence_length"],
+        "vocab_sizes": config["vocab_sizes"],
+        "vocab_types": config["vocab_types"],
+        "media_sizes": config["media_sizes"],
+        "num_attention_heads": config["num_attention_heads"],
+        "intermediate_size": config["embed_size"] * 4,
+        "mode": config["mode"],
     }
 
 
