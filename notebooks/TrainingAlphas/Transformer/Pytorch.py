@@ -475,17 +475,16 @@ def save_model(rank, model, outdir):
 
 
 def compile(model, mode):
-    if mode == "finetune":
-       return torch.compile(model)
-    elif mode == "pretrain":
-        # # TODO test if there is any speedup on A100
-        # # we mask a variable number of tokens in each batch,
-        # # so we can't compile the whole model
-        # model.embed = torch.compile(model.embed)
-        # model.transformers = torch.compile(model.transformers)
-        # for i in range(len(model.classifier)):
-        #     model.classifier[i] = torch.compile(model.classifier[i]) 
+    if mode == "pretrain":
+        # we mask a variable number of tokens in each batch,
+        # so we can't compile the whole model
+        model.embed = torch.compile(model.embed)
+        model.transformers = torch.compile(model.transformers)
+        for i in range(len(model.classifier)):
+            model.classifier[i] = torch.compile(model.classifier[i]) 
         return model
+    elif mode == "finetune":
+       return torch.compile(model)        
     else:
         assert False
 
