@@ -15,6 +15,7 @@ import shutil
 import time
 
 import h5py
+import hdf5plugin
 import numpy as np
 import scipy
 import torch
@@ -199,9 +200,9 @@ class StreamingDataset(Dataset):
                 str(self.epoch),
                 f"{chunk}.h5",
             )
-            args = (file, self.vocab_names, self.vocab_types)
-            if not os.path.exists(file):
-                time.sleep(1)
+            while not os.path.exists(file):
+                time.sleep(1) # wait for the file to be downloaded
+            args = (file, self.vocab_names, self.vocab_types)                
             if self.mode == "pretrain":
                 self.dataset = PretrainDataset(*args)
             elif self.mode == "finetune":
@@ -599,7 +600,7 @@ def run_process(rank, world_size, name, model_init):
     task_weights = make_task_weights()
     logger.info(f"Using task_weights {task_weights}")
     initial_loss = evaluate_metrics(rank, model, dataloaders["validation"])
-    logger.info(f"Initial Loss:" f" {wsum(initial_loss, task_weights)}, {initial_loss}")    
+    logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")    
     if stopper:
         stopper(wsum(initial_loss, task_weights))
     for epoch in range(training_config["num_epochs"]):
@@ -630,7 +631,12 @@ def run_process(rank, world_size, name, model_init):
                 break
         else:
             save_model(rank, model, outdir)
-
+        if rank == 0:
+            # signals to an external memory pager that we can delete this
+            # epoch and download the next one. This is useful for training
+            # on datasets that are larger than the disk size
+            open(os.path.join(outdir, "epoch.$epoch.complete"), "w").close()
+   
     if training_config["mode"] == "finetune" and rank == 0:
         model = TransformerModel(model_config).to(rank)
         initialize_model(model, name, logger)
