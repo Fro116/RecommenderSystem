@@ -151,6 +151,7 @@ class StreamingDataset(Dataset):
         split,
         epoch_sizes,
         chunk_size,
+        batch_size,
         mode,
         epochs,
         vocab_names,
@@ -169,11 +170,16 @@ class StreamingDataset(Dataset):
         self.last_index = -1
         self.vocab_names = vocab_names
         self.vocab_types = vocab_types
-
+        # manually handle DistributedSampler's drop_last=False padding        
+        self.unique_len = sum(self.epoch_sizes)
+        next_multiple = lambda n, m: ((n + m - 1) // m) * m
+        self.expanded_len = next_multiple(self.unique_len, batch_size)
+        
     def __len__(self):
-        return sum(self.epoch_sizes)
+        return self.expanded_len
 
     def calc_index(self, i):
+        i = i % self.unique_len
         p = 0
         while i >= self.epoch_sizes[p]:
             i -= self.epoch_sizes[p]
@@ -532,6 +538,7 @@ def get_dataloader(
         split,
         epoch_sizes,
         chunk_size,
+        batch_size * world_size,
         mode,
         epochs,
         vocab_names,
@@ -635,7 +642,7 @@ def run_process(rank, world_size, name, model_init):
             # signals to an external memory pager that we can delete this
             # epoch and download the next one. This is useful for training
             # on datasets that are larger than the disk size
-            open(os.path.join(outdir, "epoch.$epoch.complete"), "w").close()
+            open(os.path.join(outdir, f"epoch.{epoch}.complete"), "w").close()
    
     if training_config["mode"] == "finetune" and rank == 0:
         model = TransformerModel(model_config).to(rank)
