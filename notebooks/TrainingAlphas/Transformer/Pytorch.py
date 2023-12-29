@@ -153,7 +153,6 @@ class StreamingDataset(Dataset):
         chunk_size,
         batch_size,
         mode,
-        epochs,
         vocab_names,
         vocab_types,
     ):
@@ -161,7 +160,6 @@ class StreamingDataset(Dataset):
         self.split = split
         self.epoch_sizes = epoch_sizes
         self.chunk_size = chunk_size
-        self.num_epochs = epochs
         self.mode = mode
         self.epoch = 0
         self.partition = 0
@@ -190,8 +188,6 @@ class StreamingDataset(Dataset):
     def __getitem__(self, i):
         if i < self.last_index:
             self.epoch += 1
-            if self.epoch == self.num_epochs:
-                self.epoch = 0
             self.chunk = -1
         self.last_index = i
 
@@ -529,7 +525,6 @@ def get_dataloader(
     epoch_sizes,
     chunk_size,
     batch_size,
-    epochs,
     vocab_names,
     vocab_types,
 ):
@@ -540,7 +535,6 @@ def get_dataloader(
         chunk_size,
         batch_size * world_size,
         mode,
-        epochs,
         vocab_names,
         vocab_types,
     )
@@ -581,8 +575,7 @@ def run_process(rank, world_size, name, model_init):
             training_config[f"{x}_epoch_sizes"],
             training_config[f"chunk_size"],
             training_config[f"{x}_batch_size"],
-            training_config["num_epochs"],
-            training_config["vocab_names"],
+             training_config["vocab_names"],
             training_config["vocab_types"],
         )
         for x in training_config["splits"]
@@ -605,10 +598,10 @@ def run_process(rank, world_size, name, model_init):
     )
     
     task_weights = make_task_weights()
-    logger.info(f"Using task_weights {task_weights}")
-    initial_loss = evaluate_metrics(rank, model, dataloaders["validation"])
-    logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")    
+    logger.info(f"Using task_weights {task_weights}") 
     if stopper:
+        initial_loss = evaluate_metrics(rank, model, dataloaders["validation"])
+        logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")
         stopper(wsum(initial_loss, task_weights))
     for epoch in range(training_config["num_epochs"]):
         training_loss = train_epoch(
@@ -639,9 +632,6 @@ def run_process(rank, world_size, name, model_init):
         else:
             save_model(rank, model, outdir)
         if rank == 0:
-            # signals to an external memory pager that we can delete this
-            # epoch and download the next one. This is useful for training
-            # on datasets that are larger than the disk size
             open(os.path.join(outdir, f"epoch.{epoch}.complete"), "w").close()
    
     if training_config["mode"] == "finetune" and rank == 0:

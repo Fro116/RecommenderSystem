@@ -212,18 +212,10 @@ class TransformerModel(nn.Module):
 
 # Configs
 def get_batch_size(split, mode):
-    if split == "training":
-        mult = 1
-    elif split in ["validation", "test"]:
-        mult = 2
-    else:
-        assert False
     if mode == "pretrain":
-        # pretraining is done on 80gb gpus
-        return 96 * mult 
+        return 256 
     elif mode == "finetune":
-        # finetuning is done on 24gb gpus
-        return 16 * mult
+        return 16
     else:
         assert False
 
