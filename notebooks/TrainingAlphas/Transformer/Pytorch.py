@@ -168,11 +168,11 @@ class StreamingDataset(Dataset):
         self.last_index = -1
         self.vocab_names = vocab_names
         self.vocab_types = vocab_types
-        # manually handle DistributedSampler's drop_last=False padding        
+        # manually handle DistributedSampler's drop_last=False padding
         self.unique_len = sum(self.epoch_sizes)
         next_multiple = lambda n, m: ((n + m - 1) // m) * m
         self.expanded_len = next_multiple(self.unique_len, batch_size)
-        
+
     def __len__(self):
         return self.expanded_len
 
@@ -203,8 +203,8 @@ class StreamingDataset(Dataset):
                 f"{chunk}.h5",
             )
             while not os.path.exists(file):
-                time.sleep(1) # wait for the file to be downloaded
-            args = (file, self.vocab_names, self.vocab_types)                
+                time.sleep(1)  # wait for the file to be downloaded
+            args = (file, self.vocab_names, self.vocab_types)
             if self.mode == "pretrain":
                 self.dataset = PretrainDataset(*args)
             elif self.mode == "finetune":
@@ -248,18 +248,29 @@ class EarlyStopper:
             self.save_model = True
 
 
-def create_optimizer(model, config):
-    decay_parameters = []
-    no_decay_parameters = []
+def create_optimizer(model, config, logger):
+    should_decay = {False: [], True: []}
+    embed = 0
+    norm = 0
+    bias = 0
     for name, param in model.named_parameters():
-        if name.startswith("embed") or "norm" in name or "bias" in name:
-            no_decay_parameters.append(param)
+        if "norm" in name:
+            norm += 1
+        elif "bias" in name:
+            bias += 1
+            decay = False
+        elif name.startswith("module.embed") and "weightdecay" not in name:
+            embed += 1
+            decay = False
         else:
-            decay_parameters.append(param)
+            decay = True
+        logger.info(f"set weightdecay={decay} for {name} with size {param.shape}")
+        should_decay[decay].append(param)
+    assert embed > 0 and bias > 0 and norm > 0, "missing parameters"
     return optim.AdamW(
         [
-            {"params": decay_parameters, "weight_decay": config["weight_decay"]},
-            {"params": no_decay_parameters, "weight_decay": 0.0},
+            {"params": should_decay[True], "weight_decay": config["weight_decay"]},
+            {"params": should_decay[False], "weight_decay": 0.0},
         ],
         lr=config["learning_rate"],
         betas=config["adam_beta"],
@@ -280,12 +291,7 @@ def create_learning_rate_schedule(optimizer, config, world_size):
             else 0.1
             + 0.9
             * 0.5
-            * (
-                1
-                + np.cos(
-                    np.pi * (x - warmup_steps) / (total_steps - warmup_steps)
-                )
-            )
+            * (1 + np.cos(np.pi * (x - warmup_steps) / (total_steps - warmup_steps)))
         )
         return optim.lr_scheduler.LambdaLR(optimizer, warmup_lambda)
     elif config["mode"] == "finetune":
@@ -484,10 +490,10 @@ def compile(model, mode):
         model.embed = torch.compile(model.embed)
         model.transformers = torch.compile(model.transformers)
         for i in range(len(model.classifier)):
-            model.classifier[i] = torch.compile(model.classifier[i]) 
+            model.classifier[i] = torch.compile(model.classifier[i])
         return model
     elif mode == "finetune":
-       return torch.compile(model)        
+        return torch.compile(model)
     else:
         assert False
 
@@ -575,7 +581,7 @@ def run_process(rank, world_size, name, model_init):
             training_config[f"{x}_epoch_sizes"],
             training_config[f"chunk_size"],
             training_config[f"{x}_batch_size"],
-             training_config["vocab_names"],
+            training_config["vocab_names"],
             training_config["vocab_types"],
         )
         for x in training_config["splits"]
@@ -588,7 +594,7 @@ def run_process(rank, world_size, name, model_init):
     model = DDP(
         model, device_ids=[rank], output_device=rank, find_unused_parameters=True
     )
-    optimizer = create_optimizer(model, training_config)
+    optimizer = create_optimizer(model, training_config, logger)
     scheduler = create_learning_rate_schedule(optimizer, training_config, world_size)
     scaler = torch.cuda.amp.GradScaler()
     stopper = (
@@ -596,9 +602,9 @@ def run_process(rank, world_size, name, model_init):
         if training_config["mode"] == "finetune"
         else None
     )
-    
+
     task_weights = make_task_weights()
-    logger.info(f"Using task_weights {task_weights}") 
+    logger.info(f"Using task_weights {task_weights}")
     if stopper:
         initial_loss = evaluate_metrics(rank, model, dataloaders["validation"])
         logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")
@@ -633,7 +639,7 @@ def run_process(rank, world_size, name, model_init):
             save_model(rank, model, outdir)
         if rank == 0:
             open(os.path.join(outdir, f"epoch.{epoch}.complete"), "w").close()
-   
+
     if training_config["mode"] == "finetune" and rank == 0:
         model = TransformerModel(model_config).to(rank)
         initialize_model(model, name, logger)

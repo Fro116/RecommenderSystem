@@ -11,19 +11,33 @@ ALL_MEDIUMS = ["manga", "anime"]
 
 
 # Models
-class ContinuousEmbed(nn.Module):
+class DiscreteEmbed(nn.Module):
     def __init__(self, vocab_size, embed_size):
+        super(DiscreteEmbed, self).__init__()
+        self.embedding = nn.Sequential(
+            nn.Embedding(vocab_size, embed_size),
+            nn.LayerNorm(embed_size),
+        )
+
+    def forward(self, x):
+        return self.embedding(x)
+
+
+class ContinuousEmbed(nn.Module):
+    def __init__(self, vocab_size, embed_size, dropout):
         super(ContinuousEmbed, self).__init__()
         hidden_size = math.ceil(embed_size / 4)
-        self.embedding = nn.Sequential(
+        self.embedding_with_weightdecay = nn.Sequential(
             nn.Linear(1, hidden_size),
             nn.GELU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_size, embed_size),
+            nn.LayerNorm(embed_size),
         )
         self.scale = 1 / vocab_size
 
     def forward(self, x):
-        return self.embedding(x * self.scale)
+        return self.embedding_with_weightdecay(x * self.scale * 2 - 1)
 
 
 class CompositeEmbedding(nn.Module):
@@ -75,9 +89,11 @@ class TransformerModel(nn.Module):
         embeddings = []
         for size, dtype in zip(config["vocab_sizes"], config["vocab_types"]):
             if dtype == "int":
-                embeddings.append(nn.Embedding(size, config["embed_size"]))
+                embeddings.append(DiscreteEmbed(size, config["embed_size"]))
             elif dtype == "float":
-                embeddings.append(ContinuousEmbed(size, config["embed_size"]))
+                embeddings.append(
+                    ContinuousEmbed(size, config["embed_size"], config["dropout"])
+                )
             elif dtype == "none":
                 continue
             else:
@@ -111,7 +127,7 @@ class TransformerModel(nn.Module):
                 config["embed_size"],
                 config["vocab_sizes"][i],
             )
-            self.embed.embeddings[i].weight = linear.weight # weight tying
+            self.embed.embeddings[i].embedding[0].weight = linear.weight  # weight tying
             medium_models[m] = linear
 
         def create_head(medium, metric):
@@ -213,7 +229,7 @@ class TransformerModel(nn.Module):
 # Configs
 def get_batch_size(split, mode):
     if mode == "pretrain":
-        return 256 
+        return 256
     elif mode == "finetune":
         return 16
     else:
@@ -253,13 +269,13 @@ def create_training_config(outdir):
             config[k2].append(c[k1])
 
     # setup model config
-    config["num_layers"] = 8
+    config["num_layers"] = 4
     config["embed_size"] = 768
     config["num_attention_heads"] = 12
     config["learning_rate"] = 2e-4 if config["mode"] == "pretrain" else 1e-6
     config["adam_beta"] = (0.9, 0.95)
     config["weight_decay"] = 0.1
-    config["num_epochs"] = 64 if config["mode"] == "pretrain" else 16
+    config["num_epochs"] = 128 if config["mode"] == "pretrain" else 16
     config["warmup_ratio"] = 0.01
     config["dropout"] = 0.1
     config["clip_norm"] = 1.0
