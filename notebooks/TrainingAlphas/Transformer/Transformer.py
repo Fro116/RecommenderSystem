@@ -37,7 +37,7 @@ class ContinuousEmbed(nn.Module):
         self.scale = 1 / vocab_size
 
     def forward(self, x):
-        return self.embedding_with_weightdecay(x * self.scale * 2 - 1)
+        return self.embedding_with_weightdecay(x * self.scale)
 
 
 class CompositeEmbedding(nn.Module):
@@ -58,8 +58,8 @@ class Bert(nn.Module):
         embed_size,
         num_attention_heads,
         intermediate_size,
-        activation="gelu",
-        dropout=0.1,
+        activation,
+        dropout,
     ):
         super(Bert, self).__init__()
         self.num_heads = num_attention_heads
