@@ -17,6 +17,7 @@ import shutil
 import time
 
 import h5py
+import hdf5plugin
 import numpy as np
 import scipy
 import torch
@@ -370,9 +371,9 @@ def run_process(name, mode):
     torch.set_float32_matmul_precision("high")
     if mode == "pretrain":
         save_model(BagOfWordsModel(config), outdir)
-        train(config, outdir, logger, "training", "validation")
+        train(config, outdir, logger, "pretrain", "test")
     elif mode == "finetune":
-        train(config, outdir, logger, "validation", "test")
+        train(config, outdir, logger, "finetune", "test")
     elif mode == "inference":
         model = create_model(config, outdir, get_device())
         dataloader = get_dataloader(

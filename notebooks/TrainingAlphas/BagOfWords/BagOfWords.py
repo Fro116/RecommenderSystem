@@ -15,7 +15,7 @@ class BagOfWordsModel(nn.Module):
         self.input_sizes = config["input_sizes"]
         self.output_size_index = config["output_size_index"] - 1
         self.output_size = self.input_sizes[self.output_size_index]
-        self.input_fields = 4
+        self.input_fields = 2
         self.model = nn.Sequential(
             nn.Linear(sum(self.input_sizes) * self.input_fields, 1024),
             nn.ReLU(),
@@ -100,7 +100,7 @@ def create_training_config(config_file, mode):
         # data
         "num_data_shards": config["num_shards"],
     }
-    for split in ["training", "validation", "test"]:
+    for split in ["pretrain", "finetune", "test"]:
         key = f"epoch_size_{split}"
         training_config[key] = config[key]
     return training_config
