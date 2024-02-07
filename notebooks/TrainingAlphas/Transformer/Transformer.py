@@ -157,6 +157,15 @@ class TransformerModel(nn.Module):
         self.lossfns = [
             lossfn_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
         ]
+        evaluate_map = {
+            "rating": self.moments,
+            "watch": self.crossentropy,
+            "plantowatch": self.crossentropy,
+            "drop": self.binarycrossentropy,
+        }
+        self.evaluatefns = [
+            evaluate_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
+        ]        
         if config["mode"] == "pretrain":
             self.forward = self.pretrain_forward
         elif config["mode"] == "finetune":
@@ -166,6 +175,13 @@ class TransformerModel(nn.Module):
 
     def mse(self, x, y, w):
         return (torch.square(x - y) * w).sum() / w.sum()
+
+    def moments(self, x, y, w):
+        return [
+            (torch.square(x - y) * w).sum() / w.sum(),
+            (torch.square(0 * x - y) * w).sum() / w.sum(),
+            (torch.square(-1 * x - y) * w).sum() / w.sum(),
+        ]
 
     def crossentropy(self, x, y, w):
         return (-x * y * w).sum() / w.sum()
@@ -194,12 +210,13 @@ class TransformerModel(nn.Module):
         preds = classifier(embed).gather(dim=-1, index=positions)
         return lossfn(preds, labels, weights)
 
-    def pretrain_forward(self, inputs, mask, positions, labels, weights):
+    def pretrain_forward(self, inputs, mask, positions, labels, weights, evaluate=False):
         e = self.embed(inputs)
         e = self.transformers(e, mask)
+        lossfns = self.evaluatefns if evaluate else self.lossfns
         losses = tuple(
             self.pretrain_lossfn(e, *args)
-            for args in zip(self.lossfns, self.classifier, positions, labels, weights)
+            for args in zip(lossfns, self.classifier, positions, labels, weights)
         )
         return losses
 
@@ -212,16 +229,17 @@ class TransformerModel(nn.Module):
         return lossfn(preds, labels, weights)
 
     def finetune_forward(
-        self, inputs, mask, positions, labels, weights, users, embed_only=False
+        self, inputs, mask, positions, labels, weights, users, inference=False, evaluate=False
     ):
         e = self.embed(inputs)
         e = self.transformers(e, mask)
         e = e[range(len(positions)), positions, :]
-        if embed_only:
-            return e
+        if inference:
+            return [c(e) for c in self.classifier]
+        lossfns = self.evaluatefns if evaluate else self.lossfns
         losses = tuple(
             self.finetune_lossfn(e, *args)
-            for args in zip(self.lossfns, self.classifier, labels, weights)
+            for args in zip(lossfns, self.classifier, labels, weights)
         )
         return losses
 
@@ -253,7 +271,7 @@ def create_training_config(outdir):
             "mode": c["mode"],
             "chunk_size": c["batch_size"],
             "splits": [
-                x for x in ["training", "validation", "test"] if f"{x}_epoch_size" in c
+                x for x in ["training", "validation"] if f"{x}_epoch_size" in c
             ],
         }
         for k in data_config:
@@ -272,7 +290,7 @@ def create_training_config(outdir):
     config["num_layers"] = 4
     config["embed_size"] = 768
     config["num_attention_heads"] = 12
-    config["learning_rate"] = 2e-4 if config["mode"] == "pretrain" else 1e-6
+    config["learning_rate"] = 2e-4 if config["mode"] == "pretrain" else 1e-7
     config["adam_beta"] = (0.9, 0.95)
     config["weight_decay"] = 0.1
     config["num_epochs"] = 128 if config["mode"] == "pretrain" else 16
@@ -313,6 +331,5 @@ def load_model(fn, map_location=None):
     state_dict = torch.load(fn, map_location=map_location)
     compile_prefix = "_orig_mod."
     for k, v in list(state_dict.items()):
-        if k.startswith(compile_prefix):
-            state_dict[k[len(compile_prefix) :]] = state_dict.pop(k)
+        state_dict[k.replace(compile_prefix, "")] = state_dict.pop(k)
     return state_dict

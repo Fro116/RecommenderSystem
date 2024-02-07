@@ -338,7 +338,7 @@ def reduce_mean(rank, x, w):
     w = torch.tensor(w).to(rank)
     dist.all_reduce(x, op=dist.ReduceOp.SUM)
     dist.all_reduce(w, op=dist.ReduceOp.SUM)
-    return [float(v) / float(w[0]) for v in x]
+    return [float(a) / float(b) if float(b) != 0 else 0 for (a, b) in zip(x, w)]
 
 
 def train_epoch(
@@ -352,7 +352,7 @@ def train_epoch(
     clip_norm,
 ):
     training_losses = [0.0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
-    training_steps = 0
+    training_steps = [0.0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
     progress = tqdm(
         desc=f"Batches",
         total=len(dataloader),
@@ -365,6 +365,7 @@ def train_epoch(
             tloss = model(*to_device(data, rank))
             for i in range(len(tloss)):
                 training_losses[i] += float(tloss[i])
+                training_steps[i] += 1
             loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -373,15 +374,26 @@ def train_epoch(
         scaler.update()
         if scheduler is not None:
             scheduler.step()
-        training_steps += 1
         progress.update()
     progress.close()
-    return reduce_mean(rank, training_losses, [training_steps])
+    return reduce_mean(rank, training_losses, training_steps)
+
+
+def minimize_quadratic(x, y):
+    if all(a == 0 for a in y):
+        return 0
+    c = y[1]
+    a = ((y[0] - y[1]) + (y[2] - y[1])) / 2
+    b = ((y[0] - y[1]) - (y[2] - y[1])) / 2
+    miny = c - (b * b) / (4 * a)
+    minx = -b / (2 * a)
+    return miny
 
 
 def evaluate_metrics(rank, model, dataloader):
-    losses = [0.0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
-    steps = 0
+    init = lambda metric: [0, 0, 0] if metric == "rating" else 0
+    losses = [init(metric) for m in ALL_MEDIUMS for metric in ALL_METRICS]
+    weights = [0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
     progress = tqdm(
         desc=f"Batches",
         total=len(dataloader),
@@ -392,21 +404,44 @@ def evaluate_metrics(rank, model, dataloader):
     for data in dataloader:
         with torch.no_grad():
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                loss = model(*to_device(data, rank))
+                devdata = to_device(data, rank)
+                loss = model(*devdata, evaluate=True)
+                w = [float(x.sum()) for x in devdata[4]]
             for i in range(len(loss)):
-                losses[i] += float(loss[i])
-        steps += 1
+                if w[i] != 0:
+                    if isinstance(losses[i], list):
+                        for j in range(len(losses[i])):
+                            losses[i][j] += float(loss[i][j]) * w[i]
+                    else:
+                        losses[i] += float(loss[i]) * w[i]
+                    weights[i] += w[i]
         progress.update()
     progress.close()
     model.train()
-    return reduce_mean(rank, losses, [steps])
+    for i in range(len(losses)):
+        if isinstance(losses[i], list):
+            losses[i] = minimize_quadratic([1, 0, -1], losses[i])
+    return reduce_mean(rank, losses, weights)
 
 
 def record_predictions(rank, model, outdir, dataloader):
     assert rank == 0
 
+    def save(user_batches, embed_batches, n):
+        f = h5py.File(os.path.join(outdir, f"embeddings.{n}.h5"), "w")
+        f.create_dataset("users", data=np.hstack(user_batches))
+        i = 0
+        for medium in ALL_MEDIUMS:
+            for metric in ALL_METRICS:
+                f.create_dataset(f"{medium}_{metric}", data=np.vstack([x[i] for x in embed_batches]))
+                i += 1
+        f.close()
+        user_batches.clear()
+        embed_batches.clear()
+
     user_batches = []
     embed_batches = []
+    shard = 0
     progress = tqdm(
         desc=f"Batches",
         total=len(dataloader),
@@ -417,34 +452,24 @@ def record_predictions(rank, model, outdir, dataloader):
     for data in dataloader:
         with torch.no_grad():
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                x = (
-                    model(*to_device(data, rank), embed_only=True)
+                x = [
+                    y
                     .to("cpu")
                     .to(torch.float32)
                     .numpy()
-                )
+                    for y in model(*to_device(data, rank), inference=True)
+                ]
                 users = data[-1].numpy()
                 user_batches.append(users)
                 embed_batches.append(x)
                 progress.update()
+        if len(user_batches) > 100:
+            save(user_batches, embed_batches, shard)
+            shard += 1
+    if len(user_batches) > 0:
+        save(user_batches, embed_batches, shard)            
     progress.close()
     model.train()
-
-    f = h5py.File(os.path.join(outdir, "embeddings.h5"), "w")
-    f.create_dataset("users", data=np.hstack(user_batches))
-    f.create_dataset("embedding", data=np.vstack(embed_batches))
-    detach = lambda x: x.to("cpu").detach().numpy()
-    i = 0
-    for medium in ALL_MEDIUMS:
-        for metric in ALL_METRICS:
-            head = model.classifier[i]
-            if metric in ["watch", "plantowatch"]:
-                head = head[0]
-            f.create_dataset(f"{medium}_{metric}_weight", data=detach(head.weight))
-            f.create_dataset(f"{medium}_{metric}_bias", data=detach(head.bias))
-            i += 1
-    f.close()
-
 
 # checkpoints
 
@@ -484,18 +509,13 @@ def save_model(rank, model, outdir):
 
 
 def compile(model, mode):
-    if mode == "pretrain":
-        # we mask a variable number of tokens in each batch,
-        # so we can't compile the whole model
-        model.embed = torch.compile(model.embed)
-        model.transformers = torch.compile(model.transformers)
-        for i in range(len(model.classifier)):
-            model.classifier[i] = torch.compile(model.classifier[i])
-        return model
-    elif mode == "finetune":
-        return torch.compile(model)
-    else:
-        assert False
+    # we mask a variable number of tokens in each batch,
+    # so we can't compile the whole model
+    model.embed = torch.compile(model.embed)
+    model.transformers = torch.compile(model.transformers)
+    for i in range(len(model.classifier)):
+        model.classifier[i] = torch.compile(model.classifier[i])
+    return model
 
 
 def print_model_size(model, logger):
@@ -644,7 +664,7 @@ def run_process(rank, world_size, name, model_init):
         model = TransformerModel(model_config).to(rank)
         initialize_model(model, name, logger)
         model = compile(model, training_config["mode"])
-        record_predictions(rank, model, outdir, dataloaders["test"])
+        record_predictions(rank, model, outdir, dataloaders["validation"])
 
     dist.destroy_process_group()
 
