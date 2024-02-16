@@ -43,7 +43,7 @@ if !@isdefined COMPRESS_SPLITS_IFNDEF
         @assert inference == isnothing(file)
         if inference
             data["userid"] = Int32[0 for _ = 1:num_items(medium)]
-            data["mediaid"] = Int32.(1:num_items(medium))
+            data["mediaid"] = Int32.(0:num_items(medium)-1)
         else
             type_parser =
                 (_, name) ->
@@ -64,8 +64,8 @@ if !@isdefined COMPRESS_SPLITS_IFNDEF
         data
     end
 
-    function save_dataset(username, medium)
-        dir = "../../data/recommendations/$username/"
+    function save_dataset(username, source, medium)
+        dir = "../../data/recommendations/$source/$username/"
         for split in ["rec_training", "rec_inference"]
             stem = "$dir$medium.$split"
             if split == "rec_training"
@@ -82,6 +82,7 @@ if !@isdefined COMPRESS_SPLITS_IFNDEF
 end
 
 username = ARGS[1]
+source = ARGS[2]
 for medium in ["manga", "anime"]
-    save_dataset(username, medium)
+    save_dataset(username, source, medium)
 end

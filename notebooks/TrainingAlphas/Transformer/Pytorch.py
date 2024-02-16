@@ -508,7 +508,7 @@ def save_model(rank, model, outdir):
     torch.save(model.module.state_dict(), fn)
 
 
-def compile(model, mode):
+def compile(model):
     # we mask a variable number of tokens in each batch,
     # so we can't compile the whole model
     model.embed = torch.compile(model.embed)
@@ -609,7 +609,7 @@ def run_process(rank, world_size, name, model_init):
     model = TransformerModel(model_config).to(rank)
     if model_init is not None:
         initialize_model(model, model_init, logger)
-    model = compile(model, training_config["mode"])
+    model = compile(model)
     print_model_size(model, logger)
     model = DDP(
         model, device_ids=[rank], output_device=rank, find_unused_parameters=True
@@ -663,7 +663,7 @@ def run_process(rank, world_size, name, model_init):
     if training_config["mode"] == "finetune" and rank == 0:
         model = TransformerModel(model_config).to(rank)
         initialize_model(model, name, logger)
-        model = compile(model, training_config["mode"])
+        model = compile(model)
         record_predictions(rank, model, outdir, dataloaders["validation"])
 
     dist.destroy_process_group()
