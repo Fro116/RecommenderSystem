@@ -1,63 +1,24 @@
 import NBInclude: @nbinclude
 if !@isdefined ENSEMBLE_IFNDEF
     ENSEMBLE_IFNDEF = true
-    source_name = "LinearModel"
-    import Logging
     import SparseArrays: sparse
-    @nbinclude("../Alpha.ipynb")
+    @nbinclude("../../TrainingAlphas/Alpha.ipynb")
     @nbinclude("../../TrainingAlphas/Ensemble/EnsembleInputs.ipynb")
     @nbinclude("../../TrainingAlphas/Ensemble/Utility.ipynb")
-    using Flux
     
-    function read_params_quiet(alpha)
-        Logging.disable_logging(Logging.Warn)
-        params = read_params(alpha)
-        Logging.disable_logging(Logging.Debug)  
-        params
-    end
-
-    function read_recommendee_suppressed_alpha(
-        alpha::String,
-        split::String,
-        task::String,
-        medium::String,
-    )
-        @assert split == "all"
-        if alpha in implicit_raw_alphas(task, medium)
-            suppress = true
-            content = "implicit"
-        else
-            suppress = false
-        end
-        df = read_recommendee_alpha(alpha, split, medium)
-        if suppress
-            seen = get_recommendee_split(content, medium)
-            p_seen = sum(df.rating[seen.item])
-            ϵ = sqrt(eps(Float32))
-            if 1 - p_seen > ϵ
-                df.rating[seen.item] .= 0
-                df.rating ./= 1 - p_seen
-            end
-        end
-        df
-    end
-
-    function compute_linear_alpha(
-        alpha::String,
-        content::String,
-        task::String,
-        medium::String,
-    )
-        params = read_params_quiet(alpha)
-        X = []
-        for alpha in params["alphas"]
-            push!(X, read_recommendee_suppressed_alpha(alpha, "all", task, medium).rating)
-        end
-        if content == "implicit"
-            push!(X, fill(1.0f0 / num_items(medium), num_items(medium)))
+    function compute_linear_alpha(metric::String, medium::String)
+        alphas = get_ensemple_alphas(metric, medium)
+        X = [get_raw_split("rec_inference", medium, [:userid], a).alpha for a in alphas]
+        if metric in ["watch", "plantowatch"]
+            push!(X, fill(1.0f0 / num_items(medium), length(X[1])))
+        elseif metric == "drop"
+            push!(X, fill(1.0f0, length(X[1])), fill(0.0f0, length(X[1])))
         end
         X = reduce(hcat, X)
-        write_recommendee_alpha(X * params["β"], medium, alpha)
+        params = read_params("$medium/Linear/$metric", true)
+        e = X * params["β"]
+        model(userids, itemids) = [e[x+1] for x in itemids]
+        write_alpha(model, medium, "$medium/Linear/$metric", REC_SPLITS)
     end
 
     function get_query_features(alphas::Vector{String}, medium::String)
@@ -68,23 +29,43 @@ if !@isdefined ENSEMBLE_IFNDEF
         collect(A')
     end
 
+    function get_mle_features(medium::String)
+        alphas = ["$medium/Linear/$metric" for metric in ALL_METRICS]
+        N = length(get_raw_split("rec_inference", medium, [:userid], nothing).userid)
+        T = Float32
+        A = Matrix{T}(undef, N, length(alphas))
+        for i = 1:length(alphas)
+            x = get_raw_split("rec_inference", medium, [:userid], alphas[i]).alpha
+            # normalize and make monotonic
+            if alphas[i] == "$medium/Linear/rating"
+                x = clamp.(x / 10, 0, 1)
+            elseif alphas[i] in ["$medium/Linear/watch", "$medium/Linear/plantowatch"]
+                nothing
+            elseif alphas[i] == "$medium/Linear/drop"
+                x = 1 .- x
+            else
+                @assert false
+            end
+            @assert minimum(x) >= 0 && maximum(x) <= 1
+            A[:, i] = convert.(T, x)
+        end
+        collect(A')
+    end
+
     function compute_mle_alpha(name::String, medium::String)
-        params = read_params_quiet(name)
-        Q = get_query_features(params["hyp"].alphas, medium)
-        Q = (Q .- params["inference_data"]["μ"]) ./ params["inference_data"]["σ"]
-        m = params["m"]
-        scores = vec(m(Q))
-        write_recommendee_alpha(scores, medium, name)
+        m = read_params(name, true)["m"]
+        F = get_mle_features(medium)
+        e = vec(m(F))
+        model(userids, itemids) = [e[x+1] for x in itemids]
+        write_alpha(model, medium, name, REC_SPLITS)
     end
 end
     
 username = ARGS[1]
+source = ARGS[2]
 for medium in ALL_MEDIUMS
-    for task in ALL_TASKS
-        compute_linear_alpha("$medium/$task/LinearExplicit", "explicit", task, medium)
-        compute_linear_alpha("$medium/$task/LinearImplicit", "implicit", task, medium)
-        for i in 0:6
-            compute_mle_alpha("$medium/$task/MLE.Ensemble.$i", medium)
-        end
+    for metric in ALL_METRICS
+        compute_linear_alpha(metric, medium)
+        compute_mle_alpha("$medium/Ranking", medium)
     end
 end

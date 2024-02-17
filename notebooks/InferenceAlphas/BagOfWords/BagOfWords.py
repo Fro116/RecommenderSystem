@@ -2,19 +2,19 @@ exec(open("../../TrainingAlphas/BagOfWords/BagOfWords.py").read())
 
 import argparse
 import h5py
+import hdf5plugin
 import warnings
 from torch.utils.data import DataLoader, Dataset
 import scipy
 
-
 class InferenceDataset(Dataset):
     def __init__(self, file):
+        self.filename = file
         f = h5py.File(file, "r")
+        self.length = np.array(f[f"epoch_size"]).item()
         self.inputs = self.process_sparse_matrix(f, "inputs")
-        self.users = f["users"][:]
-        self.indices = self.users - 1  # julia uses 1-indexing
+        self.users = f["users"][:]        
         f.close()
-
 
     def process_sparse_matrix(self, f, name):
         i = f[f"{name}_i"][:] - 1
@@ -24,17 +24,15 @@ class InferenceDataset(Dataset):
         return scipy.sparse.coo_matrix((v, (j, i)), shape=(n, m)).tocsr()
 
     def __len__(self):
-        return len(self.users)
+        return self.length
 
     def __getitem__(self, i):
+        X = self.inputs[i, :]
         user = self.users[i]
-        X = self.inputs[self.indices[i], :]
         return X, user
-
 
 def to_sparse_tensor(csr):
     return torch.sparse_csr_tensor(csr.indptr, csr.indices, csr.data, csr.shape)
-
 
 def get_device():
     return "cpu"
@@ -51,9 +49,7 @@ def create_model(config, outdir, device):
     model = BagOfWordsModel(config)
     model.load_state_dict(load_model(outdir, map_location="cpu"))
     model = model.to(device)
-    model = torch.compile(model)
     return model
-
 
 def record_predictions(model, outdir, dataloader):
     user_batches = []
@@ -78,10 +74,8 @@ def record_predictions(model, outdir, dataloader):
     f.create_dataset("predictions", data=np.vstack(embed_batches))
     f.close()
 
-    
-    
-def save_embeddings(username, medium, task, content, version):
-    base_dir = os.path.join("alphas", medium, task, "BagOfWords", content, "v1")
+def save_embeddings(username, source, medium, metric, version):
+    base_dir = os.path.join("alphas", medium, "BagOfWords", "v1", metric)
     source_dir = get_data_path(base_dir)
     model_file = os.path.join(source_dir, "model.pt")    
     config_file = os.path.join(source_dir, "config.json")
@@ -90,7 +84,7 @@ def save_embeddings(username, medium, task, content, version):
     model = create_model(config, source_dir, device)
     warnings.filterwarnings("ignore")
     
-    outdir = get_data_path(os.path.join("recommendations", username, base_dir))
+    outdir = get_data_path(os.path.join("recommendations", source, username, base_dir))
     dataloader = DataLoader(
         InferenceDataset(os.path.join(outdir, "inference.h5")),
         batch_size=16,
@@ -99,14 +93,13 @@ def save_embeddings(username, medium, task, content, version):
     )    
     record_predictions(model, outdir, dataloader)              
     
-    
 parser = argparse.ArgumentParser(description="BagOfWords")
 parser.add_argument("--username", type=str, help="username")
+parser.add_argument("--source", type=str, help="username")
 parser.add_argument("--medium", type=str, help="medium")
-parser.add_argument("--task", type=str, help="task")
-parser.add_argument("--content", type=str, help="content")
+parser.add_argument("--metric", type=str, help="content")
 parser.add_argument("--version", type=str, help="version")
 args = parser.parse_args()    
 
 if __name__ == "__main__":
-    save_embeddings(args.username, args.medium, args.task, args.content, args.version)
+    save_embeddings(args.username, args.source, args.medium, args.metric, args.version)
