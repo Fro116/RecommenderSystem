@@ -92,7 +92,7 @@ def create_training_config(config_file, mode):
         "output_size_index": config["output_size_index"],
         "metric": config["metric"],
         # training
-        "peak_learning_rate": 4e-5 if mode == "pretrain" else 4e-6,  # TODO scan
+        "peak_learning_rate": 4e-5 if mode == "pretrain" else 4e-6,
         "weight_decay": 1e-2,
         "mask_rate": config["mask_rate"],
         "batch_size": 2048,

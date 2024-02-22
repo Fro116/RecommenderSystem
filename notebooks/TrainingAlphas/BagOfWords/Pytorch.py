@@ -299,7 +299,7 @@ def train(config, outdir, logger, training, test):
     logger.info(f"Initial Loss: {initial_loss}")
     stopper(initial_loss[0])
 
-    for epoch in range(starting_epoch, 100):  # TODO  decay on plateau
+    for epoch in range(starting_epoch, 100):
         training_loss = train_epoch(
             outdir,
             model,
