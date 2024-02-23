@@ -30,13 +30,13 @@ exec(open("./BagOfWords.py").read())
 
 
 def get_logger(outdir):
-    logger = logging.getLogger(f"pytorch")
+    logger = logging.getLogger("pytorch")
     logger.setLevel(logging.DEBUG)
     formatter = logging.Formatter(
         "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
     version = 0
-    filename = os.path.join(outdir, f"pytorch.log")
+    filename = os.path.join(outdir, "pytorch.log")
     while os.path.exists(filename):
         version += 1
         filename = os.path.join(outdir, f"pytorch.log.{version}")
@@ -182,11 +182,7 @@ class EarlyStopper:
 def train_epoch(outdir, model, dataloader, config, optimizer, scaler, device):
     training_loss = 0.0
     training_weights = 0
-    progress = tqdm(
-        desc=f"Batches",
-        total=len(dataloader),
-        mininterval=1,
-    )
+    progress = tqdm(desc="Training batches", total=len(dataloader), mininterval=1)
     for data in dataloader:
         optimizer.zero_grad(set_to_none=True)
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
@@ -219,11 +215,7 @@ def minimize_quadratic(x, y):
 def evaluate_metrics(outdir, model, dataloader, config, device):
     losses = [0.0, 0.0, 0.0] if config["metric"] == "rating" else 0.0
     weights = 0.0
-    progress = tqdm(
-        desc=f"Batches",
-        total=len(dataloader),
-        mininterval=1,
-    )
+    progress = tqdm(desc="Test batches", total=len(dataloader), mininterval=1)
     model.eval()
     for data in dataloader:
         with torch.no_grad():
@@ -330,11 +322,7 @@ def record_predictions(model, outdir, dataloader):
     found_users = set()
     while len(found_users) < len(dataloader.dataset):
         # so we don't miss any users from having num_dataloader_workers > 1
-        progress = tqdm(
-            desc=f"Batches",
-            total=len(dataloader),
-            mininterval=1,
-        )
+        progress = tqdm(desc="Inference batches", total=len(dataloader), mininterval=1)
         for data in dataloader:
             with torch.no_grad():
                 with torch.cuda.amp.autocast(dtype=torch.bfloat16):

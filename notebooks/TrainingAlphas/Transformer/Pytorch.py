@@ -353,12 +353,7 @@ def train_epoch(
 ):
     training_losses = [0.0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
     training_steps = [0.0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
-    progress = tqdm(
-        desc=f"Batches",
-        total=len(dataloader),
-        mininterval=1,
-        disable=rank != 0,
-    )
+    progress = tqdm(desc="Training batches", total=len(dataloader), mininterval=1, disable=rank != 0)
     for data in dataloader:
         optimizer.zero_grad(set_to_none=True)
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
@@ -394,12 +389,7 @@ def evaluate_metrics(rank, model, dataloader):
     init = lambda metric: [0, 0, 0] if metric == "rating" else 0
     losses = [init(metric) for m in ALL_MEDIUMS for metric in ALL_METRICS]
     weights = [0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
-    progress = tqdm(
-        desc=f"Batches",
-        total=len(dataloader),
-        mininterval=1,
-        disable=rank != 0,
-    )
+    progress = tqdm(desc="Test batches", total=len(dataloader), mininterval=1, disable=rank != 0)
     model.eval()
     for data in dataloader:
         with torch.no_grad():
@@ -442,12 +432,7 @@ def record_predictions(rank, model, outdir, dataloader):
     user_batches = []
     embed_batches = []
     shard = 0
-    progress = tqdm(
-        desc=f"Batches",
-        total=len(dataloader),
-        mininterval=1,
-        disable=rank != 0,
-    )
+    progress = tqdm(desc="Inference batches", total=len(dataloader), mininterval=1, disable=rank != 0)
     model.eval()
     for data in dataloader:
         with torch.no_grad():
@@ -484,7 +469,7 @@ def get_logger(outdir, rank):
         "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
     version = 0
-    filename = os.path.join(outdir, f"pytorch.log")
+    filename = os.path.join(outdir, "pytorch.log")
     while os.path.exists(filename):
         version += 1
         filename = os.path.join(outdir, f"pytorch.log.{version}")
