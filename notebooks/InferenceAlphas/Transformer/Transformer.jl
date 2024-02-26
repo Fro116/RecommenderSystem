@@ -2,7 +2,6 @@ import NBInclude: @nbinclude
 if !@isdefined TRANSFORMER_IFNDEF
     TRANSFORMER_IFNDEF = true
 
-    source_name = "Transformer"
     import H5Zblosc
     import HDF5
     import JSON

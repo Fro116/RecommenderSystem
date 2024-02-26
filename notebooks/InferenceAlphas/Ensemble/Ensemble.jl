@@ -1,11 +1,11 @@
 import NBInclude: @nbinclude
 if !@isdefined ENSEMBLE_IFNDEF
     ENSEMBLE_IFNDEF = true
-    import SparseArrays: sparse
+    import H5Zblosc
+    import HDF5
     @nbinclude("../../TrainingAlphas/Alpha.ipynb")
     @nbinclude("../../TrainingAlphas/Ensemble/EnsembleInputs.ipynb")
-    @nbinclude("../../TrainingAlphas/Ensemble/Utility.ipynb")
-    
+
     function compute_linear_alpha(metric::String, medium::String)
         alphas = get_ensemple_alphas(metric, medium)
         X = [get_raw_split("rec_inference", medium, [:userid], a).alpha for a in alphas]
@@ -19,14 +19,6 @@ if !@isdefined ENSEMBLE_IFNDEF
         e = X * params["β"]
         model(userids, itemids) = [e[x+1] for x in itemids]
         write_alpha(model, medium, "$medium/Linear/$metric", REC_SPLITS)
-    end
-
-    function get_query_features(alphas::Vector{String}, medium::String)
-        A = Matrix{Float32}(undef, num_items(medium), length(alphas))
-        Threads.@threads for i = 1:length(alphas)
-            A[:, i] = read_recommendee_alpha(alphas[i], "all", medium).rating
-        end
-        collect(A')
     end
 
     function get_mle_features(medium::String)
@@ -52,20 +44,49 @@ if !@isdefined ENSEMBLE_IFNDEF
         collect(A')
     end
 
+    function save_features(outdir)
+        mkpath(outdir)
+        filename = joinpath(outdir, "inference.h5")
+        d = Dict{String,Any}()
+        X = get_epoch_inputs()
+        record_sparse_array!(d, "inputs", X)
+        d["epoch_size"] = 1
+        d["users"] = [0]
+        HDF5.h5open(filename, "w") do file
+            for (k, v) in d
+                file[k, blosc = 1] = v
+            end
+        end
+    end
+
     function compute_mle_alpha(name::String, medium::String)
-        m = read_params(name, true)["m"]
+        outdir = joinpath(
+            get_data_path("recommendations/$(get_rec_usertag())"),
+            "alphas",
+            medium,
+            "Ranking",
+        )
+        mkpath(outdir)
+        filename = joinpath(outdir, "inference.h5")
         F = get_mle_features(medium)
-        e = vec(m(F))
+        HDF5.h5open(filename, "w") do file
+            file["features", blosc = 1] = F
+        end
+        cmd = `python3 Ranking.py --outdir $outdir --medium $medium`
+        run(cmd)
+        file = HDF5.h5open(joinpath(outdir, "predictions.h5"), "r")
+        e = vec(read(file["predictions"]))
+        close(file)
         model(userids, itemids) = [e[x+1] for x in itemids]
         write_alpha(model, medium, name, REC_SPLITS)
     end
 end
-    
+
 username = ARGS[1]
 source = ARGS[2]
 for medium in ALL_MEDIUMS
     for metric in ALL_METRICS
         compute_linear_alpha(metric, medium)
-        compute_mle_alpha("$medium/Ranking", medium)
     end
+    compute_mle_alpha("$medium/Ranking", medium)
 end

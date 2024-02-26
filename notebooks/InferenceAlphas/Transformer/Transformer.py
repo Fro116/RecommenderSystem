@@ -51,13 +51,12 @@ def to_device(data, device):
 
     
 def save_embeddings(source, username, medium):
-    # device = torch.device("cuda")
     device = torch.device("cpu")
     source_dir = get_data_path(os.path.join("alphas", medium, "Transformer", "v1"))
     model_file = os.path.join(source_dir, "model.pt")    
     training_config = create_training_config(get_data_path(os.path.join("alphas", "all", "Transformer", "v1")))
     training_config["mode"] = "finetune"
-    warnings.filterwarnings("ignore")    
+    warnings.filterwarnings("ignore")
     model_config = create_model_config(training_config)
     model = TransformerModel(model_config)
     model.load_state_dict(load_model(model_file, map_location="cpu"))

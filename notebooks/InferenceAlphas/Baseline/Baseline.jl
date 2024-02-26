@@ -2,7 +2,6 @@ import NBInclude: @nbinclude
 import Memoize: @memoize
 if !@isdefined BASELINE_IFNDEF
     BASELINE_IFNDEF = true
-    source_name = "ExplicitUserItemBiases"
     @nbinclude("../../TrainingAlphas/Alpha.ipynb")
     @nbinclude("../../TrainingAlphas/Baseline/BaselineHelper.ipynb")
 

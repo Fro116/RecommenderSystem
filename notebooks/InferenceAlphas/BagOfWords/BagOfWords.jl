@@ -4,7 +4,6 @@ import Memoize: @memoize
 if !@isdefined BAGOFWORDS_IFNDEF
     BAGOFWORDS_IFNDEF = true
 
-    source_name = "BagOfWords"
     import H5Zblosc
     import HDF5
     import JSON

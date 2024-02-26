@@ -191,7 +191,7 @@ def train_epoch(outdir, model, dataloader, config, optimizer, scaler, device):
                 *dev_data,
                 mask=config["mask"],
                 evaluate=False,
-                predict=False,
+                inference=False,
             )
             training_weights += 1
         scaler.scale(loss).backward()
@@ -331,7 +331,7 @@ def record_predictions(model, outdir, dataloader):
                             *to_device(data, device),
                             mask=False,
                             evaluate=False,
-                            predict=True,
+                            inference=True,
                         )
                         .to("cpu")
                         .to(torch.float32)

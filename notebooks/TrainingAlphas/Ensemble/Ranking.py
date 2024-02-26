@@ -45,7 +45,9 @@ class RankingModel(nn.Module):
         logdenom = torch.log(torch.matmul(p, eq) + eq)
         return -(w * (lognumer - logdenom)).sum() / w.sum()
 
-    def forward(self, feats, prios):
+    def forward(self, feats, prios, inference=False):
+        if inference:
+            return self.model(feats)
         return self.mle_loss(self.model, feats, prios, self.interaction_weights)
 
 

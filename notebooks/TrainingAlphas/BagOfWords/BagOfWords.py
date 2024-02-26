@@ -53,8 +53,8 @@ class BagOfWordsModel(nn.Module):
             reduction = "sum",
         )
 
-    def forward(self, inputs, labels, weights, mask, evaluate, predict):
-        if predict:
+    def forward(self, inputs, labels, weights, mask, evaluate, inference):
+        if inference:
             x = self.model(inputs)
             if self.metric in ["watch", "plantowatch"]:
                 x = self.softmax(x)

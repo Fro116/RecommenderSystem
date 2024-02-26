@@ -60,7 +60,7 @@ def record_predictions(model, outdir, dataloader):
         with torch.no_grad():
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                 x = (
-                    model(*to_device(data, device), None, None, mask=False, evaluate=False, predict=True)
+                    model(*to_device(data, device), None, None, mask=False, evaluate=False, inference=True)
                     .to("cpu")
                     .to(torch.float32)
                     .numpy()
@@ -83,7 +83,6 @@ def save_embeddings(username, source, medium, metric, version):
     device = get_device()    
     model = create_model(config, source_dir, device)
     warnings.filterwarnings("ignore")
-    
     outdir = get_data_path(os.path.join("recommendations", source, username, base_dir))
     dataloader = DataLoader(
         InferenceDataset(os.path.join(outdir, "inference.h5")),

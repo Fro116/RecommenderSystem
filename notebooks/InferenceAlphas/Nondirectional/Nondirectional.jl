@@ -2,7 +2,6 @@ import NBInclude: @nbinclude
 
 if !@isdefined NONDIRECTIONAL_IFNDEF
     NONDIRECTIONAL_IFNDEF = true
-    source_name = "Nondirectional"
     @nbinclude("../../TrainingAlphas/Alpha.ipynb")
 
     function read_similarity_matrix(outdir)
