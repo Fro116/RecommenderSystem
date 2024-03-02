@@ -12,19 +12,19 @@ if !@isdefined TRANSFORMER_IFNDEF
     @nbinclude("../../TrainingAlphas/Transformer/Data.ipynb")
 
     function get_training_data(df::RatingsDataset, cls_tokens, max_seq_length)
-        sentences = Dict{Int32,Vector{wordtype}}()
         function itemids(uid, medium)
             tokens = [cls_tokens[i] for i = 1:length(ALL_MEDIUMS)]
             tokens[medium+1] = uid
             tokens
         end
+        sentence = Vector{wordtype}()
+        userid = 0
+        @assert all(df.userid .== userid)
+        push!(sentence, replace(cls_tokens, :userid, userid))
         # need to sort by updated_at because we're combining multiple_media
         order = sortperm(collect(zip(df.updated_at, -df.update_order)))
         for idx = 1:length(order)
             i = order[idx]
-            if df.userid[i] ∉ keys(sentences)
-                sentences[df.userid[i]] = [replace(cls_tokens, :userid, df.userid[i])]
-            end
             word = convert(
                 wordtype,
                 (
@@ -41,17 +41,21 @@ if !@isdefined TRANSFORMER_IFNDEF
                     Float32(1 - 1 / (df.priority[i] + 1)),
                     df.sentiment[i],
                     df.sentiment_score[i],
-                    (length(sentences[df.userid[i]]) - 1) % max_seq_length,
+                    (length(sentence) - 1) % max_seq_length,
                     df.userid[i],
                 ),
             )
-            push!(sentences[df.userid[i]], word)
+            push!(sentence, word)
         end
-        sentences
+        sentence
     end
 
-
-    function get_training_data(cls_tokens, max_seq_length)
+    function get_training_data(
+        cls_tokens,
+        max_seq_length,
+        target_medium::String,
+        exclude_ptw::Bool,
+    )
         function get_df(medium)
             fields = [
                 :itemid,
@@ -71,25 +75,22 @@ if !@isdefined TRANSFORMER_IFNDEF
                 :medium,
                 :update_order,
             ]
-            get_raw_split("rec_training", medium, fields, nothing)
+            df = get_raw_split("rec_training", medium, fields, nothing)
+            if exclude_ptw && medium == target_medium
+                df = filter(df, df.status .!= get_status(:plan_to_watch))
+            end
+            df
         end
         dfs = [get_df(medium) for medium in ALL_MEDIUMS]
         df = reduce(cat, dfs)
         get_training_data(df, cls_tokens, max_seq_length)
     end
 
-    function tokenize(sentences, medium, config)
-        userid = 0
-        if userid in keys(sentences)
-            sentence = copy(sentences[userid])
-        else
-            sentence = Vector{wordtype}()
-            push!(sentence, replace(config[:cls_tokens], :userid, userid))
-        end
+    function tokenize(sentence, medium, config)
         tokenize(;
-            sentence = sentence,
+            sentence = copy(sentence),
             medium = medium,
-            userid = userid,
+            userid = 0,
             max_seq_len = config[:max_sequence_length],
             vocab_sizes = config[:vocab_sizes],
             pad_tokens = config[:pad_tokens],
@@ -122,7 +123,7 @@ if !@isdefined TRANSFORMER_IFNDEF
     end
 
     function save_tokens(sentences, medium, config, filename)
-        tokens = [tokenize(sentences, medium, config)]
+        tokens = [tokenize(x, medium, config) for x in sentences]
         d = Dict{String,AbstractArray}()
         collate = MLUtils.batch
         for (i, name) in Iterators.enumerate(config.vocab_names)
@@ -152,31 +153,47 @@ if !@isdefined TRANSFORMER_IFNDEF
         config = NamedTuple(Symbol.(keys(d)) .=> values(d))
         close(f)
 
-        sentences = get_training_data(config[:cls_tokens], config[:max_sequence_length])
+        sentences = [
+            get_training_data(
+                config[:cls_tokens],
+                config[:max_sequence_length],
+                medium,
+                include_ptw,
+            ) for include_ptw in [false, true]
+        ]
         save_tokens(sentences, medium, config, "$outdir/inference.h5")
         run(`python3 Transformer.py --source $source --username $username --medium $medium`)
         file = HDF5.h5open(joinpath(outdir, "embeddings.h5"), "r")
         seen = get_raw_split("rec_training", medium, [:itemid], nothing).itemid
+        ptw = get_split("rec_training", "plantowatch", medium, [:itemid], nothing).itemid
+        watched = [x for x in seen if x ∉ Set(ptw)]
         for metric in ALL_METRICS
-            e = read(file["$(medium)_$(metric)"])
+            M = read(file["$(medium)_$(metric)"])
+            r = M[:, 1] # regular items
+            p = M[:, 2] # plantowatch items
             if metric in ["watch", "plantowatch"]
-                e = exp.(e) # the model saves log-softmax values
-                e[seen.+1] .= 0 # zero out watched items
-                e = e ./ sum(e)
+                r = exp.(r)
+                r[seen.+1] .= 0
+                r = r ./ sum(r)
+                p = exp.(p)
+                p[watched.+1] .= 0
+                p = p ./ sum(p)
             elseif metric == "drop"
-                e = sigmoid.(e)
+                r = sigmoid.(r)
+                p = sigmoid.(p)
             end
+            e = copy(r)
+            e[ptw.+1] .= p[ptw.+1]
             model(userids, itemids) = [e[x+1] for x in itemids]
             write_alpha(model, medium, "$medium/Transformer/$version/$metric", REC_SPLITS)
         end
         close(file)
     end
-end;
+end
 
 username = ARGS[1]
 source = ARGS[2]
 version = "v1"
 for medium in ALL_MEDIUMS
-    # TODO handle ptw items
     compute_alpha(source, username, medium, version)
 end

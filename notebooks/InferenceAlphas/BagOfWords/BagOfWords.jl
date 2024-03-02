@@ -79,8 +79,19 @@ if !@isdefined BAGOFWORDS_IFNDEF
         e = vec(read(file["predictions"]))
         seen = get_raw_split("rec_training", medium, [:itemid], nothing).itemid
         if metric in ["watch", "plantowatch"]
-            e[seen.+1] .= 0 # zero out watched items
-            e = e ./ sum(e)
+            # make preds for regular items
+            r = copy(e)
+            r[seen.+1] .= 0
+            r = r ./ sum(r)            
+            # make preds for plantowatch items
+            p = copy(e)
+            ptw = get_split("rec_training", "plantowatch", medium, [:itemid], nothing).itemid
+            watched = setdiff(Set(seen), Set(ptw))
+            p[watched.+1] .= 0
+            p = p ./ sum(p)
+            # combine preds
+            e = copy(r)
+            e[ptw.+1] .= p[ptw.+1]
         elseif metric in ["rating", "drop"]
             nothing
         else

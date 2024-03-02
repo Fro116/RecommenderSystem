@@ -27,7 +27,7 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
         x = zeros(Float32, num_items(medium))
         x[df.itemid .+ 1] .= 1
         S = read_similarity_matrix("$name/similarity_matrix")
-        preds = S * x        
+        preds = S * x
         write_recommendee_alpha(preds, medium, name)
     end
 
