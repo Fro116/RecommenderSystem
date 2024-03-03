@@ -14,19 +14,16 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
     end
 
     function get_recommendee_split(medium)
-        get_split(
-            "rec_training",
-            "watch",
-            medium,
-            [:itemid, :status],
-        )        
+        df = get_raw_split("rec_training", medium, [:itemid, :status], nothing)
+        invalid_statuses = get_status.([:plan_to_watch, :wont_watch, :none])
+        filter(df, df.status .∉ (invalid_statuses,))        
     end
 
     function compute_related_series_alpha(name, medium)
         df = get_recommendee_split(medium)
         x = zeros(Float32, num_items(medium))
         x[df.itemid .+ 1] .= 1
-        S = read_similarity_matrix("$name/similarity_matrix")
+        S = read_similarity_matrix(name)
         preds = S * x
         write_recommendee_alpha(preds, medium, name)
     end
@@ -49,10 +46,9 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
 
     function compute_sequel_series_alpha(name, medium)
         df = get_recommendee_split(medium)
-        df = filter(df, df.status .>= get_status(:completed))
         x = zeros(Float32, num_items(medium))
         x[df.itemid .+ 1] .= 1
-        S = read_similarity_matrix("$name/similarity_matrix")
+        S = read_similarity_matrix(name)
         preds = S * x
         write_recommendee_alpha(preds, medium, name)
     end
@@ -61,8 +57,8 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
         df = get_recommendee_split(medium)
         df = filter(df, df.status .>= get_status(:completed))
         x = ones(Float32, num_items(medium))
-        x[df.itemid] .= 0
-        S = read_similarity_matrix("$name/similarity_matrix")
+        x[df.itemid .+ 1] .= 0
+        S = read_similarity_matrix(name)
         preds = S * x
         write_recommendee_alpha(preds, medium, outdir)
     end    
