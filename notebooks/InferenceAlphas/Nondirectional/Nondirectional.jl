@@ -46,6 +46,7 @@ if !@isdefined NONDIRECTIONAL_IFNDEF
 
     function compute_sequel_series_alpha(name, medium)
         df = get_recommendee_split(medium)
+        df = filter(df, df.status .>= get_status(:completed))
         x = zeros(Float32, num_items(medium))
         x[df.itemid .+ 1] .= 1
         S = read_similarity_matrix(name)
