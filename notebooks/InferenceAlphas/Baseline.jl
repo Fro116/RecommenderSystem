@@ -1,9 +1,9 @@
 import NBInclude: @nbinclude
 import Memoize: @memoize
-if !@isdefined BASELINE_IFNDEF
-    BASELINE_IFNDEF = true
-    @nbinclude("../../TrainingAlphas/Alpha.ipynb")
-    @nbinclude("../../TrainingAlphas/Baseline/BaselineHelper.ipynb")
+if !@isdefined IFNDEF
+    IFNDEF = true
+    @nbinclude("../TrainingAlphas/Alpha.ipynb")
+    @nbinclude("../TrainingAlphas/Baseline/BaselineHelper.ipynb")
 
     get_training_counts(df, col) = get_counts(getfield(df, col))
 
@@ -39,12 +39,15 @@ if !@isdefined BASELINE_IFNDEF
         u
     end
 
-    function compute_alpha(medium)
+    function compute_alpha(username, source, medium)
         training = get_split(
             "rec_training",
             "rating",
             medium,
             [:userid, :itemid, :rating, :update_order, :updated_at],
+            nothing,
+            username,
+            source
         )
         alpha = "$medium/Baseline/rating"
         params = read_params(alpha, false)
@@ -56,12 +59,14 @@ if !@isdefined BASELINE_IFNDEF
             params["a"],
         )
         model(userids, itemids) = [preds[x+1] for x in itemids]
-        write_alpha(model, medium, alpha, REC_SPLITS)
+        write_alpha(model, medium, alpha, REC_SPLITS, username, source)
+    end
+
+    function runscript(username, source)
+        Threads.@threads for medium in ALL_MEDIUMS
+            compute_alpha(username, source, medium)
+        end        
     end
 end
 
-username = ARGS[1]
-source = ARGS[2]
-for medium in ALL_MEDIUMS
-    compute_alpha(medium)
-end
+runscript(ARGS...)

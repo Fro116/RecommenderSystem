@@ -1,15 +1,14 @@
-using CSV
-using DataFrames
-using JLD2
-using Memoize
+import DataFrames: DataFrame
+import Memoize: @memoize
 
-if !@isdefined COMPRESS_SPLITS_IFNDEF
-    COMPRESS_SPLITS_IFNDEF = true
+if !@isdefined INFDEF
+    INFDEF = true
+    import CSV
+    import JLD2
 
     function split_save(file, values)
-        # save in multiple files to allow multithreaded reading
-        for (k, v) in values
-            JLD2.save("$file.$k.jld2", Dict(k => v), compress = true)
+        Threads.@threads for k in collect(keys(values))
+            JLD2.save("$file.$k.jld2", Dict(k => values[k]), compress = true)
         end
     end
 
@@ -69,8 +68,7 @@ if !@isdefined COMPRESS_SPLITS_IFNDEF
         for split in ["rec_training", "rec_inference"]
             stem = "$dir$medium.$split"
             if split == "rec_training"
-                dataset =
-                    get_dataset(false, medium, "$dir/user_$(medium)_list.csv")
+                dataset = get_dataset(false, medium, "$dir/user_$(medium)_list.csv")
             elseif split == "rec_inference"
                 dataset = get_dataset(true, medium, nothing)
             else
@@ -79,10 +77,12 @@ if !@isdefined COMPRESS_SPLITS_IFNDEF
             split_save("$dir/splits/$split.$medium", dataset)
         end
     end
+
+    function runscript(username, source)
+        Threads.@threads for medium in ["manga", "anime"]
+            save_dataset(username, source, medium)
+        end
+    end
 end
 
-username = ARGS[1]
-source = ARGS[2]
-for medium in ["manga", "anime"]
-    save_dataset(username, source, medium)
-end
+runscript(ARGS...)

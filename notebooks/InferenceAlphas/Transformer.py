@@ -1,4 +1,4 @@
-exec(open("../../TrainingAlphas/Transformer/Transformer.py").read())
+exec(open("../TrainingAlphas/Transformer/Transformer.py").read())
 
 import argparse
 import h5py
@@ -62,13 +62,12 @@ def save_embeddings(source, username, medium):
     model.load_state_dict(load_model(model_file, map_location="cpu"))
     model = model.to(device)
     model.eval()
-    
-    outdir = get_data_path(
-        f"recommendations/{source}/{username}/alphas/{medium}/Transformer/v1"
-    )    
+
     dataloader = DataLoader(
         InferenceDataset(
-            os.path.join(outdir, "inference.h5"),
+            get_data_path(
+                f"recommendations/{source}/{username}/alphas/Transformer/v1/inference.h5"
+            ),
             training_config["vocab_names"],
             training_config["vocab_types"],            
         ),
@@ -92,7 +91,9 @@ def save_embeddings(source, username, medium):
                 users = data[-1].numpy()
                 user_batches.append(users)
                 embed_batches.append(x)
-    f = h5py.File(os.path.join(outdir, f"embeddings.h5"), "w")
+    outdir = get_data_path(f"recommendations/{source}/{username}/alphas/{medium}/Transformer/v1")
+    os.makedirs(outdir, exist_ok=True)
+    f = h5py.File(os.path.join(outdir, "embeddings.h5"), "w")
     f.create_dataset("users", data=np.hstack(user_batches))
     i = 0
     for medium in ALL_MEDIUMS:

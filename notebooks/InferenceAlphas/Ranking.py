@@ -1,4 +1,4 @@
-exec(open("../../TrainingAlphas/Ensemble/Ranking.py").read())
+exec(open("../TrainingAlphas/Ensemble/Ranking.py").read())
 
 import argparse
 

@@ -1,6 +1,7 @@
 import NBInclude: @nbinclude
-if !@isdefined TRANSFORMER_IFNDEF
-    TRANSFORMER_IFNDEF = true
+
+if !@isdefined INFDEF
+    INFDEF = true
 
     import H5Zblosc
     import HDF5
@@ -8,8 +9,8 @@ if !@isdefined TRANSFORMER_IFNDEF
     import MLUtils
     import NNlib: sigmoid
     import Random
-    @nbinclude("../../TrainingAlphas/Alpha.ipynb")
-    @nbinclude("../../TrainingAlphas/Transformer/Data.ipynb")
+    @nbinclude("../TrainingAlphas/Alpha.ipynb")
+    @nbinclude("../TrainingAlphas/Transformer/Data.ipynb")
 
     function get_training_data(df::RatingsDataset, cls_tokens, max_seq_length)
         function itemids(uid, medium)
@@ -53,8 +54,9 @@ if !@isdefined TRANSFORMER_IFNDEF
     function get_training_data(
         cls_tokens,
         max_seq_length,
-        target_medium::String,
         exclude_ptw::Bool,
+        username::String,
+        source::String,
     )
         function get_df(medium)
             fields = [
@@ -75,8 +77,8 @@ if !@isdefined TRANSFORMER_IFNDEF
                 :medium,
                 :update_order,
             ]
-            df = get_raw_split("rec_training", medium, fields, nothing)
-            if exclude_ptw && medium == target_medium
+            df = get_raw_split("rec_training", medium, fields, nothing, username, source)
+            if exclude_ptw
                 df = filter(df, df.status .!= get_status(:plan_to_watch))
             end
             df
@@ -86,10 +88,9 @@ if !@isdefined TRANSFORMER_IFNDEF
         get_training_data(df, cls_tokens, max_seq_length)
     end
 
-    function tokenize(sentence, medium, config)
+    function tokenize(sentence, config)
         tokenize(;
             sentence = copy(sentence),
-            medium = medium,
             userid = 0,
             max_seq_len = config[:max_sequence_length],
             vocab_sizes = config[:vocab_sizes],
@@ -101,7 +102,6 @@ if !@isdefined TRANSFORMER_IFNDEF
 
     function tokenize(;
         sentence::Vector{wordtype},
-        medium,
         userid,
         max_seq_len,
         vocab_sizes,
@@ -122,8 +122,8 @@ if !@isdefined TRANSFORMER_IFNDEF
         tokens, positions
     end
 
-    function save_tokens(sentences, medium, config, filename)
-        tokens = [tokenize(x, medium, config) for x in sentences]
+    function save_tokens(sentences, config, filename)
+        tokens = [tokenize(x, config) for x in sentences]
         d = Dict{String,AbstractArray}()
         collate = MLUtils.batch
         for (i, name) in Iterators.enumerate(config.vocab_names)
@@ -137,11 +137,10 @@ if !@isdefined TRANSFORMER_IFNDEF
         end
     end
 
-    function compute_alpha(source, username, medium, version)
+    function save_training_data(username, source, version)
         outdir = joinpath(
-            get_data_path("recommendations/$(get_rec_usertag())"),
+            get_data_path("recommendations/$source/$username"),
             "alphas",
-            medium,
             "Transformer",
             version,
         )
@@ -157,16 +156,44 @@ if !@isdefined TRANSFORMER_IFNDEF
             get_training_data(
                 config[:cls_tokens],
                 config[:max_sequence_length],
-                medium,
                 include_ptw,
+                username,
+                source,
             ) for include_ptw in [false, true]
         ]
-        save_tokens(sentences, medium, config, "$outdir/inference.h5")
+        save_tokens(sentences, config, "$outdir/inference.h5")
+    end
+
+    function compute_alpha(username, source, medium, version)
         run(`python3 Transformer.py --source $source --username $username --medium $medium`)
-        file = HDF5.h5open(joinpath(outdir, "embeddings.h5"), "r")
-        seen = get_raw_split("rec_training", medium, [:itemid], nothing).itemid
-        ptw = get_split("rec_training", "plantowatch", medium, [:itemid], nothing).itemid
+        seen =
+            get_raw_split(
+                "rec_training",
+                medium,
+                [:itemid],
+                nothing,
+                username,
+                source,
+            ).itemid
+        ptw =
+            get_split(
+                "rec_training",
+                "plantowatch",
+                medium,
+                [:itemid],
+                nothing,
+                username,
+                source,
+            ).itemid
         watched = [x for x in seen if x ∉ Set(ptw)]
+        outdir = joinpath(
+            get_data_path("recommendations/$source/$username"),
+            "alphas",
+            medium,
+            "Transformer",
+            version,
+        )
+        file = HDF5.h5open(joinpath(outdir, "embeddings.h5"), "r")
         for metric in ALL_METRICS
             M = read(file["$(medium)_$(metric)"])
             r = M[:, 1] # regular items
@@ -185,15 +212,25 @@ if !@isdefined TRANSFORMER_IFNDEF
             e = copy(r)
             e[ptw.+1] .= p[ptw.+1]
             model(userids, itemids) = [e[x+1] for x in itemids]
-            write_alpha(model, medium, "$medium/Transformer/$version/$metric", REC_SPLITS)
+            write_alpha(
+                model,
+                medium,
+                "$medium/Transformer/$version/$metric",
+                REC_SPLITS,
+                username,
+                source,
+            )
         end
         close(file)
     end
+
+    function runscript(username, source)
+        version = "v1"
+        save_training_data("TAAPAye", "anilist", "v1")
+        Threads.@threads for medium in ALL_MEDIUMS
+            compute_alpha(username, source, medium, version)
+        end
+    end
 end
 
-username = ARGS[1]
-source = ARGS[2]
-version = "v1"
-for medium in ALL_MEDIUMS
-    compute_alpha(source, username, medium, version)
-end
+runscript(ARGS...)

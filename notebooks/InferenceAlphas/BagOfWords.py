@@ -1,4 +1,4 @@
-exec(open("../../TrainingAlphas/BagOfWords/BagOfWords.py").read())
+exec(open("../TrainingAlphas/BagOfWords/BagOfWords.py").read())
 
 import argparse
 import h5py
@@ -83,13 +83,15 @@ def save_embeddings(username, source, medium, metric, version):
     device = get_device()    
     model = create_model(config, source_dir, device)
     warnings.filterwarnings("ignore")
-    outdir = get_data_path(os.path.join("recommendations", source, username, base_dir))
+    datadir = get_data_path(os.path.join("recommendations", source, username, "alphas", "BagOfWords", "v1"))    
     dataloader = DataLoader(
-        InferenceDataset(os.path.join(outdir, "inference.h5")),
+        InferenceDataset(os.path.join(datadir, "inference.h5")),
         batch_size=16,
         shuffle=False,
         collate_fn=sparse_collate,        
-    )    
+    )
+    outdir = get_data_path(os.path.join("recommendations", source, username, base_dir))
+    os.makedirs(outdir, exist_ok=True)
     record_predictions(model, outdir, dataloader)              
     
 parser = argparse.ArgumentParser(description="BagOfWords")
