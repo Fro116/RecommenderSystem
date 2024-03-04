@@ -10,8 +10,9 @@ if !@isdefined INFDEF
     )
         daemon = lowercase(daemon)
         if daemon == "true"
+            daemon_mode = "using DaemonMode; runargs($port)"
             p = run(
-                `julia -e 'using DaemonMode; runargs(port)' $script $username $source`,
+                `julia -e $daemon_mode $script $username $source`,
                 wait = false,
             )
         elseif daemon == "false"
