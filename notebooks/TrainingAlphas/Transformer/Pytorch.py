@@ -493,16 +493,6 @@ def save_model(rank, model, outdir):
     torch.save(model.module.state_dict(), fn)
 
 
-def compile(model):
-    # we mask a variable number of tokens in each batch,
-    # so we can't compile the whole model
-    model.embed = torch.compile(model.embed)
-    model.transformers = torch.compile(model.transformers)
-    for i in range(len(model.classifier)):
-        model.classifier[i] = torch.compile(model.classifier[i])
-    return model
-
-
 def print_model_size(model, logger):
     num_params = []
     for m in [model, model.embed, model.transformers, model.classifier]:

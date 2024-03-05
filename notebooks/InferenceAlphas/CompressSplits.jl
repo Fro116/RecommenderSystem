@@ -8,7 +8,7 @@ if !@isdefined INFDEF
 
     function split_save(file, values)
         Threads.@threads for k in collect(keys(values))
-            JLD2.save("$file.$k.jld2", Dict(k => values[k]), compress = true)
+            JLD2.save("$file.$k.jld2", Dict(k => values[k]), compress = false)
         end
     end
 
@@ -63,24 +63,24 @@ if !@isdefined INFDEF
         data
     end
 
-    function save_dataset(username, source, medium)
+    function save_dataset(username, source, medium, split)
         dir = "../../data/recommendations/$source/$username/"
-        for split in ["rec_training", "rec_inference"]
-            stem = "$dir$medium.$split"
-            if split == "rec_training"
-                dataset = get_dataset(false, medium, "$dir/user_$(medium)_list.csv")
-            elseif split == "rec_inference"
-                dataset = get_dataset(true, medium, nothing)
-            else
-                @assert false
-            end
-            split_save("$dir/splits/$split.$medium", dataset)
+        stem = "$dir$medium.$split"
+        if split == "rec_training"
+            dataset = get_dataset(false, medium, "$dir/user_$(medium)_list.csv")
+        elseif split == "rec_inference"
+            dataset = get_dataset(true, medium, nothing)
+        else
+            @assert false
         end
+        split_save("$dir/splits/$split.$medium", dataset)
     end
 
     function runscript(username, source)
-        Threads.@threads for medium in ["manga", "anime"]
-            save_dataset(username, source, medium)
+        @sync for medium in ["manga", "anime"]
+            for split in ["rec_training", "rec_inference"]
+                Threads.@spawn save_dataset(username, source, medium, split)
+            end
         end
     end
 end

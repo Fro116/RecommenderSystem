@@ -1,9 +1,9 @@
 import NBInclude: @nbinclude
 
-if !@isdefined INFDEF
+# if !@isdefined INFDEF
+if true
     INFDEF = true
 
-    import H5Zblosc
     import HDF5
     import JSON
     import MLUtils
@@ -109,7 +109,6 @@ if !@isdefined INFDEF
         cls_tokens,
         mask_tokens,
     )
-        # get inputs
         sentence =
             subset_sentence(sentence, min(length(sentence), max_seq_len - 1); recent = true)
         masked_word = mask_tokens
@@ -132,7 +131,7 @@ if !@isdefined INFDEF
         d["positions"] = collate([x[2] for x in tokens])
         HDF5.h5open(filename, "w") do f
             for (k, v) in d
-                f[k, blosc = 3] = v
+                f[k] = v
             end
         end
     end
@@ -165,7 +164,11 @@ if !@isdefined INFDEF
     end
 
     function compute_alpha(username, source, medium, version)
-        run(`python3 Transformer.py --source $source --username $username --medium $medium`)
+        cmdstring = (
+            "curl http://localhost:3010/query?username=$username&source=$source&medium=$medium"
+        )
+        cmd = Cmd(convert(Vector{String}, split(cmdstring)))
+        run(pipeline(cmd; stdout=devnull, stderr=devnull))
         seen =
             get_raw_split(
                 "rec_training",
@@ -226,7 +229,7 @@ if !@isdefined INFDEF
 
     function runscript(username, source)
         version = "v1"
-        save_training_data("TAAPAye", "anilist", "v1")
+        save_training_data(username, source, version)
         Threads.@threads for medium in ALL_MEDIUMS
             compute_alpha(username, source, medium, version)
         end

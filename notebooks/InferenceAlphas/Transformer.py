@@ -1,10 +1,15 @@
+from flask import Flask, jsonify, request
+
+app = Flask(__name__)
+
 exec(open("../TrainingAlphas/Transformer/Transformer.py").read())
 
-import argparse
+import warnings
+
 import h5py
 import hdf5plugin
-import warnings
 from torch.utils.data import DataLoader, Dataset
+
 
 class InferenceDataset(Dataset):
     def __init__(self, file, vocab_names, vocab_types):
@@ -42,26 +47,32 @@ class InferenceDataset(Dataset):
         embeds = [x[i, :] for x in self.embeddings]
         positions = self.positions[i]
         return embeds, mask, positions, np.array([]), np.array([]), user
-    
-    
+
+
 def to_device(data, device):
     if isinstance(data, (list, tuple)):
-        return [to_device(x, device) for x in data]     
+        return [to_device(x, device) for x in data]
     return data.to(device)
 
-    
-def save_embeddings(source, username, medium):
+
+def load_transformer_model(medium):
     device = torch.device("cpu")
     source_dir = get_data_path(os.path.join("alphas", medium, "Transformer", "v1"))
-    model_file = os.path.join(source_dir, "model.pt")    
-    training_config = create_training_config(get_data_path(os.path.join("alphas", "all", "Transformer", "v1")))
+    model_file = os.path.join(source_dir, "model.pt")
+    training_config = create_training_config(
+        get_data_path(os.path.join("alphas", "all", "Transformer", "v1"))
+    )
     training_config["mode"] = "finetune"
     warnings.filterwarnings("ignore")
     model_config = create_model_config(training_config)
     model = TransformerModel(model_config)
     model.load_state_dict(load_model(model_file, map_location="cpu"))
     model = model.to(device)
-    model.eval()
+    return device, training_config, model.eval()
+
+
+def save_embeddings(source, username, medium):
+    device, training_config, model = MODELS[medium]
 
     dataloader = DataLoader(
         InferenceDataset(
@@ -69,45 +80,51 @@ def save_embeddings(source, username, medium):
                 f"recommendations/{source}/{username}/alphas/Transformer/v1/inference.h5"
             ),
             training_config["vocab_names"],
-            training_config["vocab_types"],            
+            training_config["vocab_types"],
         ),
         batch_size=16,
         shuffle=False,
-    ) 
+    )
 
     user_batches = []
     embed_batches = []
-    model.eval()
     for data in dataloader:
         with torch.no_grad():
             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                 x = [
-                    y
-                    .to("cpu")
-                    .to(torch.float32)
-                    .numpy()
+                    y.to("cpu").to(torch.float32).numpy()
                     for y in model(*to_device(data, device), inference=True)
                 ]
                 users = data[-1].numpy()
                 user_batches.append(users)
                 embed_batches.append(x)
-    outdir = get_data_path(f"recommendations/{source}/{username}/alphas/{medium}/Transformer/v1")
+    outdir = get_data_path(
+        f"recommendations/{source}/{username}/alphas/{medium}/Transformer/v1"
+    )
     os.makedirs(outdir, exist_ok=True)
     f = h5py.File(os.path.join(outdir, "embeddings.h5"), "w")
     f.create_dataset("users", data=np.hstack(user_batches))
     i = 0
     for medium in ALL_MEDIUMS:
         for metric in ALL_METRICS:
-            f.create_dataset(f"{medium}_{metric}", data=np.vstack([x[i] for x in embed_batches]))
+            f.create_dataset(
+                f"{medium}_{metric}", data=np.vstack([x[i] for x in embed_batches])
+            )
             i += 1
     f.close()
-  
-    
-parser = argparse.ArgumentParser(description="Transformer")
-parser.add_argument("--source", type=str, help="source")
-parser.add_argument("--username", type=str, help="username")
-parser.add_argument("--medium", type=str, help="medium")
-args = parser.parse_args()    
+
+
+MODELS = {x: load_transformer_model(x) for x in ["manga", "anime"]}
+
+
+@app.route("/query", methods=["GET"])
+def query():
+    source = request.args.get("source", type=str)
+    username = request.args.get("username", type=str)
+    medium = request.args.get("medium", type=str)
+    save_embeddings(source, username, medium)
+    return jsonify({"result": "Success!"})
+
 
 if __name__ == "__main__":
-    save_embeddings(args.source, args.username, args.medium)
+    app.run()

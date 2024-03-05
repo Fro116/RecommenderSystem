@@ -318,7 +318,6 @@ def create_model_config(config):
     }
 
 
-# I/O
 def get_data_path(file):
     path = os.getcwd()
     while os.path.basename(path) != "notebooks":
@@ -333,3 +332,13 @@ def load_model(fn, map_location=None):
     for k, v in list(state_dict.items()):
         state_dict[k.replace(compile_prefix, "")] = state_dict.pop(k)
     return state_dict
+
+
+def compile(model):
+    # we mask a variable number of tokens in each batch,
+    # so we can't compile the whole model
+    model.embed = torch.compile(model.embed)
+    model.transformers = torch.compile(model.transformers)
+    for i in range(len(model.classifier)):
+        model.classifier[i] = torch.compile(model.classifier[i])
+    return model

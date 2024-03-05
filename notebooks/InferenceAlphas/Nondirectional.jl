@@ -49,6 +49,7 @@ if !@isdefined IFNDEF
     end
 
     function compute_sequel_series_alpha(df, name, medium, username, source)
+        df = filter(df, df.status .>= get_status(:completed))
         x = zeros(Float32, num_items(medium))
         x[df.itemid.+1] .= 1
         S = read_similarity_matrix(name)

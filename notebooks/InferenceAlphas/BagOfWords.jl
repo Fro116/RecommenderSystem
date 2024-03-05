@@ -4,7 +4,6 @@ import Memoize: @memoize
 if !@isdefined IFNDEF
     IFNDEF = true
 
-    import H5Zblosc
     import HDF5
     import JSON
     import SparseArrays: AbstractSparseArray, sparse
@@ -50,7 +49,7 @@ if !@isdefined IFNDEF
         d["users"] = [0]
         HDF5.h5open(filename, "w") do file
             for (k, v) in d
-                file[k, blosc = 1] = v
+                file[k] = v
             end
         end
     end
@@ -64,11 +63,11 @@ if !@isdefined IFNDEF
     end
 
     function compute_alpha(username, source, medium, metric, version)
-        cmd = (
-            "python3 BagOfWords.py --source $source --username $username --medium $medium" *
-            " --metric $metric --version $version"
+        cmdstring = (
+            "curl http://localhost:3011/query?username=$username&source=$source&medium=$medium&metric=$metric"
         )
-        run(Cmd(convert(Vector{String}, split(cmd))))
+        cmd = Cmd(convert(Vector{String}, split(cmdstring)))
+        run(pipeline(cmd; stdout=devnull, stderr=devnull))
         outdir = joinpath(
             get_data_path("recommendations/$source/$username"),
             "alphas",
@@ -142,7 +141,6 @@ if !@isdefined IFNDEF
                 Threads.@spawn compute_alpha(username, source, medium, metric, version)
             end
         end
-        rm(outdir; recursive = true)
     end
 end
 
