@@ -5,9 +5,11 @@ app = Flask(__name__)
 import glob
 import os
 import shutil
-import pandas as pd
-from tqdm import tqdm
 from functools import cache
+
+import pandas as pd
+import yaml
+from tqdm import tqdm
 
 source = os.getenv("RSYS_LIST_SOURCE")
 allowed_sources = ["mal", "anilist", "kitsu", "animeplanet"]
@@ -19,6 +21,7 @@ API_CALL_MULT = 5
 SOURCE = source
 MEDIA_DIR = "../../data/processed_data"
 
+
 def import_script(nb):
     cwd = os.getcwd()
     try:
@@ -27,10 +30,14 @@ def import_script(nb):
         exec(open(script).read(), globals())
     finally:
         os.chdir(cwd)
-        
+
+
 if source != "training":
     import_script(f"../API/API/{source.capitalize()}Api.py")
 import_script("../ImportDatasets/ImportListsHelper.py")
+import_script("../ProcessData/ProcessMediaListsHelper.py")
+
+# Fetch Media Lists
 
 
 def import_from_api(username, medium, source):
@@ -86,6 +93,22 @@ def get_valid_titles(medium):
     return set(pd.read_csv(f"{MEDIA_DIR}/{medium}.csv")[f"{medium}_id"])
 
 
+# Knowledge Cutoff
+
+
+def get_settings():
+    d = {}
+    for s in ["default_settings", "private_settings"]:
+        with open(f"../../environment/{s}.yml", "r") as f:
+            d |= yaml.safe_load(f)
+    return d
+
+
+def get_knowledge_cutoff(days):
+    seconds_in_day = 24 * 60 * 60
+    return 1.0 - days * seconds_in_day / (MAX_TIMESTAMP - MIN_TIMESTAMP)
+
+
 @app.route("/query", methods=["GET"])
 def query():
     # fetch media list
@@ -99,7 +122,7 @@ def query():
         training = False
     import_list(username, medium, source, training).to_csv(
         save_path(username, medium, source), index=False
-    )       
+    )
 
     # import media list
     data_path = os.path.join("../../data/recommendations", source, username)
@@ -112,6 +135,44 @@ def query():
     valid_titles = get_valid_titles(medium)
     df = df.loc[lambda x: x["mediaid"].isin(valid_titles)]
     df.to_csv(dst, index=False)
+
+    # process media list
+    src = os.path.join(data_path, f"user_{medium}_list.raw.csv")
+    dst = os.path.join(data_path, f"user_{medium}_list.processed.csv")
+    userids = list(pd.read_csv(src)["userid"].unique())
+    if len(userids) == 0:
+        userid_map = {}
+    elif len(userids) == 1:
+        userid_map = {userids[0]: 0}
+    else:
+        assert False
+    process_media_list(src, dst, userid_map)
+
+    # knowledge cutoff
+    df = pd.read_csv(dst)
+    if training:
+        settings = get_settings()
+        if settings["mode"] in ["research", "production"]:
+            cutoff_days = settings["cutoff_days"]
+            cutoff = get_knowledge_cutoff(cutoff_days)
+            df = df.query(f"updated_at <= {cutoff}")
+        else:
+            assert False
+
+    # generate splits
+    df = df.sort_values(by=["update_order", "updated_at"]).reset_index(drop=True)
+    df["unit"] = 1
+    df["forward_order"] = (
+        df.groupby("userid", group_keys=False)["unit"]
+        .apply(lambda x: x.cumsum())
+        .values
+    )
+    df["backward_order"] = (
+        df.groupby("userid", group_keys=False)["unit"]
+        .apply(lambda x: x.cumsum()[::-1])
+        .values
+    )
+    df.to_csv(os.path.join(data_path, f"user_{medium}_list.csv"), index=False)
 
     return jsonify({"result": "Success!"})
 
