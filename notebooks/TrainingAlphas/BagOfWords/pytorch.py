@@ -26,7 +26,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
-exec(open("./BagOfWords.py").read())
+exec(open("./bagofwords.py").read())
 
 
 def get_logger(outdir):

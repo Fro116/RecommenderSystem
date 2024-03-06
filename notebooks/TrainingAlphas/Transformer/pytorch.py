@@ -28,7 +28,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 
-exec(open("./Transformer.py").read())
+exec(open("./transformer.py").read())
 
 # datasets
 

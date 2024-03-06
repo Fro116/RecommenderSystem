@@ -2,7 +2,7 @@ from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
-exec(open("../TrainingAlphas/BagOfWords/BagOfWords.py").read())
+exec(open("../TrainingAlphas/BagOfWords/bagofwords.py").read())
 
 import warnings
 

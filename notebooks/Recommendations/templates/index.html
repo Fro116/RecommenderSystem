@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Search Form</title>
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: Arial, sans-serif;
+            flex-direction: column;
+        }
+
+        form {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        input[type="text"] {
+            width: 600px;
+            padding: 20px;
+            margin: 10px 0;
+            border: 1px solid #ccc;
+            border-radius: 40px;
+            box-sizing: border-box;
+            text-align: center;
+            font-size: 1.5em;
+        }
+
+        .segmented-buttons {
+            display: flex;
+            margin-top: 20px;
+        }
+
+        .segmented-buttons input[type="radio"] {
+            display: none; /* Hide the radio buttons */
+        }
+
+        .segmented-buttons label {
+            padding: 10px 20px;
+            border: 1px solid #ccc;
+            background-color: #f8f8f8;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .segmented-buttons input[type="radio"]:checked + label {
+            background-color: #d0e0f0; /* Different background for selected */
+        }
+
+        /* Styling for adjacent labels to appear connected */
+        .segmented-buttons label + label {
+            border-left: none;
+        }
+    </style>
+</head>
+<body>
+    <form action="/submit" method="post">
+        <input type="text" name="username" id="username" placeholder="Type a username" required onkeypress="if(event.keyCode==13) { this.form.submit(); }">
+        <div class="segmented-buttons">
+            <input type="radio" id="myanimelist" name="source" value="MyAnimeList" checked>
+            <label for="myanimelist">MyAnimeList</label>
+            <input type="radio" id="anilist" name="source" value="AniList">
+            <label for="anilist">AniList</label>
+            <input type="radio" id="kitsu" name="source" value="Kitsu">
+            <label for="kitsu">Kitsu</label>
+            <input type="radio" id="animeplanet" name="source" value="Anime-Planet">
+            <label for="animeplanet">Anime-Planet</label>
+        </div>
+        <button type="submit" style="visibility: hidden; position: absolute;">Submit</button>
+    </form>
+</body>
+</html>
