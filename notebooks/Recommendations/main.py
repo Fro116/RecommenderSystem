@@ -18,6 +18,15 @@ def spawn_parallel(commands):
         p.wait()
 
 
+def hash_files(files):
+    hash_sha256 = hashlib.sha256()
+    for fn in files:
+        with open(fn, "rb") as f:
+            while chunk := f.read(8192):
+                hash_sha256.update(chunk)
+    return hash_sha256.hexdigest()
+
+
 def create_julia_command(script, source, username):
     script_to_port = {
         "CompressSplits.jl": 3006,
@@ -69,6 +78,15 @@ def save_html_page(source, username):
             for medium in ["manga", "anime"]
         ]
     )
+
+    # if the lists haven't changed then serve cached recs
+    hash = hash_files(
+        os.path.join(rec_dir, f"user_{x}_list.csv") for x in ["manga", "anime"]
+    )
+    output_fn = f"templates/{hash}.html"
+    if os.path.exists(output_fn):
+        return output_fn
+
     username = str(username)
     if "@" in username:
         username = username.split("@")[1]
@@ -81,7 +99,8 @@ def save_html_page(source, username):
     )
     spawn_parallel([julia(x) for x in ["Ensemble.jl"]])
     spawn_parallel([julia(x) for x in ["Recommendations.jl"]])
-    return os.path.join(data_path, source, username, "Recommendations.html")
+    os.rename(os.path.join(rec_dir, "Recommendations.html"), output_fn)
+    return output_fn
 
 
 @app.route("/", methods=["GET"])
@@ -93,15 +112,8 @@ def home():
 def submit():
     source = request.form["source"]
     username = request.form["username"]
-    src = save_html_page(source, username)
-
-    hasher = hashlib.sha256()
-    for string in [source, username]:
-        hasher.update(string.encode("utf-8"))
-    dst = f"{hasher.hexdigest()}.html"
-
-    shutil.copyfile(src, f"templates/{dst}")
-    return render_template(dst)
+    fn = save_html_page(source, username)
+    return render_template(os.path.basename(fn))
 
 
 if __name__ == "__main__":

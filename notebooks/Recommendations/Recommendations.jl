@@ -269,14 +269,12 @@ end
 # Render HTML
 
 function dataframe_to_html_table(df::DataFrame, name)
-    # Start the table and add a header row
     html = "<table id=\"$name\" class=\"display\">\n<thead>\n<tr>"
     for col_name in names(df)
         html *= "<th>$col_name</th>"
     end
     html *= "</tr>\n</thead>\n<tbody>\n"
 
-    # Add table rows for each entry in the DataFrame
     for row in eachrow(df)
         html *= "<tr>"
         for cell in row
@@ -285,63 +283,64 @@ function dataframe_to_html_table(df::DataFrame, name)
         html *= "</tr>\n"
     end
 
-    # add footer
     html *= "<tfoot>\n<tr>"
     for col_name in names(df)
         html *= "<th>$col_name</th>"
     end
     html *= "</tr>\n</tfoot>\n"
-
-    # Close the table
     html *= "</tbody>\n</table>"
-
     html
 end
 
 function table_component(name)
-    jquery = raw"<script>
-new DataTable('#{name}', {
-    initComplete: function () {
-        this.api()
-            .columns()
-            .every(function () {
-                let column = this;
-                let title = column.footer().textContent;
- 
-                // Create input element
-                let input = document.createElement('input');
-                input.placeholder = title;
-                column.footer().replaceChildren(input);
- 
-                // Event listener for user input
-                input.addEventListener('keyup', () => {
-                    if (column.search() !== this.value) {
-                        column.search(input.value).draw();
-                    }
+    jquery = """
+    <script>
+    new DataTable('#{name}', {
+        initComplete: function () {
+            this.api()
+                .columns()
+                .every(function () {
+                    let column = this;
+                    let title = column.footer().textContent;
+
+                    // Create input element
+                    let input = document.createElement('input');
+                    input.placeholder = title;
+                    column.footer().replaceChildren(input);
+
+                    // Event listener for user input
+                    input.addEventListener('keyup', () => {
+                        if (column.search() !== this.value) {
+                            column.search(input.value).draw();
+                        }
+                    });
                 });
-            });
-    }
-});
-</script>
-"
+        }
+    });
+    </script>
+    """
     replace(jquery, "{name}" => name)
 end
 
 function render_html_page(fn, username, anime_recs, manga_recs)
     imports = """
-<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
-<link rel="stylesheet" href="https://cdn.datatables.net/2.0.1/css/dataTables.dataTables.css" />
-<script src="https://cdn.datatables.net/2.0.1/js/dataTables.js"></script>
-
-<style>
-tfoot input {
-        width: 100%;
-        padding: 3px;
-        box-sizing: border-box;
-    }
-</style>
-
-    """
+        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+        <link rel="stylesheet" href="https://cdn.datatables.net/2.0.1/css/dataTables.dataTables.css" />
+        <script src="https://cdn.datatables.net/2.0.1/js/dataTables.js"></script>
+        <style>
+        tfoot input {
+            width: 100%;
+            padding: 3px;
+            box-sizing: border-box;
+        }
+        html { visibility:hidden; }
+        </style>
+        <script>
+        \$(document).ready(function() {
+          document.getElementsByTagName("html")[0].style.visibility = "visible";
+        });
+        </script>
+        """
     title = "<title>$username's Recs</title>"
     open(fn, "w") do io
         write(io, imports)
@@ -388,4 +387,4 @@ Oxygen.@get "/query" function(req::HTTP.Request)
     runscript(params["username"], params["source"])
 end
 
-Oxygen.serveparallel(; port=parse(Int, ARGS[1]))
+Oxygen.serveparallel(; port=parse(Int, ARGS[1]));
