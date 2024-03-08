@@ -60,23 +60,22 @@ def record_predictions(model, outdir, dataloader):
     device = get_device()
     for data in dataloader:
         with torch.no_grad():
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                x = (
-                    model(
-                        *to_device(data, device),
-                        None,
-                        None,
-                        mask=False,
-                        evaluate=False,
-                        inference=True,
-                    )
-                    .to("cpu")
-                    .to(torch.float32)
-                    .numpy()
+            x = (
+                model(
+                    *to_device(data, device),
+                    None,
+                    None,
+                    mask=False,
+                    evaluate=False,
+                    inference=True,
                 )
-                users = data[-1].todense()
-                user_batches.append(users)
-                embed_batches.append(x)
+                .to("cpu")
+                .to(torch.float32)
+                .numpy()
+            )
+            users = data[-1].todense()
+            user_batches.append(users)
+            embed_batches.append(x)
 
     f = h5py.File(os.path.join(outdir, "predictions.h5"), "w")
     f.create_dataset("users", data=np.vstack(user_batches))
@@ -93,7 +92,7 @@ def load_bagofwords_model(medium, metric):
     device = get_device()
     model = BagOfWordsModel(config)
     model.load_state_dict(load_model(source_dir, map_location="cpu"))
-    model = model.to(device)    
+    model = model.to(device)
     return model
 
 

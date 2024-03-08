@@ -1,7 +1,47 @@
 <!DOCTYPE html>
 <html>
+<style>
+    body {
+        background-color: #22272e; 
+        color: #e0e0e0; 
+    }
+
+    h1, h2, h3, h4, h5, h6 {
+        color: #f0f0f0; /* Slightly brighter for emphasis */
+    }
+
+
+    a {
+        color: #90caf9; /* Light blue for links */
+        text-decoration: none; /* Remove underline by default */
+    }
+
+    a:hover {
+        color: #c5e1f2; /* Slightly brighter version of the light blue */
+        text-decoration: underline; /* Add underline on hover */
+    }
+
+    /* Form elements */
+    input, textarea, select {
+        background-color: #333;
+        color: #e0e0e0;
+        border-color: #555;
+    }
+
+    /* Images - Consider more advanced techniques if needed */
+    img {
+        filter: brightness(80%) contrast(110%); 
+    }
+
+    /* Styling for specific components or elements */
+    /* Example: */
+    .card {
+        background-color: #333;
+        border-color: #444;
+    }
+</style>
 <head>
-    <title>Search Form</title>
+    <title>Recs</title>
     <style>
         body, html {
             height: 100%;
@@ -23,13 +63,15 @@
             width: 600px;
             padding: 20px;
             margin: 10px 0;
-            border: 1px solid #ccc;
+            border: 1px solid #90caf9;
             border-radius: 40px;
             box-sizing: border-box;
             text-align: center;
             font-size: 1.5em;
         }
-
+        input[type="text"]:focus { 
+            outline: solid #546E7A;
+        }
         .segmented-buttons {
             display: flex;
             margin-top: 20px;
@@ -39,21 +81,23 @@
             display: none; /* Hide the radio buttons */
         }
 
+        /* Styling for adjacent labels to appear connected */
+        .segmented-buttons label + label {
+            border-left: none;
+        }
+
         .segmented-buttons label {
             padding: 10px 20px;
             border: 1px solid #ccc;
-            background-color: #f8f8f8;
+            background-color: #333;
+            color: #e0e0e0;
+            border-color: #555;
             cursor: pointer;
             transition: background-color 0.3s;
         }
 
         .segmented-buttons input[type="radio"]:checked + label {
-            background-color: #d0e0f0; /* Different background for selected */
-        }
-
-        /* Styling for adjacent labels to appear connected */
-        .segmented-buttons label + label {
-            border-left: none;
+            background-color: #673ab7;
         }
     </style>
 </head>

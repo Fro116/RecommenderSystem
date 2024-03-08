@@ -1,10 +1,16 @@
+import argparse
 import os
 import signal
 import subprocess
 import sys
 import time
 
+
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+parser = argparse.ArgumentParser("start_server")
+parser.add_argument("--verbose", action='store_true')
+args = parser.parse_args()
+quiet = not args.verbose
 procs = []
 app_port = 5000
 source_to_port = {"mal": 3000, "anilist": 3001, "kitsu": 3002, "animeplanet": 3003}
@@ -23,9 +29,11 @@ julia_script_to_port = {
 }
 
 
-def runcmd(cmdlist, env=None, quiet=True):
+def runcmd(cmdlist, env=None, quiet=quiet):
     if quiet:
         kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.STDOUT}
+    else:
+        kwargs = {}
     procs.append(subprocess.Popen(cmdlist, env=env, **kwargs))
 
 

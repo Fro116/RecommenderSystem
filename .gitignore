@@ -1,3 +1,4 @@
+app/*
 data/*
 environment/*
 notebooks/Recommendations/templates/*

@@ -90,14 +90,13 @@ def save_embeddings(source, username, medium):
     embed_batches = []
     for data in dataloader:
         with torch.no_grad():
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                x = [
-                    y.to("cpu").to(torch.float32).numpy()
-                    for y in model(*to_device(data, device), inference=True)
-                ]
-                users = data[-1].numpy()
-                user_batches.append(users)
-                embed_batches.append(x)
+            x = [
+                y.to("cpu").to(torch.float32).numpy()
+                for y in model(*to_device(data, device), inference=True)
+            ]
+            users = data[-1].numpy()
+            user_batches.append(users)
+            embed_batches.append(x)
     outdir = get_data_path(
         f"recommendations/{source}/{username}/alphas/{medium}/Transformer/v1"
     )
