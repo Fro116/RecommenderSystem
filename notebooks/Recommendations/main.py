@@ -30,7 +30,6 @@ def hash_files(files):
 def create_julia_command(script, source, username):
     script_to_port = {
         "CompressSplits.jl": 3006,
-        "Baseline.jl": 3007,
         "BagOfWords.jl": 3008,
         "Nondirectional.jl": 3009,
         "Transformer.jl": 3010,
@@ -93,7 +92,6 @@ def save_html_page(source, username):
 
     julia = lambda x: create_julia_command(x, source, username)
     spawn_parallel([julia(x) for x in ["CompressSplits.jl"]])
-    spawn_parallel([julia(x) for x in ["Baseline.jl"]])
     spawn_parallel(
         [julia(x) for x in ["BagOfWords.jl", "Nondirectional.jl", "Transformer.jl"]]
     )

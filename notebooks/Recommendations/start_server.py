@@ -5,10 +5,9 @@ import subprocess
 import sys
 import time
 
-
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 parser = argparse.ArgumentParser("start_server")
-parser.add_argument("--verbose", action='store_true')
+parser.add_argument("--verbose", action="store_true")
 args = parser.parse_args()
 quiet = not args.verbose
 procs = []
@@ -20,7 +19,6 @@ python_script_to_port = {
 }
 julia_script_to_port = {
     "CompressSplits.jl": 3006,
-    "Baseline.jl": 3007,
     "BagOfWords.jl": 3008,
     "Nondirectional.jl": 3009,
     "Transformer.jl": 3010,
@@ -54,64 +52,67 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-runcmd(
-    [
-        "gunicorn",
-        "-w",
-        "2",
-        "main:app",
-        "-b",
-        f"0.0.0.0:{app_port}",
-    ],
-)
-
-for source, port in source_to_port.items():
-    env = os.environ.copy()
-    env["RSYS_LIST_SOURCE"] = source
+try:
     runcmd(
         [
             "gunicorn",
             "-w",
             "2",
-            "fetch_media_lists:app",
+            "main:app",
             "-b",
-            f"localhost:{port}",
+            f"0.0.0.0:{app_port}",
         ],
-        env,
     )
 
-juliacmd(["julia", "-t", "4", "Recommendations.jl"])
+    for source, port in source_to_port.items():
+        env = os.environ.copy()
+        env["RSYS_LIST_SOURCE"] = source
+        runcmd(
+            [
+                "gunicorn",
+                "-w",
+                "2",
+                "fetch_media_lists:app",
+                "-b",
+                f"localhost:{port}",
+            ],
+            env,
+        )
 
-os.chdir("../InferenceAlphas")
+    juliacmd(["julia", "-t", "4", "Recommendations.jl"])
 
-for server, workers in zip(
-    [
-        "CompressSplits.jl",
-        "Baseline.jl",
-        "BagOfWords.jl",
-        "Nondirectional.jl",
-        "Transformer.jl",
-        "Ensemble.jl",
-    ],
-    [2, 2, 8, 2, 2, 4],
-):
-    juliacmd(["julia", "-t", str(workers), server])
+    os.chdir("../InferenceAlphas")
 
-for script, workers in zip(["transformer", "bagofwords"], [2, 8]):
-    runcmd(
+    for server, workers in zip(
         [
-            "gunicorn",
-            "-w",
-            str(workers),
-            f"{script}:app",
-            "-b",
-            f"localhost:{python_script_to_port[script]}",
-        ]
-    )
+            "CompressSplits.jl",
+            "BagOfWords.jl",
+            "Nondirectional.jl",
+            "Transformer.jl",
+            "Ensemble.jl",
+        ],
+        [2, 2, 8, 2, 2, 4],
+    ):
+        juliacmd(["julia", "-t", str(workers), server])
 
-print(
-    "Successfully started servers! To shutdown servers, "
-    "send a SIGINT or SIGTERM signal to this script."
-)
-while True:
-    time.sleep(3600)
+    for script, workers in zip(["transformer", "bagofwords"], [2, 8]):
+        runcmd(
+            [
+                "gunicorn",
+                "-w",
+                str(workers),
+                f"{script}:app",
+                "-b",
+                f"localhost:{python_script_to_port[script]}",
+            ]
+        )
+
+    print(
+        "Successfully started servers! To shutdown servers, "
+        "send a SIGINT or SIGTERM signal to this script."
+    )
+    while True:
+        time.sleep(3600)
+except Exception as e:
+    signal_handler(signal.SIGINT, None)
+    raise e
