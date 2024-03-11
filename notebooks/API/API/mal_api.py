@@ -1,24 +1,37 @@
-import datetime
+from . import api_setup
+import pandas as pd
+from .api_setup import sanitize_string, to_unix_time
 
-API_PERIOD = 8
-exec(open("ApiSetup.py").read())
-
-with open(
-    get_datapath(f"../environment/mal/authentication/clientid.{TOKEN_NUMBER}.txt")
-) as f:
-    MAL_ACCESS_TOKEN = f.readlines()[0].strip()
+MAL_ACCESS_TOKEN = None
 
 
-def call_api(url):
-    return call_api_internal(
-        url,
+def load_token(token_number):
+    global MAL_ACCESS_TOKEN
+    with open(
+        api_setup.get_environment_path(
+            f"mal/authentication/clientid.{token_number}.txt"
+        )
+    ) as f:
+        MAL_ACCESS_TOKEN = f.readlines()[0].strip()
+
+
+def make_session(proxies, concurrency):
+    return api_setup.ProxySession(
+        proxies, ratelimit_calls=concurrency, ratelimit_period=8 * concurrency
+    )
+
+
+def call_api(session, url):
+    assert MAL_ACCESS_TOKEN is not None
+    return api_setup.call_api(
+        session,
         "GET",
+        url,
         "mal",
         headers={"X-MAL-CLIENT-ID": MAL_ACCESS_TOKEN},
     )
 
-
-def get_user_media_list(username, media):
+def get_user_media_list(session, username, media):
     media_lists = []
     more_pages = True
     url = (
@@ -26,7 +39,7 @@ def get_user_media_list(username, media):
         f"{username}/{media}list?limit=1000&fields=list_status&nsfw=true"
     )
     while more_pages:
-        response = call_api(url)
+        response = call_api(session, url)
         if response.status_code != 200 or "data" not in response.json():
             logger.warning(f"Error {response} received when handling {url}")
             return pd.DataFrame(), False

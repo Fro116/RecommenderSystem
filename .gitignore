@@ -1,7 +1,5 @@
-app/*
-data/*
-environment/*
-notebooks/Recommendations/templates/*
-*.ipynb_checkpoints
+data/
+environment/
+.ipynb_checkpoints/
 __pycache__/
 .DS_Store

@@ -1,9 +1,16 @@
-API_PERIOD = 4
-exec(open("ApiSetup.py").read())
+from . import api_setup
+import pandas as pd
+from .api_setup import sanitize_string
 
 
-def call_api(url, json):
-    return call_api_internal(url, "POST", "anilist", json=json)
+def make_session(proxies, concurrency):
+    return api_setup.ProxySession(
+        proxies, ratelimit_calls=concurrency, ratelimit_period=4 * concurrency
+    )
+
+
+def call_api(session, url, json):
+    return api_setup.call_api(session, "POST", url, "anilist", json=json)
 
 
 def sanitize_date(x):
@@ -57,7 +64,7 @@ def process_json(json):
     return df
 
 
-def get_user_media_list(userid, mediatype):
+def get_user_media_list(session, userid, mediatype):
     listtype = mediatype.upper()
     has_next_chunk = True
     chunk = 0
@@ -100,13 +107,13 @@ def get_user_media_list(userid, mediatype):
         """
         variables = {"userID": str(userid), "MEDIA": listtype, "chunk": chunk}
         url = "https://graphql.anilist.co"
-        response = call_api(url, {"query": query, "variables": variables})
+        response = call_api(session, url, {"query": query, "variables": variables})
         if response.status_code in [403, 404]:
             # 403: This can occur if the user privated their list
             # 404: This can occur if the user deleted their account
             return pd.DataFrame(), False
         if not response.ok:
-            logger.warning(f"Error {response} received when handling {url}")
+            logging.warning(f"Error {response} received when handling {url}")
             return pd.DataFrame(), False
         has_next_chunk = response.json()["data"]["MediaListCollection"]["hasNextChunk"]
         media_lists.append(process_json(response.json()))
@@ -123,27 +130,27 @@ def get_user_media_list(userid, mediatype):
     return media_list, True
 
 
-def get_userid(username):
+def get_userid(session, username):
     url = "https://graphql.anilist.co"
     query = "query ($username: String) { User (name: $username) { id } }"
     variables = {"username": str(username)}
-    response = call_api(url, {"query": query, "variables": variables})
+    response = call_api(session, url, {"query": query, "variables": variables})
     try:
         response.raise_for_status()
     except Exception as e:
-        logger.warning(f"Received error {str(e)} while accessing {url}")
+        logging.warning(f"Received error {str(e)} while accessing {url}")
         return f"{userid}"
     return response.json()["data"]["User"]["id"]
 
 
-def get_username(userid):
+def get_username(session, userid):
     url = "https://graphql.anilist.co"
     query = "query ($userid: Int) { User (id: $userid) { name } }"
     variables = {"userid": str(userid)}
-    response = call_api(url, {"query": query, "variables": variables})
+    response = call_api(session, url, {"query": query, "variables": variables})
     try:
         response.raise_for_status()
     except Exception as e:
-        logger.warning(f"Received error {str(e)} while accessing {url}")
+        logging.warning(f"Received error {str(e)} while accessing {url}")
         return f"{userid}"
     return response.json()["data"]["User"]["name"]

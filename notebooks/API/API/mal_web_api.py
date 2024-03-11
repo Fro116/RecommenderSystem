@@ -1,12 +1,18 @@
 import html
 import re
 
-API_PERIOD = 4
-exec(open("ApiSetup.py").read())
+from . import api_setup
+import pandas as pd
 
 
-def call_web_api(url):
-    return call_api_internal(url, "GET", "web", extra_error_codes=[403])
+def make_session(proxies, concurrency):
+    return api_setup.ProxySession(
+        proxies, ratelimit_calls=concurrency, ratelimit_period=4 * concurrency
+    )
+
+
+def call_api(session, url):
+    return api_setup.call_api(session, "GET", url, "web", extra_error_codes=[403])
 
 
 def sanitize_summary(x):
@@ -271,35 +277,35 @@ def process_media_relations_response(response, uid, media):
     assert False, f"could not parse {media} relations for {uid}"
 
 
-def get_media_facts(uid, media):
+def get_media_facts(session, uid, media):
     url = f"https://myanimelist.net/{media}/{uid}"
-    response = call_web_api(url)
+    response = call_api(session, url)
     try:
         response.raise_for_status()
         details = process_media_details_response(response, uid, media)
         relations = process_media_relations_response(response, uid, media)
     except Exception as e:
-        logger.warning(f"Received error {str(e)} while accessing {url}")
+        logging.warning(f"Received error {str(e)} while accessing {url}")
         return pd.DataFrame(), pd.DataFrame()
     return details, relations
 
 
 # returns all usernames that have commented on the given userid's profile
-def get_username(userid):
+def get_username(session, userid):
     try:
         url = f"https://myanimelist.net/comments.php?id={userid}"
-        response = call_web_api(url)
+        response = call_api(session, url)
         if response.status_code in [404]:
             # the user may have deleted their account
             return ""
         if not response.ok:
-            logger.warning(f"Error {response} received when handling {url}")
+            logging.warning(f"Error {response} received when handling {url}")
             return ""
         urls = re.findall('''/profile/[^"/%]+"''', response.text)
         users = [x[len("/profile/") : -len('"')] for x in urls]
         return html.unescape(users[0])
     except Exception as e:
-        logger.info(f"Error with {userid}")
-        logger.info(f"Error with text {response.text}")
-        logger.info(f"Error with users {users}")
+        logging.info(f"Error with {userid}")
+        logging.info(f"Error with text {response.text}")
+        logging.info(f"Error with users {users}")
         raise e

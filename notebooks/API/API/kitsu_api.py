@@ -1,19 +1,26 @@
-import datetime
+import time
 
-API_PERIOD = 2
-exec(open("ApiSetup.py").read())
+from . import api_setup
+import pandas as pd
+from .api_setup import sanitize_string, to_unix_time
 
 KITSU_TOKEN = None
 KITSU_TOKEN_EXPIRY = -1
 
 
-def get_token():
+def make_session(proxies, concurrency):
+    return api_setup.ProxySession(
+        proxies, ratelimit_calls=concurrency, ratelimit_period=2 * concurrency
+    )
+
+
+def get_token(session):
     global KITSU_TOKEN
     global KITSU_TOKEN_EXPIRY
     refresh_token = (KITSU_TOKEN is None) or (time.time() >= KITSU_TOKEN_EXPIRY)
     if refresh_token:
         with open(
-            get_datapath("../environment/kitsu/authentication/credentials.0.txt")
+            api_setup.get_environment_path("kitsu/authentication/credentials.0.txt")
         ) as f:
             username, password = [x.strip() for x in f.readlines()]
         data = {
@@ -21,20 +28,21 @@ def get_token():
             "username": username,
             "password": password,
         }
-        response = call_api_internal(
-            "https://kitsu.io/api/oauth/token", "POST", "kitsu", data=data
+        response = api_setup.call_api(
+            session, "POST", "https://kitsu.io/api/oauth/token", "kitsu", data=data
         )
         KITSU_TOKEN = response.json()
         KITSU_TOKEN_EXPIRY = time.time() + KITSU_TOKEN["expires_in"]
     return KITSU_TOKEN
 
 
-def call_api(url):
-    return call_api_internal(
+def call_api(session, url):
+    return api_setup.call_api(
+        session,
+        "GET",        
         url,
-        "GET",
         "kitsu",
-        headers={"Authorization": f"Bearer {get_token()['access_token']}"},
+        headers={"Authorization": f"Bearer {get_token(session)['access_token']}"},
     )
 
 
@@ -147,7 +155,7 @@ def process_json(json, media):
     return df
 
 
-def get_user_media_list(userid, media):
+def get_user_media_list(session, userid, media):
     has_next_chunk = True
     media_lists = []
     url = (
@@ -157,7 +165,7 @@ def get_user_media_list(userid, media):
     )
     username = None
     while has_next_chunk:
-        response = call_api(url)
+        response = call_api(session, url)
         if response.status_code in [403, 404, 525]:
             # 403: This can occur if the user privated their list
             # 404: This can occur if the user deleted their account
@@ -179,11 +187,12 @@ def get_user_media_list(userid, media):
     return media_list, True
 
 
-def get_userid(username):
+def get_userid(session, username):
     url = f"https://kitsu.io/api/edge/users?filter[name]={username}"
-    response = call_api(url)
+    response = call_api(session, url)
     json = response.json()["data"]
-    assert (
-        len(json) == 1
-    ), f"there are multiple users with username {username}, please use userid"
+    if len(json) != 1:
+        raise ValueError(
+            f"there are multiple users with username {username}, please use userid"
+        )
     return int(json[0]["id"])

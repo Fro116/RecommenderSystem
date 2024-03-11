@@ -1,21 +1,43 @@
 import re
 
-API_PERIOD = 4
-exec(open("ApiSetup.py").read())
+from . import api_setup
+import pandas as pd
+from .api_setup import sanitize_string
 
 
-def call_api(url):
+def make_session(proxies, concurrency):
+    return api_setup.ProxySession(
+        proxies, ratelimit_calls=concurrency, ratelimit_period=4 * concurrency
+    )
+
+
+def call_api(session, url):
     header = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/117.0.0.0 Safari/537.36"
     )
-    return call_api_internal(
-        url, "GET", "web", extra_error_codes=[403], headers={"User-Agent": header}
+    return api_setup.call_api(
+        session,
+        "GET",
+        url,
+        "web",
+        extra_error_codes=[403],
+        headers={"User-Agent": header},
     )
 
 
 MATCHFIELD = """([^<>]+)"""
+TITLE_REGEX = re.compile('<h3 class="cardName">' + MATCHFIELD + "</h3>")
+SCORE_REGEX = re.compile('<div class="ttRating">' + MATCHFIELD + "</div>")
+STATUS_REGEX = re.compile('<span class="status' + MATCHFIELD + '">')
+PROGRESS_REGEXES = {
+    x: re.compile("</span> " + MATCHFIELD + f" {y}</div>")
+    for (x, y) in zip(["manga", "anime"], ["chs", "eps"])
+}
+PAGE_REGEX = re.compile('page=([0-9]*)">')
+FEED_TITLE_REGEX = re.compile('">' + MATCHFIELD + f"</h5>")
+FEED_TIMESTAMP_REGEX = re.compile('data-timestamp="' + MATCHFIELD + f'">')
 
 
 def unpack(x):
@@ -24,13 +46,7 @@ def unpack(x):
 
 
 def is_private_list(resp, username):
-    usernames = re.findall(
-        MATCHFIELD + " has chosen to make their content private.", resp.text
-    )
-    if not usernames:
-        return False
-    assert unpack(usernames).lower().strip() == username.lower()
-    return True
+    return " has chosen to make their content private." in resp.text
 
 
 def is_invalid_user(resp, username):
@@ -38,31 +54,23 @@ def is_invalid_user(resp, username):
 
 
 def get_title(x):
-    return sanitize_string(
-        unpack(re.findall('<h3 class="cardName">' + MATCHFIELD + "</h3>", x))
-    )
+    return sanitize_string(unpack(TITLE_REGEX.findall(x)))
 
 
 def get_score(x):
-    scores = re.findall('<div class="ttRating">' + MATCHFIELD + "</div>", x)
+    scores = SCORE_REGEX.findall(x)
     if not scores:
         return "0"
     return str(2 * float(unpack(scores)))
 
 
 def get_status(x):
-    status = re.findall('<span class="status' + MATCHFIELD + '">', x)
+    status = STATUS_REGEX.findall(x)
     return unpack(status)
 
 
 def get_progress(x, medium):
-    if medium == "anime":
-        suffix = "eps"
-    elif medium == "manga":
-        suffix = "chs"
-    else:
-        assert False
-    progress = re.findall("</span> " + MATCHFIELD + f" {suffix}</div>", x)
+    progress = PROGRESS_REGEXES[medium].findall(x)
     if not progress:
         return 0
     return unpack(progress)
@@ -77,7 +85,7 @@ def get_page_entries(resp):
 
 
 def get_page_numbers(resp):
-    return set(re.findall('page=([0-9]*)">', resp.text))
+    return set(PAGE_REGEX.findall(resp.text))
 
 
 def get_feed_entries(resp):
@@ -85,14 +93,14 @@ def get_feed_entries(resp):
 
 
 def get_feed_title(x):
-    return unpack(re.findall('">' + MATCHFIELD + f"</h5>", x))
+    return unpack(FEED_TITLE_REGEX.findall(x))
 
 
 def get_feed_timestamp(x):
-    return unpack(re.findall('data-timestamp="' + MATCHFIELD + f'">', x))
+    return unpack(FEED_TIMESTAMP_REGEX.findall(x))
 
 
-def get_feed_data(username, medium):
+def get_feed_data(session, username, medium):
     feed_data = {}
     next_page = True
     page = 0
@@ -102,7 +110,7 @@ def get_feed_data(username, medium):
             f"https://www.anime-planet.com/users/{username}"
             + f"/feed?type={medium}&page={page}"
         )
-        resp = call_api(url)
+        resp = call_api(session, url)
         if not resp.ok:
             return {}, False
         next_page = False
@@ -116,7 +124,7 @@ def get_feed_data(username, medium):
     return feed_data, True
 
 
-def get_user_media_list(username, medium):
+def get_user_media_list(session, username, medium):
     page = 0
     next_page = True
     records = []
@@ -127,7 +135,7 @@ def get_user_media_list(username, medium):
             + f"/{medium}?sort=user_updated&order=desc&per_page=560"
             + f"&page={page}"
         )
-        resp = call_api(url)
+        resp = call_api(session, url)
         if (
             not resp.ok
             or is_private_list(resp, username)
@@ -142,7 +150,7 @@ def get_user_media_list(username, medium):
         data=list(reversed(records)), columns=["title", "score", "status", "progress"]
     )
     if len(df) > 0:
-        feed_data, feed_ok = get_feed_data(username, medium)
+        feed_data, feed_ok = get_feed_data(session, username, medium)
         if not feed_ok:
             logging.info(f"Cannot parse feed for {username} {medium}")
     else:

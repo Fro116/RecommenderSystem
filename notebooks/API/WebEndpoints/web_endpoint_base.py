@@ -2,27 +2,23 @@ import contextlib
 import logging
 import os
 import shutil
+import sys
 import time
 
 import pandas as pd
 import requests
 
+sys.path.append("..")
+from API import animeplanet_api, api_setup, mal_web_api
 
-def import_script(nb):
-    cwd = os.getcwd()
-    try:
-        os.chdir(os.path.dirname(nb))
-        script = os.path.basename(nb)
-        exec(open(script).read(), globals())
-    finally:
-        os.chdir(cwd)
-
+PROXIES = api_setup.load_proxies(PROXY_NUMBER, PARTITION, NUM_PARTITIONS)
 
 if source == "mal":
-    API_PERIOD = 4
-    import_script("../API/MalWebApi.py")
+    SESSION = mal_web_api.make_session(PROXIES, 1)
+    get_username = lambda userid: get_username(SESSION, userid)
 elif source == "animeplanet":
-    import_script("../API/AnimeplanetApi.py")
+    SESSION = animeplanet_api.make_session(PROXIES, 1)
+    call_api = lambda url: animeplanet_api.call_api(SESSION, url)
 else:
     assert False
 
@@ -31,19 +27,25 @@ if not os.path.exists(data_path):
     os.makedirs(data_path, exist_ok=True)
 os.chdir(data_path)
 
-logger = logging.getLogger(name)
-logger.setLevel(logging.DEBUG)
-formatter = logging.Formatter(
-    "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-)
-LOG_FILE = f"{name}.log"
-for stream in [
-    logging.handlers.RotatingFileHandler(
-        LOG_FILE, "w+", maxBytes=1000000, backupCount=1
-    ),
-]:
-    stream.setFormatter(formatter)
-    logger.addHandler(stream)
+
+def configure_logging(logfile):
+    name = "get_media"
+    logger = logging.getLogger()
+    logger.handlers.clear()
+    logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    for stream in [
+        logging.handlers.RotatingFileHandler(
+            logfile, "w+", maxBytes=1000000, backupCount=1
+        ),
+    ]:
+        stream.setFormatter(formatter)
+        logger.addHandler(stream)
+
+
+configure_logging(f"{name}.log")
 
 
 @contextlib.contextmanager
