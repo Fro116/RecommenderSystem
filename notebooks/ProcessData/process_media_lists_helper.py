@@ -6,6 +6,14 @@ import pandas as pd
 from tqdm import tqdm
 
 
+def get_data_path(file):
+    path = os.getcwd()
+    while os.path.basename(path) != "notebooks":
+        path = os.path.dirname(path)
+    path = os.path.dirname(path)
+    return os.path.join(path, "data", file)
+
+
 def load_timestamps():
     def parse_line(file, field, format=int):
         line = file.readline()
@@ -14,7 +22,7 @@ def load_timestamps():
         assert fields[0] == field
         return format(fields[1])
 
-    with open(os.path.join("../../data/processed_data", "timestamps.csv")) as f:
+    with open(os.path.join(get_data_path("processed_data/timestamps.csv"))) as f:
         min_timestamp = parse_line(f, "min_timestamp")
         max_timestamp = parse_line(f, "max_timestamp")
     return min_timestamp, max_timestamp
@@ -22,7 +30,7 @@ def load_timestamps():
 
 def load_uid_mapping(fn, col):
     return (
-        pd.read_csv(f"../../data/processed_data/{fn}").set_index(col)["uid"].to_dict()
+        pd.read_csv(get_data_path(f"processed_data/{fn}")).set_index(col)["uid"].to_dict()
     )
 
 

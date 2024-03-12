@@ -1,10 +1,10 @@
 import datetime
 import glob
+import logging
 import os
 from functools import cache
 
 import pandas as pd
-from filelock import FileLock
 from tqdm import tqdm
 
 OUTPUT_HEADER = [
@@ -66,6 +66,14 @@ def filter_negative_ts(x):
     return x
 
 
+def get_data_path(file):
+    path = os.getcwd()
+    while os.path.basename(path) != "notebooks":
+        path = os.path.dirname(path)
+    path = os.path.dirname(path)
+    return os.path.join(path, "data", file)
+
+
 @cache
 def get_media_progress(medium):
     def to_dict(df, key, val):
@@ -76,7 +84,11 @@ def get_media_progress(medium):
                 d[df[key][i]] = int(x)
         return d
 
-    df = pd.read_csv(os.path.join(MEDIA_DIR, f"{medium}.csv"))
+    if os.path.exists(get_data_path(f"processed_data/{medium}.csv")):
+        fn = get_data_path(f"processed_data/{medium}.csv")
+    else:
+        fn = get_data_path(f"raw_data/{medium}.csv")
+    df = pd.read_csv(fn)
     if medium == "anime":
         return {"episodes": to_dict(df, f"{medium}_id", "num_episodes")}
     elif medium == "manga":
@@ -125,13 +137,13 @@ def compute_sentiments(texts):
 def process_score(score):
     score = float(score)
     if not (score >= 0 and score <= 10):
-        logger.warning(f"invalid score {score}, replacing with 0")
+        logging.warning(f"invalid score {score}, replacing with 0")
         score = 0
     return score
 
 
 def preprocess(input_fn, medium, header_fields, text_fields):
-    logger.info(f"Sanitizing entries in {input_fn}")
+    logging.info(f"Sanitizing entries in {input_fn}")
     total_lines = 0
     total_texts = set()
 
@@ -145,7 +157,7 @@ def preprocess(input_fn, medium, header_fields, text_fields):
                     header = True
                     correct_header = ",".join(header_fields) + "\n"
                     if line != correct_header:
-                        logger.warning(
+                        logging.warning(
                             f"Replacing malformed header line {line.strip()} "
                             f"with correct header {correct_header.strip()}"
                         )
@@ -155,7 +167,7 @@ def preprocess(input_fn, medium, header_fields, text_fields):
                     continue
                 fields = line.strip().split(",")
                 if len(fields) != len(header_fields):
-                    logger.warning(
+                    logging.warning(
                         f"Deleting malformed line in user_{medium}_list.csv: {line} "
                     )
                     continue
@@ -170,18 +182,8 @@ def preprocess(input_fn, medium, header_fields, text_fields):
     }
 
 
-def process_line(line, medium, metadata):
-    try:
-        fields = parse_fields(line, medium, metadata)
-    except Exception as e:
-        logger.error(f"Error: could not parse {line}")
-        raise e
-    assert len(fields) == len(OUTPUT_HEADER)
-    return ",".join(str(fields[x]) for x in OUTPUT_HEADER)
-
-
-def process(infile, outfile, medium, metadata):
-    logger.info(f"processing entries in {infile}")
+def process(infile, outfile, medium, metadata, parsefn):
+    logging.info(f"processing entries in {infile}")
     with open(infile, "r") as in_file:
         with open(outfile, "w") as out_file:
             header = False
@@ -190,7 +192,10 @@ def process(infile, outfile, medium, metadata):
                     header = True
                     out_file.write(",".join(OUTPUT_HEADER) + "\n")
                     continue
-                out_file.write(process_line(line.strip(), medium, metadata) + "\n")
-
-
-exec(open(f"{SOURCE.capitalize()}.py").read())
+                try:
+                    fields = parsefn(line.strip(), medium, metadata)
+                except Exception as e:
+                    logging.error(f"Error: could not parse {line}")
+                    raise e
+                assert len(fields) == len(OUTPUT_HEADER)
+                out_file.write(",".join(str(fields[x]) for x in OUTPUT_HEADER) + "\n")

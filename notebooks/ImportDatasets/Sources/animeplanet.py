@@ -2,6 +2,10 @@ from functools import cache
 
 import pandas as pd
 
+from .import_lists_helper import *
+
+SOURCE = "animeplanet"
+
 INPUT_HEADER = [
     "title",
     "score",
@@ -30,7 +34,7 @@ def process_status(status):
 @cache
 def get_title_mapping(medium):
     return (
-        pd.read_csv(f"../../data/processed_data/animeplanet_{medium}_to_uid.csv")
+        pd.read_csv(get_data_path(f"processed_data/animeplanet_{medium}_to_uid.csv"))
         .set_index("title")[f"{medium}_id"]
         .to_dict()
     )

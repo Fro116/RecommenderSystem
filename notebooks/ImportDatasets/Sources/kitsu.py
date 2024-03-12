@@ -1,3 +1,7 @@
+from .import_lists_helper import *
+
+SOURCE = "kitsu"
+
 INPUT_HEADER = [
     "uid",
     "score",
