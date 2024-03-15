@@ -1,0 +1,6 @@
+Flask==3.0.2
+gevent==24.2.1
+gunicorn==21.2.0
+pandas==2.0.3
+requests==2.31.0
+tqdm==4.66.1
