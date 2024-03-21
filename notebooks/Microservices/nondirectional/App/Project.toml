@@ -1,0 +1,17 @@
+name = "App"
+uuid = "24b09a74-d61e-407d-91fe-f2cdeaa3b99f"
+authors = ["Fro116 <omnik116@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Memoize = "c03570c3-d221-55d1-a50c-7939bbd78826"
+NBInclude = "0db19996-df87-5ea3-a455-e3a50d440464"
+Oxygen = "df9a0d86-3283-4920-82dc-4555fc0d1d8b"
+Setfield = "efcf1570-3423-57d1-acb7-fd33fddbac46"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
