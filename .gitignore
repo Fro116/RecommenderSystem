@@ -1,6 +1,6 @@
 data/
 environment/
-notebooks/Microservices/
+notebooks/Microservices/Images
 .ipynb_checkpoints/
 __pycache__/
 .DS_Store

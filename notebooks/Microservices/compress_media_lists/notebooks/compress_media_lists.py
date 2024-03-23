@@ -14,7 +14,7 @@ VALID_TITLES = {
 }
 
 
-def import_media_list(username, source, medium, path):
+def import_media_list(source, medium, path):
     if source == "mal":
         s = mal
     elif source == "anilist":
@@ -34,7 +34,7 @@ def import_media_list(username, source, medium, path):
     return dst
 
 
-def process_media_list(username, source, medium, path):
+def process_media_list(source, medium, path):
     src = os.path.join(path, f"user_{medium}_list.raw.csv")
     dst = os.path.join(path, f"user_{medium}_list.processed.csv")
     userids = list(pd.read_csv(src)["userid"].unique())
@@ -67,15 +67,14 @@ def generate_media_list(fn):
 
 @app.route("/query", methods=['POST'])
 def query():
-    username = request.args.get("username", type=str)
     source = request.args.get("source", type=str)
     medium = request.args.get("medium", type=str)
     data = request.get_json()
     df = pd.DataFrame.from_dict({x: data[x] for x in data["_columns"]})    
     with tempfile.TemporaryDirectory() as path:
         df.to_csv(os.path.join(path, f"user_{medium}_list.{source}.csv"), index=False)
-        import_media_list(username, source, medium, path)
-        fn = process_media_list(username, source, medium, path)
+        import_media_list(source, medium, path)
+        fn = process_media_list(source, medium, path)
         df = generate_media_list(fn)
         return jsonify(df.to_dict("list"))
 

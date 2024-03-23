@@ -4,4 +4,4 @@ COPY ./requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 ENV TQDM_DISABLE=1
-CMD ["gunicorn", "-w", "2", "--chdir", "notebooks", "compress_media_lists:app", "-b", "0.0.0.0:8080"]
+CMD ["gunicorn", "-w", "1", "--chdir", "notebooks", "transformer:app", "-b", "0.0.0.0:8080"]

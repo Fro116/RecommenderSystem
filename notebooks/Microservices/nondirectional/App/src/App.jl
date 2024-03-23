@@ -136,14 +136,24 @@ function precompile(port::Int)
             sleep(1)
         end
     end
-    open("test.json") do f
-        payload = read(f, String)
-        HTTP.post(
-            "http://localhost:$port/query",
-            [("Content-Type", "application/json")],
-            payload,
-        )
-    end
+    
+    payload = (
+        "{\"anime\":{\"mediaid\":[0],\"created_at\":[0],\"rating\":[1.0]," *
+        "\"update_order\":[0],\"sentiment_score\":[0],\"medium\":[1],\"backward_order\":[1]," *
+        "\"priority\":[0],\"progress\":[1.0],\"forward_order\":[1],\"status\":[6]," *
+        "\"updated_at\":[1.0],\"started_at\":[0.0],\"repeat_count\":[0],\"owned\":[0]," *
+        "\"sentiment\":[0],\"finished_at\":[0.0],\"source\":[0],\"unit\":[1],\"userid\":[0]}," *
+        "\"manga\":{\"mediaid\":[0],\"created_at\":[0],\"rating\":[1.0],\"update_order\":[0]," *
+        "\"sentiment_score\":[0],\"medium\":[0],\"backward_order\":[1],\"priority\":[0]," *
+        "\"progress\":[1.0],\"forward_order\":[1],\"status\":[6],\"updated_at\":[1.0]," *
+        "\"started_at\":[0],\"repeat_count\":[0],\"owned\":[0],\"sentiment\":[0]," *
+        "\"finished_at\":[0],\"source\":[0],\"unit\":[1],\"userid\":[0]}}"
+    )
+    HTTP.post(
+        "http://localhost:$port/query",
+        [("Content-Type", "application/json")],
+        payload,
+    )
 end
 
 end
