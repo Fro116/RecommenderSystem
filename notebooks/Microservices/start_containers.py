@@ -37,7 +37,8 @@ try:
     runapp("transformer_jl", 3003)
     runapp("transformer_py", 3004)
     runapp("bagofwords_jl", 3005)
-    runapp("bagofwords_py", 3006)    
+    runapp("bagofwords_py", 3006)
+    runapp("ensemble", 3007)
     while True:
         time.sleep(3600)
 except Exception as e:

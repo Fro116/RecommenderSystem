@@ -171,7 +171,7 @@ function compute_alpha(payload::Dict, embeddings::Dict)
             end
             e = copy(r)
             e[ptw.+1] .= p[ptw.+1]
-            ret["$medium/Transformer/$version/$metric"] = e
+            ret["$medium/Transformer/$version/$metric"] = e[1:num_items(medium)]
         end
     end
     ret
