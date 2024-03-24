@@ -27,9 +27,11 @@ function query(req::HTTP.Request)
     alphas = data["alphas"]
     linear = compute_linear(payload, alphas)
     alphas = merge(linear, alphas)
-    anime_recs = recommend(payload, alphas, "anime", source)
-    manga_recs = recommend(payload, alphas, "manga", source)
-    page = render_html_page(username, anime_recs, manga_recs)
+    d = Dict{String, Any}(x => nothing for x in ALL_MEDIUMS)
+    Threads.@threads for x in ALL_MEDIUMS
+        d[x] = recommend(payload, alphas, x, source)
+    end
+    page = render_html_page(username, d["anime"], d["manga"])
     Oxygen.text(page)
 end
 
@@ -38,7 +40,6 @@ function precompile(port::Int)
         try
             r = HTTP.get("http://localhost:$port/wake")
             json = JSON.parse(String(copy(r.body)))
-            print(json)
             if json["success"] == true
                 break
             end

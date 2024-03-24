@@ -1,0 +1,9 @@
+name = "App"
+uuid = "24b09a74-d61e-407d-91fe-f2cdeaa3b99f"
+authors = ["Fro116 <omnik116@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Oxygen = "df9a0d86-3283-4920-82dc-4555fc0d1d8b"

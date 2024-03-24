@@ -198,7 +198,6 @@ function precompile(port::Int)
         try
             r = HTTP.get("http://localhost:$port/wake")
             json = JSON.parse(String(copy(r.body)))
-            print(json)
             if json["success"] == true
                 break
             end

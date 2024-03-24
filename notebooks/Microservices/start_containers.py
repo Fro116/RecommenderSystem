@@ -7,11 +7,26 @@ import time
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 PROCS = []
+APPS = [
+    "index",    
+    "fetch_media_lists", 
+    "compress_media_lists", 
+    "nondirectional",
+    "transformer_jl",
+    "transformer_py",
+    "bagofwords_jl",
+    "bagofwords_py",
+    "ensemble",
+]
 
 def runapp(app, port):
     cmdlist = [
         "docker",
         "run",
+        "--network",
+        "rsys",
+        "--name",
+        app,
         "-p",
         f"{port}:8080",
         f"rsys/{app}",
@@ -24,6 +39,9 @@ def signal_handler(sig, frame):
         p.terminate()
     for p in PROCS:
         p.wait()
+    subprocess.run(["docker", "network", "rm", "rsys"])
+    for app in APPS:
+        subprocess.run(["docker", "remove", app])
     sys.exit(0)
 
 
@@ -31,14 +49,9 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 try:
-    runapp("fetch_media_lists", 3000)
-    runapp("compress_media_lists", 3001)
-    runapp("nondirectional", 3002)
-    runapp("transformer_jl", 3003)
-    runapp("transformer_py", 3004)
-    runapp("bagofwords_jl", 3005)
-    runapp("bagofwords_py", 3006)
-    runapp("ensemble", 3007)
+    PROCS.append(subprocess.Popen(["docker", "network", "create", "rsys"]))
+    for i, app in enumerate(APPS):
+        runapp(app, 3000+i)
     while True:
         time.sleep(3600)
 except Exception as e:
