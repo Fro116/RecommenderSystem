@@ -36,6 +36,8 @@ try:
     runapp("nondirectional", 3002)
     runapp("transformer_jl", 3003)
     runapp("transformer_py", 3004)
+    runapp("bagofwords_jl", 3005)
+    runapp("bagofwords_py", 3006)    
     while True:
         time.sleep(3600)
 except Exception as e:
