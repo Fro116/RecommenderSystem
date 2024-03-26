@@ -8,11 +8,12 @@ Oxygen.@post "/compute" App.compute
 if length(ARGS) == 0
     port = 8080
     Threads.@spawn begin
-        App.precompile(port)
+        App.precompile(true, port)
         Oxygen.terminate()
     end
 elseif length(ARGS) == 1
     port = parse(Int, ARGS[1])
+    App.precompile(false, port)
 else
     @assert false
 end

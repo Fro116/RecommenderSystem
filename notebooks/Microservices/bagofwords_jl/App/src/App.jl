@@ -5,7 +5,7 @@ import JSON
 import Oxygen
 import MLUtils
 import NBInclude: @nbinclude
-import SparseArrays: AbstractSparseArray, sparse
+import SparseArrays
 @nbinclude("notebooks/TrainingAlphas/AlphaBase.ipynb")
 @nbinclude("notebooks/TrainingAlphas/Baseline/BaselineHelper.ipynb")
 
@@ -87,18 +87,26 @@ function get_inputs(medium::String, metric::String, payload::Dict, alphas::Dict)
     else
         df = get_split(payload, metric, medium, fields)
     end
-    sparse(df, medium)
+    SparseArrays.sparse(
+        df.itemid .+ 1,
+        df.userid .+ 1,
+        df.metric,
+        num_items(medium),
+        1,
+    )    
 end
 
 function get_inputs(payload::Dict, alphas::Dict)
-    inputs = [
-        get_inputs(medium, metric, payload, alphas) for metric in ["rating", "watch"]
-        for medium in ALL_MEDIUMS
-    ]
-    vcat(inputs...)
+    vcat(
+        [
+            get_inputs(medium, metric, payload, alphas)
+            for metric in ["rating", "watch"]
+            for medium in ALL_MEDIUMS
+        ]...
+    ) 
 end
 
-function record_sparse_array!(d::Dict, name::String, x::AbstractSparseArray)
+function record_sparse_array!(d::Dict, name::String, x::SparseArrays.SparseMatrixCSC)
     i, j, v = SparseArrays.findnz(x)
     d[name*"_i"] = i
     d[name*"_j"] = j
@@ -162,17 +170,41 @@ function compute(req::HTTP.Request)
     d = JSON.parse(String(req.body))
     payload = d["payload"]
     embeddings = d["embeddings"]
-    baselines = Dict{String,Any}(x => nothing for x in ALL_MEDIUMS)
+    alphas = Dict{String,Any}(x => nothing for x in ALL_MEDIUMS)
     Threads.@threads for medium in ALL_MEDIUMS
-        baselines[medium] = compute_bagofwords(payload, embeddings, medium)
+        alphas[medium] = compute_bagofwords(payload, embeddings, medium)
     end
-    Oxygen.json(merge(values(baselines)...))
+    Oxygen.json(merge(values(alphas)...))
 end
 
-function precompile(port::Int)
+function precompile_run(running::Bool, port::Int, query::String)
+    if running
+        return HTTP.get("http://localhost:$port/$query")
+    else
+        fn = getfield(App, Symbol(fn))
+        r = HTTP.Request("GET", "", [], "")
+        fn(r)
+    end
+end
+
+function precompile_run(running::Bool, port::Int, query::String, data::String)
+    if running
+        return HTTP.post(
+            "http://localhost:$port/$query",
+            [("Content-Type", "application/json")],
+            data,
+        )
+    else
+        fn = getfield(App, Symbol(query))
+        req = HTTP.Request("POST", "", [("Content-Type", "application/json")], data)
+        return fn(req)
+    end
+end
+
+function precompile(running::Bool, port::Int)
     while true
         try
-            r = HTTP.get("http://localhost:$port/wake")
+            r = precompile_run(running, port, "wake")
             json = JSON.parse(String(copy(r.body)))
             if json["success"] == true
                 break
@@ -195,11 +227,7 @@ function precompile(port::Int)
         "\"started_at\":[0],\"repeat_count\":[0],\"owned\":[0],\"sentiment\":[0]," *
         "\"finished_at\":[0],\"source\":[0],\"unit\":[1],\"userid\":[0]}}"
     )
-    HTTP.post(
-        "http://localhost:$port/process",
-        [("Content-Type", "application/json")],
-        payload,
-    )
+    precompile_run(running, port, "process", payload)
 
     embeddings = Dict()
     for medium in ALL_MEDIUMS
@@ -210,11 +238,7 @@ function precompile(port::Int)
     d = Dict()
     d["payload"] = JSON.parse(payload)
     d["embeddings"] = embeddings
-    HTTP.post(
-        "http://localhost:$port/compute",
-        [("Content-Type", "application/json")],
-        JSON.json(d),
-    )
+    precompile_run(running, port, "compute", JSON.json(d))
 end
 
 end
