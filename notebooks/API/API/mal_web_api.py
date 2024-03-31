@@ -1,5 +1,6 @@
 import html
 import re
+import logging
 
 from . import api_setup
 import pandas as pd

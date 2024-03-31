@@ -1,7 +1,9 @@
+import logging
 import time
 
-from . import api_setup
 import pandas as pd
+
+from . import api_setup
 from .api_setup import sanitize_string, to_unix_time
 
 KITSU_TOKEN = None
@@ -54,7 +56,7 @@ def get_mal_id(externalid):
         return uid
     else:
         # sometimes the external id field is incorrectly populated
-        logger.info(f"could not parse external id {externalid}")
+        logging.info(f"could not parse external id {externalid}")
         return None
 
 
@@ -172,7 +174,7 @@ def get_user_media_list(session, userid, media):
             # 525: can occur when authentication token is expired
             return pd.DataFrame(), False
         if not response.ok:
-            logger.warning(f"Error {response} received when handling {url}")
+            logging.warning(f"Error {response} received when handling {url}")
             return pd.DataFrame(), False
         if "next" in response.json()["links"]:
             url = response.json()["links"]["next"]

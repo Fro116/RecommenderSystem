@@ -15,7 +15,7 @@ PROXIES = api_setup.load_proxies(PROXY_NUMBER, PARTITION, NUM_PARTITIONS)
 
 if source == "mal":
     SESSION = mal_web_api.make_session(PROXIES, 1)
-    get_username = lambda userid: get_username(SESSION, userid)
+    get_username = lambda userid: mal_web_api.get_username(SESSION, userid)
 elif source == "animeplanet":
     SESSION = animeplanet_api.make_session(PROXIES, 1)
     call_api = lambda url: animeplanet_api.call_api(SESSION, url)
@@ -32,7 +32,7 @@ def configure_logging(logfile):
     name = "get_media"
     logger = logging.getLogger()
     logger.handlers.clear()
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     formatter = logging.Formatter(
         "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
@@ -71,7 +71,7 @@ def should_save(reason, max_iters=3600):
         iterations_since_last_write = 0
         iterations_until_next_write = min(2 * iterations_until_next_write, max_iters)
         should_save = True
-        logger.info(
+        logging.info(
             f"Writing data for {reason}. Will next write data "
             f"after {iterations_until_next_write} iterations"
         )

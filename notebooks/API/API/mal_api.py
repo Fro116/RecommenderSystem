@@ -1,5 +1,8 @@
-from . import api_setup
+import logging
+
 import pandas as pd
+
+from . import api_setup
 from .api_setup import sanitize_string, to_unix_time
 
 MAL_ACCESS_TOKEN = None
@@ -41,7 +44,7 @@ def get_user_media_list(session, username, media):
     while more_pages:
         response = call_api(session, url)
         if response.status_code != 200 or "data" not in response.json():
-            logger.warning(f"Error {response} received when handling {url}")
+            logging.warning(f"Error {response} received when handling {url}")
             return pd.DataFrame(), False
 
         json = response.json()
