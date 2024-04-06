@@ -84,7 +84,7 @@ function get_sentences(
     get_sentences(df, cls_tokens, max_seq_length)
 end
 
-function tokenize(sentence, config)
+function tokenize(sentence, config, max_sentence_len)
     tokenize(;
         sentence = copy(sentence),
         userid = 0,
@@ -93,6 +93,7 @@ function tokenize(sentence, config)
         pad_tokens = config[:pad_tokens],
         cls_tokens = config[:cls_tokens],
         mask_tokens = config[:mask_tokens],
+        max_sentence_len = max_sentence_len,
     )
 end
 
@@ -104,6 +105,7 @@ function tokenize(;
     pad_tokens,
     cls_tokens,
     mask_tokens,
+    max_sentence_len
 )
     sentence =
         subset_sentence(sentence, min(length(sentence), max_seq_len - 1); recent = true)
@@ -112,13 +114,15 @@ function tokenize(;
     masked_word = replace(masked_word, :position, length(sentence) - 1)
     masked_word = replace(masked_word, :userid, userid)
     push!(sentence, masked_word)
-    tokens = get_token_ids(sentence, max_seq_len, pad_tokens, false)
+    pad_len = min(max_sentence_len+1, max_seq_len)
+    tokens = get_token_ids(sentence, pad_len, pad_tokens, false)
     positions = [length(sentence) - 1]
     tokens, positions
 end
 
 function process_tokens(sentences, config)
-    tokens = [tokenize(x, config) for x in sentences]
+    max_sentence_len = maximum(length.(sentences))
+    tokens = [tokenize(x, config, max_sentence_len) for x in sentences]
     d = Dict{String,AbstractArray}()
     collate = MLUtils.batch
     for (i, name) in Iterators.enumerate(config.vocab_names)
@@ -128,53 +132,56 @@ function process_tokens(sentences, config)
     d
 end
 
-function process_medialists(payload::Dict)
+function get_config()
     version = "v1"
     sourcedir = get_data_path(joinpath("alphas", "all", "Transformer", version, "0"))
-    f = open(joinpath(sourcedir, "config.json"))
-    d = JSON.parse(f)
-    config = NamedTuple(Symbol.(keys(d)) .=> values(d))
-    close(f)
+    open(joinpath(sourcedir, "config.json")) do f
+        d = JSON.parse(f)
+        return NamedTuple(Symbol.(keys(d)) .=> values(d))
+    end   
+end
 
+const CONFIG = get_config()
+
+function process_medialists(payload::Dict)
     sentences = [
         get_sentences(
-            config[:cls_tokens],
-            config[:max_sequence_length],
+            CONFIG[:cls_tokens],
+            CONFIG[:max_sequence_length],
             include_ptw,
             payload,
         ) for include_ptw in [false, true]
     ]
-    process_tokens(sentences, config)
+    process_tokens(sentences, CONFIG)
 end
 
-function compute_alpha(payload::Dict, embeddings::Dict)
+function compute_transformer(payload::Dict, embeddings::Dict, medium::String, metric::String)
     ret = Dict()
     version = "v1"
-    for medium in ALL_MEDIUMS
-        seen = get_raw_split(payload, medium, [:itemid], nothing).itemid
-        ptw = get_split(payload, "plantowatch", medium, [:itemid], nothing).itemid
-        watched = [x for x in seen if x ∉ Set(ptw)]
-        for metric in ALL_METRICS
-            M = embeddings["$(medium)_$(metric)"]
-            r = M[1] # regular items
-            p = M[2] # plantowatch items
-            if metric in ["watch", "plantowatch"]
-                r = exp.(r)
-                r[seen.+1] .= 0
-                r = r ./ sum(r)
-                p = exp.(p)
-                p[watched.+1] .= 0
-                p = p ./ sum(p)
-            elseif metric == "drop"
-                r = sigmoid.(r)
-                p = sigmoid.(p)
-            end
-            e = copy(r)
-            e[ptw.+1] .= p[ptw.+1]
-            ret["$medium/Transformer/$version/$metric"] = e[1:num_items(medium)]
-        end
+    seen = get_raw_split(payload, medium, [:itemid], nothing).itemid
+    ptw = get_split(payload, "plantowatch", medium, [:itemid], nothing).itemid
+    watched = [x for x in seen if x ∉ Set(ptw)]
+    M = embeddings["$(medium)_$(metric)"]
+    r = M[1] # regular items
+    p = M[2] # plantowatch items
+    if metric in ["watch", "plantowatch"]
+        r = exp.(r)
+        r[seen.+1] .= 0
+        r = r ./ sum(r)
+        p = exp.(p)
+        p[watched.+1] .= 0
+        p = p ./ sum(p)
+    elseif metric == "drop"
+        r = sigmoid.(r)
+        p = sigmoid.(p)
+    elseif metric == "rating"
+        nothing
+    else
+        @assert false
     end
-    ret
+    e = copy(r)
+    e[ptw.+1] .= p[ptw.+1]
+    Dict("$medium/Transformer/$version/$metric" => e[1:num_items(medium)])
 end
 
 function wake(req::HTTP.Request)
@@ -188,15 +195,43 @@ end
 
 function compute(req::HTTP.Request)
     d = JSON.parse(String(req.body))
+    params = Oxygen.queryparams(req)
     payload = d["payload"]
-    embeddings = d["embeddings"]
-    Oxygen.json(compute_alpha(payload, embeddings))
+    embeddings = d["embedding"]
+    alpha = compute_transformer(payload, embeddings, params["medium"], params["metric"])
+    Oxygen.json(alpha)
 end
 
-function precompile(port::Int)
+function precompile_run(running::Bool, port::Int, query::String)
+    if running
+        return HTTP.get("http://localhost:$port$query")
+    else
+        name = split(query[2:end], "?")[1]
+        fn = getfield(App, Symbol(name))
+        r = HTTP.Request("GET", query, [], "")
+        return fn(r)
+    end
+end
+
+function precompile_run(running::Bool, port::Int, query::String, data::String)
+    if running
+        return HTTP.post(
+            "http://localhost:$port$query",
+            [("Content-Type", "application/json")],
+            data,
+        )
+    else
+        name = split(query[2:end], "?")[1]
+        fn = getfield(App, Symbol(name))
+        req = HTTP.Request("POST", query, [("Content-Type", "application/json")], data)
+        return fn(req)
+    end
+end
+
+function precompile(running::Bool, port::Int)
     while true
         try
-            r = HTTP.get("http://localhost:$port/wake")
+            r = precompile_run(running, port, "/wake")
             json = JSON.parse(String(copy(r.body)))
             if json["success"] == true
                 break
@@ -219,26 +254,17 @@ function precompile(port::Int)
         "\"started_at\":[0],\"repeat_count\":[0],\"owned\":[0],\"sentiment\":[0]," *
         "\"finished_at\":[0],\"source\":[0],\"unit\":[1],\"userid\":[0]}}"
     )
-    HTTP.post(
-        "http://localhost:$port/process",
-        [("Content-Type", "application/json")],
-        payload,
-    )
+    precompile_run(running, port, "/process", payload)
 
-    embeddings = Dict()
-    for medium in ALL_MEDIUMS
+
+    for medium in ALL_MEDIUMS  
         for metric in ALL_METRICS
-            embeddings["$(medium)_$(metric)"] = ones(Float32, num_items(medium), 2)
+            d = Dict()
+            d["payload"] = JSON.parse(payload)            
+            d["embedding"] = Dict("$(medium)_$(metric)" => ones(Float32, num_items(medium), 2)) 
+            precompile_run(running, port, "/compute?medium=$medium&metric=$metric", JSON.json(d))
         end
     end
-    d = Dict()
-    d["payload"] = JSON.parse(payload)
-    d["embeddings"] = embeddings
-    HTTP.post(
-        "http://localhost:$port/compute",
-        [("Content-Type", "application/json")],
-        JSON.json(d),
-    )    
 end
 
 end

@@ -40,6 +40,8 @@ def load_transformer_model(medium):
     device = torch.device("cpu")
     source_dir = get_data_path(os.path.join("alphas", medium, "Transformer", "v1"))
     model_file = os.path.join(source_dir, "model.pt")
+    if not os.path.exists(model_file):
+        return None    
     training_config = create_training_config(
         get_data_path(os.path.join("alphas", "all", "Transformer", "v1"))
     )
@@ -56,7 +58,6 @@ def detach(x):
     x = x.to("cpu").to(torch.float32).numpy().astype(float)
     return [list(x[0, :]), list(x[1, :])]
 
-
 def compute_embeddings(data, medium):
     config, model = MODELS[medium]
     dataloader = DataLoader(
@@ -69,13 +70,38 @@ def compute_embeddings(data, medium):
         shuffle=False,
     )
     with torch.no_grad():
-        embeddings = [detach(y) for y in model(*next(iter(dataloader)), inference=True)]
+        data = next(iter(dataloader))
+        output = model(*data, inference=True)        
+        embeddings = [detach(y) for y in output]            
     names = [f"{medium}_{metric}" for medium in ALL_MEDIUMS for metric in ALL_METRICS]
     d = {x: y for (x, y) in zip(names, embeddings)}
     return {x: y for (x, y) in d.items() if medium in x}
 
 
+def precompile():
+    for k, v in MODELS.items():
+        if v is None:
+            continue
+        config, model = v
+        data = {}
+        size = 4
+        assert size < int(config["max_sequence_length"])
+        for name, dtype in zip(config["vocab_names"], config["vocab_types"]):
+            if dtype == "int":
+                data[name] = np.zeros((2, size), dtype=np.int32)
+            elif dtype == "float":
+                data[name] = np.zeros((2, size), dtype=np.float32)
+            elif dtype == "none":
+                assert name == "userid"
+                data[name] = np.zeros((2, size), dtype=np.int32)
+            else:
+                assert False
+        data["positions"] = np.ones((2, 1), dtype=np.int32)
+        compute_embeddings(data, k)
+
+
 MODELS = {x: load_transformer_model(x) for x in ["manga", "anime"]}
+precompile()
 
 
 @app.route("/query", methods=["POST"])

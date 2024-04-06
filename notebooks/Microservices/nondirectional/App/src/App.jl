@@ -122,10 +122,36 @@ function query(req::HTTP.Request)
     Oxygen.json(ret)
 end
 
-function precompile(port::Int)
+function precompile_run(running::Bool, port::Int, query::String)
+    if running
+        return HTTP.get("http://localhost:$port$query")
+    else
+        name = split(query[2:end], "?")[1]
+        fn = getfield(App, Symbol(name))
+        r = HTTP.Request("GET", query, [], "")
+        return fn(r)
+    end
+end
+
+function precompile_run(running::Bool, port::Int, query::String, data::String)
+    if running
+        return HTTP.post(
+            "http://localhost:$port$query",
+            [("Content-Type", "application/json")],
+            data,
+        )
+    else
+        name = split(query[2:end], "?")[1]
+        fn = getfield(App, Symbol(name))
+        req = HTTP.Request("POST", query, [("Content-Type", "application/json")], data)
+        return fn(req)
+    end
+end
+
+function precompile(running::Bool, port::Int)
     while true
         try
-            r = HTTP.get("http://localhost:$port/wake")
+            r = precompile_run(running, port, "/wake")
             json = JSON.parse(String(copy(r.body)))
             if json["success"] == true
                 break
@@ -148,11 +174,7 @@ function precompile(port::Int)
         "\"started_at\":[0],\"repeat_count\":[0],\"owned\":[0],\"sentiment\":[0]," *
         "\"finished_at\":[0],\"source\":[0],\"unit\":[1],\"userid\":[0]}}"
     )
-    HTTP.post(
-        "http://localhost:$port/query",
-        [("Content-Type", "application/json")],
-        payload,
-    )
+    precompile_run(running, port, "/query", payload)
 end
 
 end

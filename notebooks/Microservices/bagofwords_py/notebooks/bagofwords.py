@@ -5,7 +5,6 @@ from flask import Flask, jsonify, request
 from torch.utils.data import DataLoader, Dataset
 
 exec(open("TrainingAlphas/BagOfWords/bagofwords.py").read())
-app = Flask(__name__)
 
 
 class InferenceDataset(Dataset):
@@ -35,6 +34,8 @@ def load_bagofwords_model(medium, metric):
     base_dir = os.path.join("alphas", medium, "BagOfWords", "v1", metric)
     source_dir = get_data_path(base_dir)
     model_file = os.path.join(source_dir, "model.pt")
+    if not os.path.exists(model_file):
+        return None
     config_file = os.path.join(source_dir, "config.json")
     config = create_training_config(config_file, "inference")
     model = BagOfWordsModel(config)
@@ -47,41 +48,57 @@ def detach(x):
     return list(x.to("cpu").to(torch.float32).numpy().flatten().astype(float))
 
 
-def compute_embeddings(data, medium):
+def compute_embeddings(data, medium, metric):
     dataloader = DataLoader(
         InferenceDataset(data),
         batch_size=1,
         shuffle=False,
     )
     embeddings = {}
-    for metric in ALL_METRICS:
-        with torch.no_grad():
-            name = f"{medium}_{metric}"
-            embeddings[name] = detach(
-                MODELS[name](
-                    *next(iter(dataloader)),
-                    None,
-                    None,
-                    mask=False,
-                    evaluate=False,
-                    inference=True,
-                )
+    with torch.no_grad():
+        name = f"{medium}_{metric}"
+        embeddings[name] = detach(
+            MODELS[(medium, metric)](
+                *next(iter(dataloader)),
+                None,
+                None,
+                mask=False,
+                evaluate=False,
+                inference=True,
             )
+        )
     return embeddings
+
+
+def precompile():
+    for k, v in MODELS.items():
+        if v is None:
+            continue
+        medium, metric = k
+        data = {
+            "inputs_i": [],
+            "inputs_j": [],
+            "inputs_v": [],
+            "inputs_size": [v.model[0].weight.shape[1], 1],
+        }        
+        compute_embeddings(data, medium, metric)
 
 
 ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
 ALL_MEDIUMS = ["manga", "anime"]
 MODELS = {
-    f"{x}_{y}": load_bagofwords_model(x, y) for x in ALL_MEDIUMS for y in ALL_METRICS
+    (x, y): load_bagofwords_model(x, y) for x in ALL_MEDIUMS for y in ALL_METRICS
 }
+precompile()
+app = Flask(__name__)
 
 
 @app.route("/query", methods=["POST"])
 def query():
     data = request.get_json()
     medium = request.args.get("medium", type=str)
-    return jsonify(compute_embeddings(data, medium))
+    metric = request.args.get("metric", type=str)    
+    return jsonify(compute_embeddings(data, medium, metric))
 
 
 @app.route("/wake")
@@ -89,5 +106,5 @@ def wake():
     return jsonify({"success": True})
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  
     app.run()

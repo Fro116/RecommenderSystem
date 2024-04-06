@@ -1,4 +1,4 @@
 Flask==3.0.2
-gunicorn==21.2.0
 numpy==1.25.2
 torch==2.2.1
+waitress==3.0.0

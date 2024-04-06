@@ -2,7 +2,6 @@ import datetime
 import glob
 import logging
 import os
-from functools import cache
 
 import pandas as pd
 from tqdm import tqdm
@@ -50,22 +49,6 @@ SENTIMENT_MAP = {
 }
 
 
-def parse_int(x, map={}, allow_neg=False):
-    if x in map:
-        return map[x]
-    x = int(x)
-    if not allow_neg:
-        assert x >= 0
-    return x
-
-
-def filter_negative_ts(x):
-    # the api can return a negative timestamp if users manually input a bogus date
-    if "-" in x:
-        return "0"
-    return x
-
-
 def get_data_path(file):
     path = os.getcwd()
     while os.path.basename(path) != "notebooks":
@@ -74,7 +57,6 @@ def get_data_path(file):
     return os.path.join(path, "data", file)
 
 
-@cache
 def get_media_progress(medium):
     def to_dict(df, key, val):
         d = {}
@@ -100,6 +82,25 @@ def get_media_progress(medium):
         assert False
 
 
+MEDIA_PROGRESS_MAP = {x: get_media_progress(x) for x in ["manga", "anime"]}
+
+
+def parse_int(x, map={}, allow_neg=False):
+    if x in map:
+        return map[x]
+    x = int(x)
+    if not allow_neg:
+        assert x >= 0
+    return x
+
+
+def filter_negative_ts(x):
+    # the api can return a negative timestamp if users manually input a bogus date
+    if "-" in x:
+        return "0"
+    return x
+
+
 def get_completion(x, xmax):
     if xmax == 0:
         return 0.0
@@ -108,7 +109,7 @@ def get_completion(x, xmax):
 
 
 def get_progress(medium, uid, progress, progress_volumes):
-    df = get_media_progress(medium)
+    df = MEDIA_PROGRESS_MAP[medium]
     if medium == "anime":
         return get_completion(progress, df["episodes"].get(uid, 0))
     elif medium == "manga":

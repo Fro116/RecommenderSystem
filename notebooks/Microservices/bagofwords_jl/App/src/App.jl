@@ -121,32 +121,28 @@ function get_features(payload::Dict, alphas::Dict)
     d
 end
 
-function compute_bagofwords(payload::Dict, embeddings::Dict, medium::String)
+function compute_bagofwords(payload::Dict, embeddings::Dict, medium::String, metric::String)
     seen = get_raw_split(payload, medium, [:itemid], nothing).itemid
     ptw = get_split(payload, "plantowatch", medium, [:itemid], nothing).itemid
-    alphas = Dict{String,Any}()
-    for metric in ALL_METRICS
-        e = convert.(Float32, embeddings["$(medium)_$(metric)"])
-        if metric in ["watch", "plantowatch"]
-            r = copy(e)
-            r[seen.+1] .= 0
-            r = r ./ sum(r)
-            p = copy(e)
-            watched = setdiff(Set(seen), Set(ptw))
-            p[watched.+1] .= 0
-            p = p ./ sum(p)
-            e = copy(r)
-            e[ptw.+1] .= p[ptw.+1]
-            e = copy(r)
-            e[ptw.+1] .= p[ptw.+1]
-        elseif metric in ["rating", "drop"]
-            nothing
-        else
-            @assert false
-        end
-        alphas["$(medium)/BagOfWords/v1/$metric"] = copy(e)
+    e = convert.(Float32, embeddings["$(medium)_$(metric)"])
+    if metric in ["watch", "plantowatch"]
+        r = copy(e)
+        r[seen.+1] .= 0
+        r = r ./ sum(r)
+        p = copy(e)
+        watched = setdiff(Set(seen), Set(ptw))
+        p[watched.+1] .= 0
+        p = p ./ sum(p)
+        e = copy(r)
+        e[ptw.+1] .= p[ptw.+1]
+        e = copy(r)
+        e[ptw.+1] .= p[ptw.+1]
+    elseif metric in ["rating", "drop"]
+        nothing
+    else
+        @assert false
     end
-    alphas
+    Dict("$medium/BagOfWords/v1/$metric" => e)
 end
 
 # Oxygen
@@ -168,35 +164,35 @@ end
 
 function compute(req::HTTP.Request)
     d = JSON.parse(String(req.body))
+    params = Oxygen.queryparams(req)
     payload = d["payload"]
-    embeddings = d["embeddings"]
-    alphas = Dict{String,Any}(x => nothing for x in ALL_MEDIUMS)
-    Threads.@threads for medium in ALL_MEDIUMS
-        alphas[medium] = compute_bagofwords(payload, embeddings, medium)
-    end
-    Oxygen.json(merge(values(alphas)...))
+    embeddings = d["embedding"]
+    alpha = compute_bagofwords(payload, embeddings, params["medium"], params["metric"])
+    Oxygen.json(alpha)
 end
 
 function precompile_run(running::Bool, port::Int, query::String)
     if running
-        return HTTP.get("http://localhost:$port/$query")
+        return HTTP.get("http://localhost:$port$query")
     else
-        fn = getfield(App, Symbol(fn))
-        r = HTTP.Request("GET", "", [], "")
-        fn(r)
+        name = split(query[2:end], "?")[1]
+        fn = getfield(App, Symbol(name))
+        r = HTTP.Request("GET", query, [], "")
+        return fn(r)
     end
 end
 
 function precompile_run(running::Bool, port::Int, query::String, data::String)
     if running
         return HTTP.post(
-            "http://localhost:$port/$query",
+            "http://localhost:$port$query",
             [("Content-Type", "application/json")],
             data,
         )
     else
-        fn = getfield(App, Symbol(query))
-        req = HTTP.Request("POST", "", [("Content-Type", "application/json")], data)
+        name = split(query[2:end], "?")[1]
+        fn = getfield(App, Symbol(name))
+        req = HTTP.Request("POST", query, [("Content-Type", "application/json")], data)
         return fn(req)
     end
 end
@@ -204,7 +200,7 @@ end
 function precompile(running::Bool, port::Int)
     while true
         try
-            r = precompile_run(running, port, "wake")
+            r = precompile_run(running, port, "/wake")
             json = JSON.parse(String(copy(r.body)))
             if json["success"] == true
                 break
@@ -227,18 +223,16 @@ function precompile(running::Bool, port::Int)
         "\"started_at\":[0],\"repeat_count\":[0],\"owned\":[0],\"sentiment\":[0]," *
         "\"finished_at\":[0],\"source\":[0],\"unit\":[1],\"userid\":[0]}}"
     )
-    precompile_run(running, port, "process", payload)
+    precompile_run(running, port, "/process", payload)
 
-    embeddings = Dict()
     for medium in ALL_MEDIUMS
         for metric in ALL_METRICS
-            embeddings["$(medium)_$(metric)"] = ones(Float32, num_items(medium))
+            d = Dict()
+            d["payload"] = JSON.parse(payload)            
+            d["embedding"] = Dict("$(medium)_$(metric)" => ones(Float32, num_items(medium)))
+            precompile_run(running, port, "/compute?medium=$medium&metric=$metric", JSON.json(d))
         end
     end
-    d = Dict()
-    d["payload"] = JSON.parse(payload)
-    d["embeddings"] = embeddings
-    precompile_run(running, port, "compute", JSON.json(d))
 end
 
 end
