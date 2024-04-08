@@ -177,18 +177,20 @@
         const form = document.getElementById('userForm');
         form.onsubmit = function(event) {
             event.preventDefault();
-
             const selectedSourceLabel = document.querySelector('input[name="source"]:checked + label').textContent;
             document.getElementById('sourceName').textContent = "Connecting to " + selectedSourceLabel;
             const loadingOverlay = document.getElementById('loadingOverlay');
             loadingOverlay.classList.add('visible');
-
             setTimeout(function() {
-                loadingOverlay.classList.remove('visible');
-                form.removeEventListener('submit', arguments.callee);
+                form.removeEventListener('submit', arguments.callee); // todo do we need this?
                 form.submit();
-            }, 1000000);
+            }, 0); // set timeout > 0 to test the overlay animation            
         };
+        window.addEventListener("pageshow", function(event) {
+            if (event.persisted) {
+                loadingOverlay.classList.remove('visible');
+            }
+        });        
     </script>
 </body>
 </html>

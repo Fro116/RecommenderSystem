@@ -8,23 +8,13 @@ TEMPLATE = open(joinpath(@__DIR__, "index.html")) do f
     read(f, String)
 end
 ALL_MEDIUMS = ["manga", "anime"]
-# TODO read from environment
-URLS = Dict(
-    "fetch_media_lists" => "http://fetch_media_lists:8080",
-    "compress_media_lists" => "http://compress_media_lists:8080",
-    "nondirectional" => "http://nondirectional:8080",
-    "transformer_jl" => "http://transformer_jl:8080",
-    "transformer_py" => "http://transformer_py:8080",
-    "bagofwords_jl" => "http://bagofwords_jl:8080",
-    "bagofwords_py" => "http://bagofwords_py:8080",
-    "ensemble" => "http://ensemble:8080",
-)
+ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
+URLS = open(joinpath(@__DIR__, "environment/endpoints.json")) do f
+    JSON.parse(read(f, String))
+end
 
 function mock_response()
-    d = Dict(
-        "alpha" => Dict("success" => true),
-        "features" => Dict("success" => true),
-    )
+    d = Dict("alpha" => Dict("success" => true), "features" => Dict("success" => true))
     HTTP.Response(JSON.json(d))
 end
 
@@ -32,7 +22,7 @@ function run(app::String, path::String, precompile::Bool)::HTTP.Response
     if precompile
         return mock_response()
     else
-        HTTP.get(URLS[app] * path)
+        return HTTP.get(URLS[app] * path)
     end
 end
 
@@ -40,11 +30,11 @@ function run(app::String, path::String, json::String, precompile::Bool)::HTTP.Re
     if precompile
         return mock_response()
     else
-        HTTP.post(URLS[app] * path, [("Content-Type", "application/json")], json)
+        return HTTP.post(URLS[app] * path, [("Content-Type", "application/json")], json)
     end
 end
 
-function get_media_list(username::String, source::String, precompile::Bool)::String
+function get_media_lists(username::String, source::String, precompile::Bool)::Dict
     responses = Dict{Any,Any}(x => nothing for x in ALL_MEDIUMS)
     Threads.@threads for medium in ALL_MEDIUMS
         r1 = run(
@@ -60,43 +50,7 @@ function get_media_list(username::String, source::String, precompile::Bool)::Str
         )
         responses[medium] = JSON.parse(String(r2.body))
     end
-    JSON.json(responses)
-end
-
-function transformer(data::String, precompile::Bool)::Dict
-    r_process = run("transformer_jl", "/process", data, precompile)
-    input = String(r_process.body)
-    responses = Dict{Any,Any}(x => nothing for x in ALL_MEDIUMS)
-    Threads.@threads for m in ALL_MEDIUMS
-        responses[m] = run("transformer_py", "/query?medium=$m", input, precompile)
-    end
-    embeddings = merge([JSON.parse(String(copy(x.body))) for x in values(responses)]...)
-    r_compute = run(
-        "transformer_jl",
-        "/compute",
-        JSON.json(Dict("payload" => JSON.parse(data), "embeddings" => embeddings)),
-        precompile,
-    )
-    JSON.parse(String(r_compute.body))
-end
-
-function bagofwords(data::String, precompile::Bool)::Dict
-    r_process = run("bagofwords_jl", "/process", data, precompile)
-    process = JSON.parse(String(r_process.body))
-    alphas = process["alpha"]
-    input = JSON.json(process["features"])
-    responses = Dict{Any,Any}(x => nothing for x in ALL_MEDIUMS)
-    Threads.@threads for m in ALL_MEDIUMS
-        responses[m] = run("bagofwords_py", "/query?medium=$m", input, precompile)
-    end
-    embeddings = merge([JSON.parse(String(copy(x.body))) for x in values(responses)]...)
-    r_compute = run(
-        "bagofwords_jl",
-        "/compute",
-        JSON.json(Dict("payload" => JSON.parse(data), "embeddings" => embeddings)),
-        precompile,
-    )
-    merge(alphas, JSON.parse(String(r_compute.body)))
+    responses
 end
 
 function nondirectional(data::String, precompile::Bool)::Dict
@@ -104,23 +58,115 @@ function nondirectional(data::String, precompile::Bool)::Dict
     JSON.parse(String(r.body))
 end
 
-function get_recs(username::String, source::String, precompile::Bool)::String
-    data = get_media_list(username, source, precompile)
-    responses =
-        Dict{Any,Any}(x => nothing for x in ["bagofwords", "transformer", "nondirectional"])
-    @sync begin
-        Threads.@spawn responses["bagofwords"] = bagofwords(data, precompile)
-        Threads.@spawn responses["transformer"] = transformer(data, precompile)
-        Threads.@spawn responses["nondirectional"] = nondirectional(data, precompile)
+function bagofwords(data::String, precompile::Bool)::Dict
+    r_process = run("bagofwords_jl", "/process", data, precompile)
+    process = JSON.parse(String(copy(r_process.body)))
+    alphas = process["alpha"]
+    input = JSON.json(process["features"])
+
+    responses = Dict{Any,Any}((x, y) => nothing for x in ALL_MEDIUMS for y in ALL_METRICS)
+    @sync for metric in ALL_METRICS
+        for medium in ALL_MEDIUMS
+            Threads.@spawn begin
+                r1 = run(
+                    "bagofwords_py_$(medium)_$(metric)",
+                    "/query?medium=$medium&metric=$metric",
+                    input,
+                    precompile,
+                )
+                d = Dict()
+                d["embedding"] = JSON.parse(String(r1.body))
+                d["payload"] = JSON.parse(data)
+                r2 = run(
+                    "bagofwords_jl",
+                    "/compute?medium=$medium&metric=$metric",
+                    JSON.json(d),
+                    precompile,
+                )
+                responses[(medium, metric)] = JSON.parse(String(r2.body))
+            end
+        end
     end
-    alphas = merge(values(responses)...)
-    inputs = JSON.json(Dict("payload" => JSON.parse(data), "alphas" => alphas))
-    r = run("ensemble", "/query?username=$username&source=$source", inputs, precompile)
+    merge(alphas, collect(values(responses))...)
+end
+
+function transformer(data::String, precompile::Bool)::Dict
+    r_process = run("transformer_jl", "/process", data, precompile)
+    input = String(r_process.body)
+
+    responses = Dict{Any,Any}((x, y) => nothing for x in ALL_MEDIUMS for y in ALL_METRICS)
+    @sync for medium in ALL_MEDIUMS
+        Threads.@spawn begin
+            r1 = run("transformer_py_$(medium)", "/query?medium=$medium", input, precompile)
+            embeddings = JSON.parse(String(r1.body))
+            Threads.@spawn for metric in ALL_METRICS
+                d = Dict()
+                k = "$(medium)_$(metric)"
+                d["embedding"] = Dict(k => get(embeddings, k, ""))
+                d["payload"] = JSON.parse(data)
+                r2 = run(
+                    "transformer_jl",
+                    "/compute?medium=$medium&metric=$metric",
+                    JSON.json(d),
+                    precompile,
+                )
+                responses[(medium, metric)] = JSON.parse(String(r2.body))
+            end
+        end
+    end
+    merge(collect(values(responses))...)
+end
+
+function ensemble(
+    username::String,
+    source::String,
+    data::String,
+    responses::Dict,
+    precompile::Bool,
+)::String
+    inputs = Dict(
+        "payload" => JSON.parse(data),
+        "alphas" => merge(collect(values(responses))...),
+    )
+    r = run(
+        "ensemble",
+        "/query?username=$username&source=$source",
+        JSON.json(inputs),
+        precompile,
+    )
     String(r.body)
 end
 
+function get_recs(username::String, source::String, precompile::Bool)::String
+    data = JSON.json(get_media_lists(username, source, precompile))
+    models = Dict(
+        "bagofwords" => bagofwords,
+        "transformer" => transformer,
+        "nondirectional" => nondirectional,
+    )
+    responses = Dict{String,Any}(x => nothing for x in keys(models))
+    Threads.@threads for k in collect(keys(models))
+        responses[k] = models[k](data, precompile)
+    end
+    ensemble(username, source, data, responses, precompile)
+end
+
+
 wake(req::HTTP.Request) = Oxygen.json(Dict("success" => true))
 index(req::HTTP.Request) = Oxygen.html(TEMPLATE)
+
+function heartbeat(req::HTTP.Request)
+    form_data = HTTP.URIs.queryparams(String(req.body))
+    precompile = get(form_data, "precompile", "") == "true"
+    responses = Dict{Any,Any}(x => nothing for x in keys(URLS))
+    Threads.@threads for x in collect(keys(URLS))
+        if x == "index"
+            continue
+        end
+        responses[x] = @elapsed run(x, "/wake", precompile)
+    end
+    responses
+end
 
 function submit(req::HTTP.Request)
     form_data = HTTP.URIs.queryparams(String(req.body))
@@ -130,18 +176,43 @@ function submit(req::HTTP.Request)
         "AniList" => "anilist",
         "Kitsu" => "kitsu",
         "Anime-Planet" => "animeplanet",
-        "precompile" => "precompile",
     )
     source = source_map[form_data["source"]]
-    precompile = source == "precompile"
+    precompile = get(form_data, "precompile", "") == "true"
     recs = get_recs(username, source, precompile)
     Oxygen.html(recs)
 end
 
-function precompile(port::Int)
+function precompile_run(running::Bool, port::Int, query::String)
+    if running
+        return HTTP.get("http://localhost:$port$query")
+    else
+        name = split(query[2:end], "?")[1]
+        fn = getfield(App, Symbol(name))
+        r = HTTP.Request("GET", query, [], "")
+        return fn(r)
+    end
+end
+
+function precompile_run(running::Bool, port::Int, query::String, data::String)
+    if running
+        return HTTP.post(
+            "http://localhost:$port$query",
+            [("Content-Type", "application/x-www-form-urlencoded")],
+            data,
+        )
+    else
+        name = split(query[2:end], "?")[1]
+        fn = getfield(App, Symbol(name))
+        req = HTTP.Request("POST", query, [("Content-Type", "application/x-www-form-urlencoded")], data)
+        return fn(req)
+    end
+end
+
+function precompile(running::Bool, port::Int)
     while true
         try
-            r = HTTP.get("http://0.0.0.0:$port/wake")
+            r = precompile_run(running, port, "/wake")
             json = JSON.parse(String(copy(r.body)))
             if json["success"] == true
                 break
@@ -152,12 +223,9 @@ function precompile(port::Int)
         end
     end
 
-    HTTP.get("http://0.0.0.0:$port")
-    HTTP.post(
-        "http://0.0.0.0:$port/submit",
-        [("Content-Type", "application/x-www-form-urlencoded")],
-        "username=test&source=precompile",
-    )
+    precompile_run(running, port, "/heartbeat", "precompile=true")
+    precompile_run(running, port, "/index")
+    precompile_run(running, port, "/submit", "username=test&source=MyAnimeList&precompile=true")
 end
 
 end

@@ -3,4 +3,3 @@ cutoff_days: 7
 cutoff_interactions: 5
 min_user_interactions: 4
 min_item_interactions: 4
-cloud_storage: false
