@@ -1,10 +1,18 @@
 module App
 
 import HTTP
-import JSON
+import MsgPack
 import Oxygen
 import NBInclude: @nbinclude
 @nbinclude("notebooks/TrainingAlphas/AlphaBase.ipynb")
+
+function msgpack(d::Dict)::HTTP.Response
+    body = MsgPack.pack(d)
+    response = HTTP.Response(200, [], body = body)
+    HTTP.setheader(response, "Content-Type" => "application/msgpack")
+    HTTP.setheader(response, "Content-Length" => string(sizeof(body)))
+    response
+end
 
 SIMILARITY_MATRICES = Dict(
     x => read_params(x, true)["S"] for medium in ALL_MEDIUMS for x in [
@@ -63,11 +71,11 @@ function compute_dependency_alpha(df, name, outdir, medium)
 end
 
 function wake(req::HTTP.Request)
-    Oxygen.json(Dict("success" => true))
+    msgpack(Dict("success" => true))
 end
 
 function query(req::HTTP.Request)
-    payload = JSON.parse(String(req.body))
+    payload = MsgPack.unpack(req.body)
     anime_df = get_recommendee_split("anime", payload)
     manga_df = get_recommendee_split("manga", payload)
     ret = Dict()
@@ -119,7 +127,7 @@ function query(req::HTTP.Request)
             medium,
         )
     end
-    Oxygen.json(ret)
+    msgpack(ret)
 end
 
 function precompile_run(running::Bool, port::Int, query::String)
@@ -133,17 +141,17 @@ function precompile_run(running::Bool, port::Int, query::String)
     end
 end
 
-function precompile_run(running::Bool, port::Int, query::String, data::String)
+function precompile_run(running::Bool, port::Int, query::String, data::Vector{UInt8})
     if running
         return HTTP.post(
             "http://localhost:$port$query",
-            [("Content-Type", "application/json")],
+            [("Content-Type", "application/msgpack")],
             data,
         )
     else
         name = split(query[2:end], "?")[1]
         fn = getfield(App, Symbol(name))
-        req = HTTP.Request("POST", query, [("Content-Type", "application/json")], data)
+        req = HTTP.Request("POST", query, [("Content-Type", "application/msgpack")], data)
         return fn(req)
     end
 end
@@ -152,8 +160,7 @@ function precompile(running::Bool, port::Int)
     while true
         try
             r = precompile_run(running, port, "/wake")
-            json = JSON.parse(String(copy(r.body)))
-            if json["success"] == true
+            if MsgPack.unpack(r.body)["success"] == true
                 break
             end
         catch
@@ -161,18 +168,48 @@ function precompile(running::Bool, port::Int)
             sleep(1)
         end
     end
-    
-    payload = (
-        "{\"anime\":{\"mediaid\":[0],\"created_at\":[0],\"rating\":[1.0]," *
-        "\"update_order\":[0],\"sentiment_score\":[0],\"medium\":[1],\"backward_order\":[1]," *
-        "\"priority\":[0],\"progress\":[1.0],\"forward_order\":[1],\"status\":[6]," *
-        "\"updated_at\":[1.0],\"started_at\":[0.0],\"repeat_count\":[0],\"owned\":[0]," *
-        "\"sentiment\":[0],\"finished_at\":[0.0],\"source\":[0],\"unit\":[1],\"userid\":[0]}," *
-        "\"manga\":{\"mediaid\":[0],\"created_at\":[0],\"rating\":[1.0],\"update_order\":[0]," *
-        "\"sentiment_score\":[0],\"medium\":[0],\"backward_order\":[1],\"priority\":[0]," *
-        "\"progress\":[1.0],\"forward_order\":[1],\"status\":[6],\"updated_at\":[1.0]," *
-        "\"started_at\":[0],\"repeat_count\":[0],\"owned\":[0],\"sentiment\":[0]," *
-        "\"finished_at\":[0],\"source\":[0],\"unit\":[1],\"userid\":[0]}}"
+
+    payload = MsgPack.pack(
+        Dict(
+            "anime" => Dict(
+                "created_at" => Float32[0.0],
+                "rating" => Float32[1.0],
+                "update_order" => Int32[0],
+                "sentiment_score" => Float32[0.0],
+                "medium" => Int32[1],
+                "priority" => Int32[0],
+                "status" => Int32[6],
+                "progress" => Float32[1.0],
+                "updated_at" => Float32[1.0],
+                "started_at" => Float32[0.0],
+                "repeat_count" => Int32[0],
+                "owned" => Int32[0],
+                "sentiment" => Int32[0],
+                "itemid" => Int32[0],
+                "finished_at" => Float32[0.0],
+                "source" => Int32[0],
+                "userid" => Int32[0],
+            ),
+            "manga" => Dict(
+                "created_at" => Float32[0.0],
+                "rating" => Float32[1.0],
+                "update_order" => Int32[0],
+                "sentiment_score" => Float32[0.0],
+                "medium" => Int32[0],
+                "priority" => Int32[0],
+                "status" => Int32[6],
+                "progress" => Float32[1.0],
+                "updated_at" => Float32[1.0],
+                "started_at" => Float32[0.0],
+                "repeat_count" => Int32[0],
+                "owned" => Int32[0],
+                "sentiment" => Int32[0],
+                "itemid" => Int32[0],
+                "finished_at" => Float32[0.0],
+                "source" => Int32[0],
+                "userid" => Int32[0],
+            ),
+        ),
     )
     precompile_run(running, port, "/query", payload)
 end

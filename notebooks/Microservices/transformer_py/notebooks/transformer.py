@@ -1,10 +1,22 @@
 import warnings
 
-from flask import Flask, jsonify, request
+import msgpack
+from flask import Flask, request, Response
 from torch.utils.data import DataLoader, Dataset
 
 exec(open("TrainingAlphas/Transformer/transformer.py").read())
 app = Flask(__name__)
+
+
+def pack(data):
+    return Response(
+        msgpack.packb(data, use_single_float=True), mimetype="application/msgpack"
+    )
+
+
+def unpack(response):
+    return msgpack.unpackb(response.data)
+
 
 class InferenceDataset(Dataset):
     def __init__(self, data, vocab_names, vocab_types):
@@ -58,6 +70,7 @@ def detach(x):
     x = x.to("cpu").to(torch.float32).numpy().astype(float)
     return [list(x[0, :]), list(x[1, :])]
 
+
 def compute_embeddings(data, medium):
     config, model = MODELS[medium]
     dataloader = DataLoader(
@@ -106,14 +119,14 @@ precompile()
 
 @app.route("/query", methods=["POST"])
 def query():
-    data = request.get_json()
+    data = unpack(request)
     medium = request.args.get("medium", type=str)
-    return jsonify(compute_embeddings(data, medium))
+    return pack(compute_embeddings(data, medium))
 
 
 @app.route("/wake")
 def wake():
-    return jsonify({"success": True})
+    return pack({"success": True})
 
 
 if __name__ == "__main__":

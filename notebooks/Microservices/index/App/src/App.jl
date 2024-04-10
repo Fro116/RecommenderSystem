@@ -2,6 +2,7 @@ module App
 
 import HTTP
 import JSON
+import MsgPack
 import Oxygen
 
 TEMPLATE = open(joinpath(@__DIR__, "index.html")) do f
@@ -13,24 +14,40 @@ URLS = open(joinpath(@__DIR__, "environment/endpoints.json")) do f
     JSON.parse(read(f, String))
 end
 
-function mock_response()
-    d = Dict("alpha" => Dict("success" => true), "features" => Dict("success" => true))
-    HTTP.Response(JSON.json(d))
+function msgpack(d::Dict)::HTTP.Response
+    body = MsgPack.pack(d)
+    response = HTTP.Response(200, [], body = body)
+    HTTP.setheader(response, "Content-Type" => "application/msgpack")
+    HTTP.setheader(response, "Content-Length" => string(sizeof(body)))
+    response
+end
+
+function mock_response(app::String, path::String)
+    if app == "ensemble" && startswith(path, "/query?")
+        return Oxygen.text("success")
+    else
+        return msgpack(
+            Dict(
+                "alpha" => Dict("success" => true), 
+                "features" => Dict("success" => true)
+            )
+        )
+    end
 end
 
 function run(app::String, path::String, precompile::Bool)::HTTP.Response
     if precompile
-        return mock_response()
+        return mock_response(app, path)
     else
         return HTTP.get(URLS[app] * path)
     end
 end
 
-function run(app::String, path::String, json::String, precompile::Bool)::HTTP.Response
+function run(app::String, path::String, data::Vector{UInt8}, precompile::Bool)::HTTP.Response
     if precompile
-        return mock_response()
+        return mock_response(app, path)
     else
-        return HTTP.post(URLS[app] * path, [("Content-Type", "application/json")], json)
+        return HTTP.post(URLS[app] * path, [("Content-Type", "application/msgpack")], data)
     end
 end
 
@@ -45,24 +62,24 @@ function get_media_lists(username::String, source::String, precompile::Bool)::Di
         r2 = run(
             "compress_media_lists",
             "/query?username=$username&source=$source&medium=$medium",
-            String(r1.body),
+            r1.body,
             precompile,
         )
-        responses[medium] = JSON.parse(String(r2.body))
+        responses[medium] = MsgPack.unpack(r2.body)
     end
     responses
 end
 
-function nondirectional(data::String, precompile::Bool)::Dict
+function nondirectional(data::Vector{UInt8}, precompile::Bool)::Dict
     r = run("nondirectional", "/query", data, precompile)
-    JSON.parse(String(r.body))
+    MsgPack.unpack(r.body)
 end
 
-function bagofwords(data::String, precompile::Bool)::Dict
+function bagofwords(data::Vector{UInt8}, precompile::Bool)::Dict
     r_process = run("bagofwords_jl", "/process", data, precompile)
-    process = JSON.parse(String(copy(r_process.body)))
+    process = MsgPack.unpack(r_process.body)
     alphas = process["alpha"]
-    input = JSON.json(process["features"])
+    input = MsgPack.pack(process["features"])
 
     responses = Dict{Any,Any}((x, y) => nothing for x in ALL_MEDIUMS for y in ALL_METRICS)
     @sync for metric in ALL_METRICS
@@ -74,45 +91,41 @@ function bagofwords(data::String, precompile::Bool)::Dict
                     input,
                     precompile,
                 )
-                d = Dict()
-                d["embedding"] = JSON.parse(String(r1.body))
-                d["payload"] = JSON.parse(data)
+                d = Dict(
+                    "embedding" => MsgPack.unpack(r1.body),
+                    "payload" => MsgPack.unpack(data),
+                )
                 r2 = run(
                     "bagofwords_jl",
                     "/compute?medium=$medium&metric=$metric",
-                    JSON.json(d),
+                    MsgPack.pack(d),
                     precompile,
                 )
-                responses[(medium, metric)] = JSON.parse(String(r2.body))
+                responses[(medium, metric)] = MsgPack.unpack(r2.body)
             end
         end
     end
     merge(alphas, collect(values(responses))...)
 end
 
-function transformer(data::String, precompile::Bool)::Dict
+function transformer(data::Vector{UInt8}, precompile::Bool)::Dict
     r_process = run("transformer_jl", "/process", data, precompile)
-    input = String(r_process.body)
+    input = r_process.body
 
-    responses = Dict{Any,Any}((x, y) => nothing for x in ALL_MEDIUMS for y in ALL_METRICS)
-    @sync for medium in ALL_MEDIUMS
-        Threads.@spawn begin
-            r1 = run("transformer_py_$(medium)", "/query?medium=$medium", input, precompile)
-            embeddings = JSON.parse(String(r1.body))
-            Threads.@spawn for metric in ALL_METRICS
-                d = Dict()
-                k = "$(medium)_$(metric)"
-                d["embedding"] = Dict(k => get(embeddings, k, ""))
-                d["payload"] = JSON.parse(data)
-                r2 = run(
-                    "transformer_jl",
-                    "/compute?medium=$medium&metric=$metric",
-                    JSON.json(d),
-                    precompile,
-                )
-                responses[(medium, metric)] = JSON.parse(String(r2.body))
-            end
-        end
+    responses = Dict{String,Any}(x => nothing for x in ALL_MEDIUMS)
+    Threads.@threads for medium in ALL_MEDIUMS
+        r1 = run("transformer_py_$(medium)", "/query?medium=$medium", input, precompile)
+        d = Dict(
+            "embedding" => MsgPack.unpack(r1.body),
+            "payload" => MsgPack.unpack(data),
+        )
+        r2 = run(
+            "transformer_jl",
+            "/compute?medium=$medium",
+            MsgPack.pack(d),
+            precompile,
+        )
+        responses[medium] = MsgPack.unpack(r2.body)
     end
     merge(collect(values(responses))...)
 end
@@ -120,25 +133,25 @@ end
 function ensemble(
     username::String,
     source::String,
-    data::String,
+    data::Vector{UInt8},
     responses::Dict,
     precompile::Bool,
 )::String
     inputs = Dict(
-        "payload" => JSON.parse(data),
+        "payload" => MsgPack.unpack(data),
         "alphas" => merge(collect(values(responses))...),
     )
     r = run(
         "ensemble",
         "/query?username=$username&source=$source",
-        JSON.json(inputs),
+        MsgPack.pack(inputs),
         precompile,
     )
     String(r.body)
 end
 
 function get_recs(username::String, source::String, precompile::Bool)::String
-    data = JSON.json(get_media_lists(username, source, precompile))
+    data = MsgPack.pack(get_media_lists(username, source, precompile))
     models = Dict(
         "bagofwords" => bagofwords,
         "transformer" => transformer,
@@ -152,7 +165,7 @@ function get_recs(username::String, source::String, precompile::Bool)::String
 end
 
 
-wake(req::HTTP.Request) = Oxygen.json(Dict("success" => true))
+wake(req::HTTP.Request) = msgpack(Dict("success" => true))
 index(req::HTTP.Request) = Oxygen.html(TEMPLATE)
 
 function heartbeat(req::HTTP.Request)
@@ -165,7 +178,7 @@ function heartbeat(req::HTTP.Request)
         end
         responses[x] = @elapsed run(x, "/wake", precompile)
     end
-    responses
+    msgpack(responses)
 end
 
 function submit(req::HTTP.Request)
@@ -213,8 +226,7 @@ function precompile(running::Bool, port::Int)
     while true
         try
             r = precompile_run(running, port, "/wake")
-            json = JSON.parse(String(copy(r.body)))
-            if json["success"] == true
+            if MsgPack.unpack(r.body)["success"] == true
                 break
             end
         catch

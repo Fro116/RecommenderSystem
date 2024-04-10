@@ -2,7 +2,7 @@
 
 julia_version = "1.10.2"
 manifest_format = "2.0"
-project_hash = "6e999bc3fa7e4bdf9a57ef2cb39b71758dc56b65"
+project_hash = "16abe3dfdd09095a23d51d0f17de3a844ea437b0"
 
 [[deps.Adapt]]
 deps = ["LinearAlgebra", "Requires"]
@@ -472,6 +472,12 @@ uuid = "a63ad114-7e13-5084-954f-fe012c677804"
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
 version = "2023.1.10"
+
+[[deps.MsgPack]]
+deps = ["Serialization"]
+git-tree-sha1 = "f5db02ae992c260e4826fe78c942954b48e1d9c2"
+uuid = "99f44e22-a591-53d1-9472-aa23ef4bd671"
+version = "1.2.1"
 
 [[deps.NBInclude]]
 deps = ["JSON", "Markdown", "SoftGlobalScope"]

@@ -182,7 +182,7 @@
             const loadingOverlay = document.getElementById('loadingOverlay');
             loadingOverlay.classList.add('visible');
             setTimeout(function() {
-                form.removeEventListener('submit', arguments.callee); // todo do we need this?
+                form.removeEventListener('submit', arguments.callee);
                 form.submit();
             }, 0); // set timeout > 0 to test the overlay animation            
         };

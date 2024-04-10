@@ -1,10 +1,22 @@
 import warnings
 
+import msgpack
 import scipy
-from flask import Flask, jsonify, request
+from flask import Flask, request, Response
 from torch.utils.data import DataLoader, Dataset
 
 exec(open("TrainingAlphas/BagOfWords/bagofwords.py").read())
+app = Flask(__name__)
+
+
+def pack(data):
+    return Response(
+        msgpack.packb(data, use_single_float=True), mimetype="application/msgpack"
+    )
+
+
+def unpack(response):
+    return msgpack.unpackb(response.data)
 
 
 class InferenceDataset(Dataset):
@@ -90,20 +102,19 @@ MODELS = {
     (x, y): load_bagofwords_model(x, y) for x in ALL_MEDIUMS for y in ALL_METRICS
 }
 precompile()
-app = Flask(__name__)
 
 
 @app.route("/query", methods=["POST"])
 def query():
-    data = request.get_json()
+    data = unpack(request)
     medium = request.args.get("medium", type=str)
     metric = request.args.get("metric", type=str)    
-    return jsonify(compute_embeddings(data, medium, metric))
+    return pack(compute_embeddings(data, medium, metric))
 
 
 @app.route("/wake")
 def wake():
-    return jsonify({"success": True})
+    return pack({"success": True})
 
 
 if __name__ == "__main__":  

@@ -1,12 +1,24 @@
-from flask import Flask, abort, jsonify, request
-
-app = Flask(__name__)
 import os
 import tempfile
 
+import msgpack
 import pandas as pd
 import ProcessData.process_media_lists_helper as pml
+from flask import Flask, abort, request, Response
 from ImportDatasets.Sources import anilist, animeplanet, kitsu, mal
+
+app = Flask(__name__)
+
+
+def pack(data):
+    return Response(
+        msgpack.packb(data, use_single_float=True), mimetype="application/msgpack"
+    )
+
+
+def unpack(response):
+    return msgpack.unpackb(response.data)
+
 
 VALID_TITLES = {
     m: set(pd.read_csv(f"../data/processed_data/{m}.csv")[f"{m}_id"])
@@ -52,16 +64,13 @@ def generate_media_list(fn):
     df = pd.read_csv(fn)
     df = df.sort_values(by=["update_order", "updated_at"]).reset_index(drop=True)
     df["unit"] = 1
-    df["forward_order"] = (
-        df.groupby("userid", group_keys=False)["unit"]
-        .apply(lambda x: x.cumsum())
-        .values
-    )
-    df["backward_order"] = (
+    df["update_order"] = (
         df.groupby("userid", group_keys=False)["unit"]
         .apply(lambda x: x.cumsum()[::-1])
         .values
     )
+    df = df.drop("unit", axis=1)
+    df = df.rename({"mediaid": "itemid"}, axis=1)
     return df
 
 
@@ -69,19 +78,19 @@ def generate_media_list(fn):
 def query():
     source = request.args.get("source", type=str)
     medium = request.args.get("medium", type=str)
-    data = request.get_json()
+    data = unpack(request)
     df = pd.DataFrame.from_dict({x: data[x] for x in data["_columns"]})    
     with tempfile.TemporaryDirectory() as path:
         df.to_csv(os.path.join(path, f"user_{medium}_list.{source}.csv"), index=False)
         import_media_list(source, medium, path)
         fn = process_media_list(source, medium, path)
         df = generate_media_list(fn)
-        return jsonify(df.to_dict("list"))
+        return pack(df.to_dict("list"))
 
 
 @app.route("/wake")
 def wake():
-    return jsonify({"success": True})
+    return pack({"success": True})
 
 
 if __name__ == "__main__":

@@ -4,10 +4,19 @@ import HTTP
 import JSON
 import Oxygen
 import MLUtils
+import MsgPack
 import NBInclude: @nbinclude
 import NNlib: sigmoid
 @nbinclude("notebooks/TrainingAlphas/AlphaBase.ipynb")
 @nbinclude("notebooks/TrainingAlphas/Transformer/Data.ipynb")
+
+function msgpack(d::Dict)::HTTP.Response
+    body = MsgPack.pack(d)
+    response = HTTP.Response(200, [], body = body)
+    HTTP.setheader(response, "Content-Type" => "application/msgpack")
+    HTTP.setheader(response, "Content-Length" => string(sizeof(body)))
+    response
+end
 
 function get_sentences(df::RatingsDataset, cls_tokens, max_seq_length)
     function itemids(uid, medium)
@@ -155,51 +164,54 @@ function process_medialists(payload::Dict)
     process_tokens(sentences, CONFIG)
 end
 
-function compute_transformer(payload::Dict, embeddings::Dict, medium::String, metric::String)
+function compute_transformer(payload::Dict, embeddings::Dict, medium::String)
     ret = Dict()
     version = "v1"
     seen = get_raw_split(payload, medium, [:itemid], nothing).itemid
     ptw = get_split(payload, "plantowatch", medium, [:itemid], nothing).itemid
     watched = [x for x in seen if x ∉ Set(ptw)]
-    M = embeddings["$(medium)_$(metric)"]
-    r = M[1] # regular items
-    p = M[2] # plantowatch items
-    if metric in ["watch", "plantowatch"]
-        r = exp.(r)
-        r[seen.+1] .= 0
-        r = r ./ sum(r)
-        p = exp.(p)
-        p[watched.+1] .= 0
-        p = p ./ sum(p)
-    elseif metric == "drop"
-        r = sigmoid.(r)
-        p = sigmoid.(p)
-    elseif metric == "rating"
-        nothing
-    else
-        @assert false
+    for metric in ALL_METRICS
+        M = embeddings["$(medium)_$(metric)"]
+        r = M[1] # regular items
+        p = M[2] # plantowatch items
+        if metric in ["watch", "plantowatch"]
+            r = exp.(r)
+            r[seen.+1] .= 0
+            r = r ./ sum(r)
+            p = exp.(p)
+            p[watched.+1] .= 0
+            p = p ./ sum(p)
+        elseif metric == "drop"
+            r = sigmoid.(r)
+            p = sigmoid.(p)
+        elseif metric == "rating"
+            nothing
+        else
+            @assert false
+        end
+        e = copy(r)
+        e[ptw.+1] .= p[ptw.+1]
+        ret["$medium/Transformer/$version/$metric"] = e[1:num_items(medium)]
     end
-    e = copy(r)
-    e[ptw.+1] .= p[ptw.+1]
-    Dict("$medium/Transformer/$version/$metric" => e[1:num_items(medium)])
+    ret
 end
 
 function wake(req::HTTP.Request)
-    Oxygen.json(Dict("success" => true))
+    msgpack(Dict("success" => true))
 end
 
 function process(req::HTTP.Request)
-    payload = JSON.parse(String(req.body))
-    Oxygen.json(process_medialists(payload))
+    payload = MsgPack.unpack(req.body)
+    msgpack(process_medialists(payload))
 end
 
 function compute(req::HTTP.Request)
-    d = JSON.parse(String(req.body))
+    d = MsgPack.unpack(req.body)
     params = Oxygen.queryparams(req)
     payload = d["payload"]
     embeddings = d["embedding"]
-    alpha = compute_transformer(payload, embeddings, params["medium"], params["metric"])
-    Oxygen.json(alpha)
+    alpha = compute_transformer(payload, embeddings, params["medium"])
+    msgpack(alpha)
 end
 
 function precompile_run(running::Bool, port::Int, query::String)
@@ -213,17 +225,17 @@ function precompile_run(running::Bool, port::Int, query::String)
     end
 end
 
-function precompile_run(running::Bool, port::Int, query::String, data::String)
+function precompile_run(running::Bool, port::Int, query::String, data::Vector{UInt8})
     if running
         return HTTP.post(
             "http://localhost:$port$query",
-            [("Content-Type", "application/json")],
+            [("Content-Type", "application/msgpack")],
             data,
         )
     else
         name = split(query[2:end], "?")[1]
         fn = getfield(App, Symbol(name))
-        req = HTTP.Request("POST", query, [("Content-Type", "application/json")], data)
+        req = HTTP.Request("POST", query, [("Content-Type", "application/msgpack")], data)
         return fn(req)
     end
 end
@@ -232,8 +244,7 @@ function precompile(running::Bool, port::Int)
     while true
         try
             r = precompile_run(running, port, "/wake")
-            json = JSON.parse(String(copy(r.body)))
-            if json["success"] == true
+            if MsgPack.unpack(r.body)["success"] == true
                 break
             end
         catch
@@ -242,28 +253,58 @@ function precompile(running::Bool, port::Int)
         end
     end
     
-    payload = (
-        "{\"anime\":{\"mediaid\":[0],\"created_at\":[0],\"rating\":[1.0]," *
-        "\"update_order\":[0],\"sentiment_score\":[0],\"medium\":[1],\"backward_order\":[1]," *
-        "\"priority\":[0],\"progress\":[1.0],\"forward_order\":[1],\"status\":[6]," *
-        "\"updated_at\":[1.0],\"started_at\":[0.0],\"repeat_count\":[0],\"owned\":[0]," *
-        "\"sentiment\":[0],\"finished_at\":[0.0],\"source\":[0],\"unit\":[1],\"userid\":[0]}," *
-        "\"manga\":{\"mediaid\":[0],\"created_at\":[0],\"rating\":[1.0],\"update_order\":[0]," *
-        "\"sentiment_score\":[0],\"medium\":[0],\"backward_order\":[1],\"priority\":[0]," *
-        "\"progress\":[1.0],\"forward_order\":[1],\"status\":[6],\"updated_at\":[1.0]," *
-        "\"started_at\":[0],\"repeat_count\":[0],\"owned\":[0],\"sentiment\":[0]," *
-        "\"finished_at\":[0],\"source\":[0],\"unit\":[1],\"userid\":[0]}}"
+    payload = MsgPack.pack(
+        Dict(
+            "anime" => Dict(
+                "created_at" => Float32[0.0],
+                "rating" => Float32[1.0],
+                "update_order" => Int32[0],
+                "sentiment_score" => Float32[0.0],
+                "medium" => Int32[1],
+                "priority" => Int32[0],
+                "status" => Int32[6],
+                "progress" => Float32[1.0],
+                "updated_at" => Float32[1.0],
+                "started_at" => Float32[0.0],
+                "repeat_count" => Int32[0],
+                "owned" => Int32[0],
+                "sentiment" => Int32[0],
+                "itemid" => Int32[0],
+                "finished_at" => Float32[0.0],
+                "source" => Int32[0],
+                "userid" => Int32[0],
+            ),
+            "manga" => Dict(
+                "created_at" => Float32[0.0],
+                "rating" => Float32[1.0],
+                "update_order" => Int32[0],
+                "sentiment_score" => Float32[0.0],
+                "medium" => Int32[0],
+                "priority" => Int32[0],
+                "status" => Int32[6],
+                "progress" => Float32[1.0],
+                "updated_at" => Float32[1.0],
+                "started_at" => Float32[0.0],
+                "repeat_count" => Int32[0],
+                "owned" => Int32[0],
+                "sentiment" => Int32[0],
+                "itemid" => Int32[0],
+                "finished_at" => Float32[0.0],
+                "source" => Int32[0],
+                "userid" => Int32[0],
+            ),
+        ),
     )
     precompile_run(running, port, "/process", payload)
 
-
     for medium in ALL_MEDIUMS  
-        for metric in ALL_METRICS
-            d = Dict()
-            d["payload"] = JSON.parse(payload)            
-            d["embedding"] = Dict("$(medium)_$(metric)" => ones(Float32, num_items(medium), 2)) 
-            precompile_run(running, port, "/compute?medium=$medium&metric=$metric", JSON.json(d))
-        end
+        d = Dict()
+        d["payload"] = MsgPack.unpack(payload)        
+        d["embedding"] = Dict(
+            "$(medium)_$(metric)" => [ones(Float32, num_items(medium)) for _ = 1:2]
+            for metric in ALL_METRICS
+        )
+        precompile_run(running, port, "/compute?medium=$medium", MsgPack.pack(d))
     end
 end
 

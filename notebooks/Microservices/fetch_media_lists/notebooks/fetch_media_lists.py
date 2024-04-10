@@ -1,4 +1,4 @@
-from flask import Flask, abort, jsonify, request
+from flask import Flask, abort, request, Response
 
 app = Flask(__name__)
 import csv
@@ -6,11 +6,19 @@ import glob
 import hashlib
 import os
 
+import msgpack
 import pandas as pd
 from API.API import anilist_api, animeplanet_api, api_setup, kitsu_api, mal_api
 
+
 PROXIES = api_setup.load_proxies("SHARED", 0, 1, ["us"])
 mal_api.load_token(0)
+
+
+def pack(data):
+    return Response(
+        msgpack.packb(data, use_single_float=True), mimetype="application/msgpack"
+    )
 
 
 def get_proxies(username, source, medium):
@@ -72,7 +80,7 @@ def query():
         df = fetch_media_list(username, source, medium)
         d = df.to_dict("list")
         d["_columns"] = list(df.columns)
-        return jsonify(d)
+        return pack(d)
     except Exception as e:
         # TODO handle kitsu users with multiple usernames
         print(e)
@@ -81,7 +89,7 @@ def query():
 
 @app.route("/wake")
 def wake():
-    return jsonify({"success": True})
+    return pack({"success": True})
 
 
 if __name__ == "__main__":
