@@ -1,5 +1,6 @@
 module App
 
+import CodecZstd
 import CSV
 import DataFrames
 import Dates
@@ -15,8 +16,12 @@ include("./Ranking.jl")
 include("./Filter.jl")
 include("./Render.jl")
 
+pack(d::Dict) = CodecZstd.transcode(CodecZstd.ZstdCompressor, MsgPack.pack(d))
+unpack(d::Vector{UInt8}) =
+    MsgPack.unpack(CodecZstd.transcode(CodecZstd.ZstdDecompressor, d))
+
 function msgpack(d::Dict)::HTTP.Response
-    body = MsgPack.pack(d)
+    body = pack(d)
     response = HTTP.Response(200, [], body = body)
     HTTP.setheader(response, "Content-Type" => "application/msgpack")
     HTTP.setheader(response, "Content-Length" => string(sizeof(body)))
@@ -31,7 +36,7 @@ function query(req::HTTP.Request)
     params = Oxygen.queryparams(req)
     username = params["username"]
     source = params["source"]
-    data = MsgPack.unpack(req.body)
+    data = unpack(req.body)
     payload = data["payload"]
     alphas = data["alphas"]
     @time linear = compute_linear(payload, alphas)
@@ -74,7 +79,7 @@ function precompile(running::Bool, port::Int)
     while true
         try
             r = precompile_run(running, port, "/wake")
-            if MsgPack.unpack(r.body)["success"] == true
+            if unpack(r.body)["success"] == true
                 break
             end
         catch
@@ -83,7 +88,7 @@ function precompile(running::Bool, port::Int)
         end
     end
     
-    payload = MsgPack.pack(
+    payload = pack(
         Dict(
             "anime" => Dict(
                 "created_at" => Float32[0.0],
@@ -156,8 +161,8 @@ function precompile(running::Bool, port::Int)
         end
     end
     alphas = Dict(x => dummy_value(x) for x in alpha_names)
-    d = Dict("payload" => MsgPack.unpack(payload), "alphas" => alphas)
-    precompile_run(running, port, "/query?username=user&source=mal", MsgPack.pack(d))
+    d = Dict("payload" => unpack(payload), "alphas" => alphas)
+    precompile_run(running, port, "/query?username=user&source=mal", pack(d))
 end
 
 end

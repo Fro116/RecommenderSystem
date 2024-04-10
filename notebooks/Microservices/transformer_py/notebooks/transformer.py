@@ -1,7 +1,9 @@
+import io
 import warnings
 
 import msgpack
-from flask import Flask, request, Response
+import zstandard as zstd
+from flask import Flask, Response, request
 from torch.utils.data import DataLoader, Dataset
 
 exec(open("TrainingAlphas/Transformer/transformer.py").read())
@@ -10,13 +12,15 @@ app = Flask(__name__)
 
 def pack(data):
     return Response(
-        msgpack.packb(data, use_single_float=True), mimetype="application/msgpack"
+        zstd.ZstdCompressor().compress(msgpack.packb(data, use_single_float=True)),
+        mimetype="application/msgpack",
+        headers={"Content-Encoding": "zstd", "Content-Type": "application/msgpack"},
     )
 
 
 def unpack(response):
-    return msgpack.unpackb(response.data)
-
+    reader = zstd.ZstdDecompressor().stream_reader(io.BytesIO(response.data))
+    return msgpack.unpackb(reader.read())
 
 class InferenceDataset(Dataset):
     def __init__(self, data, vocab_names, vocab_types):

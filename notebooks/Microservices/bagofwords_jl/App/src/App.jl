@@ -1,5 +1,6 @@
 module App
 
+import CodecZstd
 import HTTP
 import Oxygen
 import MLUtils
@@ -9,8 +10,12 @@ import SparseArrays
 @nbinclude("notebooks/TrainingAlphas/AlphaBase.ipynb")
 @nbinclude("notebooks/TrainingAlphas/Baseline/BaselineHelper.ipynb")
 
+pack(d::Dict) = CodecZstd.transcode(CodecZstd.ZstdCompressor, MsgPack.pack(d))
+unpack(d::Vector{UInt8}) =
+    MsgPack.unpack(CodecZstd.transcode(CodecZstd.ZstdDecompressor, d))
+
 function msgpack(d::Dict)::HTTP.Response
-    body = MsgPack.pack(d)
+    body = pack(d)
     response = HTTP.Response(200, [], body = body)
     HTTP.setheader(response, "Content-Type" => "application/msgpack")
     HTTP.setheader(response, "Content-Length" => string(sizeof(body)))
@@ -160,7 +165,7 @@ function wake(req::HTTP.Request)
 end
 
 function process(req::HTTP.Request)
-    payload = MsgPack.unpack(req.body)
+    payload = unpack(req.body)
     baselines = Dict{String,Any}(x => nothing for x in ALL_MEDIUMS)
     Threads.@threads for medium in ALL_MEDIUMS
         baselines[medium] = compute_baseline(payload, medium)
@@ -171,7 +176,7 @@ function process(req::HTTP.Request)
 end
 
 function compute(req::HTTP.Request)
-    d = MsgPack.unpack(req.body)
+    d = unpack(req.body)
     params = Oxygen.queryparams(req)
     payload = d["payload"]
     embeddings = d["embedding"]
@@ -209,7 +214,7 @@ function precompile(running::Bool, port::Int)
     while true
         try
             r = precompile_run(running, port, "/wake")
-            if MsgPack.unpack(r.body)["success"] == true
+            if unpack(r.body)["success"] == true
                 break
             end
         catch
@@ -218,7 +223,7 @@ function precompile(running::Bool, port::Int)
         end
     end
     
-    payload = MsgPack.pack(
+    payload = pack(
         Dict(
             "anime" => Dict(
                 "created_at" => Float32[0.0],
@@ -265,9 +270,9 @@ function precompile(running::Bool, port::Int)
     for medium in ALL_MEDIUMS
         for metric in ALL_METRICS
             d = Dict()
-            d["payload"] = MsgPack.unpack(payload)            
+            d["payload"] = unpack(payload)            
             d["embedding"] = Dict("$(medium)_$(metric)" => ones(Float32, num_items(medium)))
-            precompile_run(running, port, "/compute?medium=$medium&metric=$metric", MsgPack.pack(d))
+            precompile_run(running, port, "/compute?medium=$medium&metric=$metric", pack(d))
         end
     end
 end

@@ -4,3 +4,4 @@ numpy==1.25.2
 scipy==1.11.1
 torch==2.2.1
 waitress==3.0.0
+zstandard==0.22.0

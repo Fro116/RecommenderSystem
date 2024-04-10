@@ -4,10 +4,12 @@ app = Flask(__name__)
 import csv
 import glob
 import hashlib
+import io
 import os
 
 import msgpack
 import pandas as pd
+import zstandard as zstd
 from API.API import anilist_api, animeplanet_api, api_setup, kitsu_api, mal_api
 
 
@@ -17,8 +19,15 @@ mal_api.load_token(0)
 
 def pack(data):
     return Response(
-        msgpack.packb(data, use_single_float=True), mimetype="application/msgpack"
+        zstd.ZstdCompressor().compress(msgpack.packb(data, use_single_float=True)),
+        mimetype="application/msgpack",
+        headers={"Content-Encoding": "zstd", "Content-Type": "application/msgpack"},
     )
+
+
+def unpack(response):
+    reader = zstd.ZstdDecompressor().stream_reader(io.BytesIO(response.data))
+    return msgpack.unpackb(reader.read())
 
 
 def get_proxies(username, source, medium):

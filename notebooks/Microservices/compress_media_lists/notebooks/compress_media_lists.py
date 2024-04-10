@@ -1,10 +1,12 @@
+import io
 import os
 import tempfile
 
 import msgpack
 import pandas as pd
 import ProcessData.process_media_lists_helper as pml
-from flask import Flask, abort, request, Response
+import zstandard as zstd
+from flask import Flask, Response, abort, request
 from ImportDatasets.Sources import anilist, animeplanet, kitsu, mal
 
 app = Flask(__name__)
@@ -12,12 +14,15 @@ app = Flask(__name__)
 
 def pack(data):
     return Response(
-        msgpack.packb(data, use_single_float=True), mimetype="application/msgpack"
+        zstd.ZstdCompressor().compress(msgpack.packb(data, use_single_float=True)),
+        mimetype="application/msgpack",
+        headers={"Content-Encoding": "zstd", "Content-Type": "application/msgpack"},
     )
 
 
 def unpack(response):
-    return msgpack.unpackb(response.data)
+    reader = zstd.ZstdDecompressor().stream_reader(io.BytesIO(response.data))
+    return msgpack.unpackb(reader.read())
 
 
 VALID_TITLES = {

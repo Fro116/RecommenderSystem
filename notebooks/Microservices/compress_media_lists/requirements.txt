@@ -3,3 +3,4 @@ gunicorn==21.2.0
 msgpack==1.0.7
 pandas==2.0.3
 tqdm==4.66.1
+zstandard==0.22.0

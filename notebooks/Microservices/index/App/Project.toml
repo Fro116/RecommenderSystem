@@ -4,6 +4,7 @@ authors = ["Fro116 <omnik116@gmail.com>"]
 version = "0.1.0"
 
 [deps]
+CodecZstd = "6b39b394-51ab-5f42-8807-6242bab2b4c2"
 HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 MsgPack = "99f44e22-a591-53d1-9472-aa23ef4bd671"

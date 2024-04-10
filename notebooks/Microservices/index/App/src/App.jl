@@ -1,5 +1,6 @@
 module App
 
+import CodecZstd
 import HTTP
 import JSON
 import MsgPack
@@ -14,8 +15,12 @@ URLS = open(joinpath(@__DIR__, "environment/endpoints.json")) do f
     JSON.parse(read(f, String))
 end
 
+pack(d::Dict) = CodecZstd.transcode(CodecZstd.ZstdCompressor, MsgPack.pack(d))
+unpack(d::Vector{UInt8}) =
+    MsgPack.unpack(CodecZstd.transcode(CodecZstd.ZstdDecompressor, d))
+
 function msgpack(d::Dict)::HTTP.Response
-    body = MsgPack.pack(d)
+    body = pack(d)
     response = HTTP.Response(200, [], body = body)
     HTTP.setheader(response, "Content-Type" => "application/msgpack")
     HTTP.setheader(response, "Content-Length" => string(sizeof(body)))
@@ -65,21 +70,21 @@ function get_media_lists(username::String, source::String, precompile::Bool)::Di
             r1.body,
             precompile,
         )
-        responses[medium] = MsgPack.unpack(r2.body)
+        responses[medium] = unpack(r2.body)
     end
     responses
 end
 
 function nondirectional(data::Vector{UInt8}, precompile::Bool)::Dict
     r = run("nondirectional", "/query", data, precompile)
-    MsgPack.unpack(r.body)
+    unpack(r.body)
 end
 
 function bagofwords(data::Vector{UInt8}, precompile::Bool)::Dict
     r_process = run("bagofwords_jl", "/process", data, precompile)
-    process = MsgPack.unpack(r_process.body)
+    process = unpack(r_process.body)
     alphas = process["alpha"]
-    input = MsgPack.pack(process["features"])
+    input = pack(process["features"])
 
     responses = Dict{Any,Any}((x, y) => nothing for x in ALL_MEDIUMS for y in ALL_METRICS)
     @sync for metric in ALL_METRICS
@@ -92,16 +97,16 @@ function bagofwords(data::Vector{UInt8}, precompile::Bool)::Dict
                     precompile,
                 )
                 d = Dict(
-                    "embedding" => MsgPack.unpack(r1.body),
-                    "payload" => MsgPack.unpack(data),
+                    "embedding" => unpack(r1.body),
+                    "payload" => unpack(data),
                 )
                 r2 = run(
                     "bagofwords_jl",
                     "/compute?medium=$medium&metric=$metric",
-                    MsgPack.pack(d),
+                    pack(d),
                     precompile,
                 )
-                responses[(medium, metric)] = MsgPack.unpack(r2.body)
+                responses[(medium, metric)] = unpack(r2.body)
             end
         end
     end
@@ -116,16 +121,16 @@ function transformer(data::Vector{UInt8}, precompile::Bool)::Dict
     Threads.@threads for medium in ALL_MEDIUMS
         r1 = run("transformer_py_$(medium)", "/query?medium=$medium", input, precompile)
         d = Dict(
-            "embedding" => MsgPack.unpack(r1.body),
-            "payload" => MsgPack.unpack(data),
+            "embedding" => unpack(r1.body),
+            "payload" => unpack(data),
         )
         r2 = run(
             "transformer_jl",
             "/compute?medium=$medium",
-            MsgPack.pack(d),
+            pack(d),
             precompile,
         )
-        responses[medium] = MsgPack.unpack(r2.body)
+        responses[medium] = unpack(r2.body)
     end
     merge(collect(values(responses))...)
 end
@@ -138,20 +143,20 @@ function ensemble(
     precompile::Bool,
 )::String
     inputs = Dict(
-        "payload" => MsgPack.unpack(data),
+        "payload" => unpack(data),
         "alphas" => merge(collect(values(responses))...),
     )
     r = run(
         "ensemble",
         "/query?username=$username&source=$source",
-        MsgPack.pack(inputs),
+        pack(inputs),
         precompile,
     )
     String(r.body)
 end
 
 function get_recs(username::String, source::String, precompile::Bool)::String
-    data = MsgPack.pack(get_media_lists(username, source, precompile))
+    data = pack(get_media_lists(username, source, precompile))
     models = Dict(
         "bagofwords" => bagofwords,
         "transformer" => transformer,
@@ -163,7 +168,6 @@ function get_recs(username::String, source::String, precompile::Bool)::String
     end
     ensemble(username, source, data, responses, precompile)
 end
-
 
 wake(req::HTTP.Request) = msgpack(Dict("success" => true))
 index(req::HTTP.Request) = Oxygen.html(TEMPLATE)
@@ -226,7 +230,7 @@ function precompile(running::Bool, port::Int)
     while true
         try
             r = precompile_run(running, port, "/wake")
-            if MsgPack.unpack(r.body)["success"] == true
+            if unpack(r.body)["success"] == true
                 break
             end
         catch

@@ -1,5 +1,6 @@
 module App
 
+import CodecZstd
 import HTTP
 import JSON
 import Oxygen
@@ -10,8 +11,12 @@ import NNlib: sigmoid
 @nbinclude("notebooks/TrainingAlphas/AlphaBase.ipynb")
 @nbinclude("notebooks/TrainingAlphas/Transformer/Data.ipynb")
 
+pack(d::Dict) = CodecZstd.transcode(CodecZstd.ZstdCompressor, MsgPack.pack(d))
+unpack(d::Vector{UInt8}) =
+    MsgPack.unpack(CodecZstd.transcode(CodecZstd.ZstdDecompressor, d))
+
 function msgpack(d::Dict)::HTTP.Response
-    body = MsgPack.pack(d)
+    body = pack(d)
     response = HTTP.Response(200, [], body = body)
     HTTP.setheader(response, "Content-Type" => "application/msgpack")
     HTTP.setheader(response, "Content-Length" => string(sizeof(body)))
@@ -201,12 +206,12 @@ function wake(req::HTTP.Request)
 end
 
 function process(req::HTTP.Request)
-    payload = MsgPack.unpack(req.body)
+    payload = unpack(req.body)
     msgpack(process_medialists(payload))
 end
 
 function compute(req::HTTP.Request)
-    d = MsgPack.unpack(req.body)
+    d = unpack(req.body)
     params = Oxygen.queryparams(req)
     payload = d["payload"]
     embeddings = d["embedding"]
@@ -244,7 +249,7 @@ function precompile(running::Bool, port::Int)
     while true
         try
             r = precompile_run(running, port, "/wake")
-            if MsgPack.unpack(r.body)["success"] == true
+            if unpack(r.body)["success"] == true
                 break
             end
         catch
@@ -253,7 +258,7 @@ function precompile(running::Bool, port::Int)
         end
     end
     
-    payload = MsgPack.pack(
+    payload = pack(
         Dict(
             "anime" => Dict(
                 "created_at" => Float32[0.0],
@@ -299,12 +304,12 @@ function precompile(running::Bool, port::Int)
 
     for medium in ALL_MEDIUMS  
         d = Dict()
-        d["payload"] = MsgPack.unpack(payload)        
+        d["payload"] = unpack(payload)        
         d["embedding"] = Dict(
             "$(medium)_$(metric)" => [ones(Float32, num_items(medium)) for _ = 1:2]
             for metric in ALL_METRICS
         )
-        precompile_run(running, port, "/compute?medium=$medium", MsgPack.pack(d))
+        precompile_run(running, port, "/compute?medium=$medium", pack(d))
     end
 end
 

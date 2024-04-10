@@ -1,13 +1,18 @@
 module App
 
+import CodecZstd
 import HTTP
 import MsgPack
 import Oxygen
 import NBInclude: @nbinclude
 @nbinclude("notebooks/TrainingAlphas/AlphaBase.ipynb")
 
+pack(d::Dict) = CodecZstd.transcode(CodecZstd.ZstdCompressor, MsgPack.pack(d))
+unpack(d::Vector{UInt8}) =
+    MsgPack.unpack(CodecZstd.transcode(CodecZstd.ZstdDecompressor, d))
+
 function msgpack(d::Dict)::HTTP.Response
-    body = MsgPack.pack(d)
+    body = pack(d)
     response = HTTP.Response(200, [], body = body)
     HTTP.setheader(response, "Content-Type" => "application/msgpack")
     HTTP.setheader(response, "Content-Length" => string(sizeof(body)))
@@ -75,7 +80,7 @@ function wake(req::HTTP.Request)
 end
 
 function query(req::HTTP.Request)
-    payload = MsgPack.unpack(req.body)
+    payload = unpack(req.body)
     anime_df = get_recommendee_split("anime", payload)
     manga_df = get_recommendee_split("manga", payload)
     ret = Dict()
@@ -160,7 +165,7 @@ function precompile(running::Bool, port::Int)
     while true
         try
             r = precompile_run(running, port, "/wake")
-            if MsgPack.unpack(r.body)["success"] == true
+            if unpack(r.body)["success"] == true
                 break
             end
         catch
@@ -169,7 +174,7 @@ function precompile(running::Bool, port::Int)
         end
     end
 
-    payload = MsgPack.pack(
+    payload = pack(
         Dict(
             "anime" => Dict(
                 "created_at" => Float32[0.0],
