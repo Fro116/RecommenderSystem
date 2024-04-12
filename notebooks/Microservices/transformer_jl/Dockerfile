@@ -3,5 +3,5 @@ WORKDIR /usr/src/app
 RUN apt-get update -y && apt-get install clang -y
 COPY . .
 ENV JULIA_NUM_THREADS=auto
-RUN julia requirements.jl
-CMD ["julia", "-Jsysimg.so", "main.jl", "8080"]
+RUN julia -t auto requirements.jl
+CMD ["julia", "-t", "auto", "-Jsysimg.so", "main.jl", "8080"]

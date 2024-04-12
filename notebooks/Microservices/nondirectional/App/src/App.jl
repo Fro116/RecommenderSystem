@@ -135,39 +135,12 @@ function query(req::HTTP.Request)
     msgpack(ret)
 end
 
-function precompile_run(running::Bool, port::Int, query::String)
-    if running
-        return HTTP.get("http://localhost:$port$query")
-    else
-        name = split(query[2:end], "?")[1]
-        fn = getfield(App, Symbol(name))
-        r = HTTP.Request("GET", query, [], "")
-        return fn(r)
-    end
-end
-
-function precompile_run(running::Bool, port::Int, query::String, data::Vector{UInt8})
-    if running
-        return HTTP.post(
-            "http://localhost:$port$query",
-            [("Content-Type", "application/msgpack")],
-            data,
-        )
-    else
-        name = split(query[2:end], "?")[1]
-        fn = getfield(App, Symbol(name))
-        req = HTTP.Request("POST", query, [("Content-Type", "application/msgpack")], data)
-        return fn(req)
-    end
-end
-
-function precompile(running::Bool, port::Int)
-    while true
+function precompile(port::Int)
+    awake = false
+    while !awake
         try
-            r = precompile_run(running, port, "/wake")
-            if unpack(r.body)["success"] == true
-                break
-            end
+            HTTP.get("http://localhost:$port/wake")
+            awake = true
         catch
             @warn "service down"
             sleep(1)
@@ -216,7 +189,11 @@ function precompile(running::Bool, port::Int)
             ),
         ),
     )
-    precompile_run(running, port, "/query", payload)
+    HTTP.post(
+        "http://localhost:$port/query",
+        [("Content-Type", "application/msgpack")],
+        payload,
+    )
 end
 
 end

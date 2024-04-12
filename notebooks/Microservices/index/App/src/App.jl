@@ -244,48 +244,28 @@ function submit(req::HTTP.Request)
     Oxygen.html(recs)
 end
 
-function precompile_run(running::Bool, port::Int, query::String)
-    if running
-        return HTTP.get("http://localhost:$port$query")
-    else
-        name = split(query[2:end], "?")[1]
-        fn = getfield(App, Symbol(name))
-        r = HTTP.Request("GET", query, [], "")
-        return fn(r)
-    end
-end
-
-function precompile_run(running::Bool, port::Int, query::String, data::String)
-    if running
-        return HTTP.post(
-            "http://localhost:$port$query",
-            [("Content-Type", "application/x-www-form-urlencoded")],
-            data,
-        )
-    else
-        name = split(query[2:end], "?")[1]
-        fn = getfield(App, Symbol(name))
-        req = HTTP.Request("POST", query, [("Content-Type", "application/x-www-form-urlencoded")], data)
-        return fn(req)
-    end
-end
-
-function precompile(running::Bool, port::Int)
-    while true
+function precompile(port::Int)
+    awake = false
+    while !awake
         try
-            r = precompile_run(running, port, "/wake")
-            if unpack(r.body)["success"] == true
-                break
-            end
+            HTTP.get("http://localhost:$port/wake")
+            awake = true
         catch
             @warn "service down"
             sleep(1)
         end
     end
-
-    precompile_run(running, port, "/heartbeat", "precompile=true")
-    precompile_run(running, port, "/index")
-    precompile_run(running, port, "/submit", "username=test&source=MyAnimeList&precompile=true")
+    HTTP.get("http://localhost:$port/")
+    HTTP.post(
+        "http://localhost:$port/heartbeat",
+        [("Content-Type", "application/x-www-form-urlencoded")],
+        "precompile=true",
+    )    
+    HTTP.post(
+        "http://localhost:$port/submit",
+        [("Content-Type", "application/x-www-form-urlencoded")],
+        "username=test&source=MyAnimeList&precompile=true",
+    )        
 end
 
 end
