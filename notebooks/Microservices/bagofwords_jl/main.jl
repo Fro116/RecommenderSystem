@@ -2,8 +2,7 @@ import Oxygen
 import App
 
 Oxygen.@get "/wake" App.wake
-Oxygen.@post "/process" App.process
-Oxygen.@post "/compute" App.compute
+Oxygen.@post "/query" App.query
 
 if length(ARGS) == 0
     port = 8080

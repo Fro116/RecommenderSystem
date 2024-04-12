@@ -134,37 +134,11 @@ function get_features(payload::Dict, alphas::Dict)
     d
 end
 
-function compute_bagofwords(payload::Dict, embeddings::Dict, medium::String, metric::String)
-    seen = get_raw_split(payload, medium, [:itemid], nothing).itemid
-    ptw = get_split(payload, "plantowatch", medium, [:itemid], nothing).itemid
-    e = convert.(Float32, embeddings["$(medium)_$(metric)"])
-    if metric in ["watch", "plantowatch"]
-        r = copy(e)
-        r[seen.+1] .= 0
-        r = r ./ sum(r)
-        p = copy(e)
-        watched = setdiff(Set(seen), Set(ptw))
-        p[watched.+1] .= 0
-        p = p ./ sum(p)
-        e = copy(r)
-        e[ptw.+1] .= p[ptw.+1]
-        e = copy(r)
-        e[ptw.+1] .= p[ptw.+1]
-    elseif metric in ["rating", "drop"]
-        nothing
-    else
-        @assert false
-    end
-    Dict("$medium/BagOfWords/v1/$metric" => e)
-end
-
-# Oxygen
-
 function wake(req::HTTP.Request)
     msgpack(Dict("success" => true))
 end
 
-function process(req::HTTP.Request)
+function query(req::HTTP.Request)
     payload = unpack(req.body)
     baselines = Dict{String,Any}(x => nothing for x in ALL_MEDIUMS)
     Threads.@threads for medium in ALL_MEDIUMS
@@ -172,16 +146,16 @@ function process(req::HTTP.Request)
     end
     alphas = merge(values(baselines)...)
     features = get_features(payload, alphas)
-    msgpack(Dict("alpha" => alphas, "features" => features))
-end
-
-function compute(req::HTTP.Request)
-    d = unpack(req.body)
-    params = Oxygen.queryparams(req)
-    payload = d["payload"]
-    embeddings = d["embedding"]
-    alpha = compute_bagofwords(payload, embeddings, params["medium"], params["metric"])
-    msgpack(alpha)
+    d = Dict{String,Any}(
+        "dataset" => features,
+        "alphas" => alphas,
+    )
+    for medium in ALL_MEDIUMS
+        d["seen_$medium"] = get_raw_split(payload, medium, [:itemid], nothing).itemid
+        d["ptw_$medium"] = get_split(payload, "plantowatch", medium, [:itemid], nothing).itemid
+        d["num_items_$medium"] = num_items(medium)
+    end
+    msgpack(d)
 end
 
 function precompile_run(running::Bool, port::Int, query::String)
@@ -265,16 +239,7 @@ function precompile(running::Bool, port::Int)
             ),
         ),
     )
-    precompile_run(running, port, "/process", payload)
-
-    for medium in ALL_MEDIUMS
-        for metric in ALL_METRICS
-            d = Dict()
-            d["payload"] = unpack(payload)            
-            d["embedding"] = Dict("$(medium)_$(metric)" => ones(Float32, num_items(medium)))
-            precompile_run(running, port, "/compute?medium=$medium&metric=$metric", pack(d))
-        end
-    end
+    precompile_run(running, port, "/query", payload)
 end
 
 end

@@ -62,19 +62,17 @@ def load_bagofwords_model(medium, metric):
 
 
 def detach(x):
-    return list(x.to("cpu").to(torch.float32).numpy().flatten().astype(float))
+    return x.to("cpu").to(torch.float32).numpy().flatten().astype(float)
 
 
 def compute_embeddings(data, medium, metric):
     dataloader = DataLoader(
-        InferenceDataset(data),
+        InferenceDataset(data["dataset"]),
         batch_size=1,
         shuffle=False,
     )
-    embeddings = {}
     with torch.no_grad():
-        name = f"{medium}_{metric}"
-        embeddings[name] = detach(
+        return detach(
             MODELS[(medium, metric)](
                 *next(iter(dataloader)),
                 None,
@@ -84,7 +82,26 @@ def compute_embeddings(data, medium, metric):
                 inference=True,
             )
         )
-    return embeddings
+
+
+def compute_alphas(data, embeddings, medium, metric):
+    seen = data[f"seen_{medium}"]
+    ptw = data[f"ptw_{medium}"]
+    N = data[f"num_items_{medium}"]
+    watched = [x for x in seen if x not in set(ptw)]
+    if metric in ["watch", "plantowatch"]:
+        r = embeddings.copy()
+        r[seen] = 0
+        r = r / np.sum(r)
+        p = embeddings.copy()
+        p[watched] = 0
+        p = p / np.sum(p)
+        r[ptw] = p[ptw]
+    elif metric in ["rating", "drop"]:
+        r = embeddings
+    else:
+        assert False
+    return {f"{medium}/BagOfWords/v1/{metric}": list(r)}
 
 
 def precompile():
@@ -98,7 +115,14 @@ def precompile():
             "inputs_v": [],
             "inputs_size": [v.model[0].weight.shape[1], 1],
         }        
-        compute_embeddings(data, medium, metric)
+        d = {
+            "dataset": data,
+            f"seen_{medium}": [],
+            f"ptw_{medium}": [],
+            f"num_items_{medium}": 1,
+        }
+        embeddings = compute_embeddings(d, medium, metric)
+        compute_alphas(d, embeddings, medium, metric)
 
 
 ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
@@ -114,7 +138,9 @@ def query():
     data = unpack(request)
     medium = request.args.get("medium", type=str)
     metric = request.args.get("metric", type=str)    
-    return pack(compute_embeddings(data, medium, metric))
+    embeddings = compute_embeddings(data, medium, metric)
+    alphas = compute_alphas(data, embeddings, medium, metric)
+    return pack(alphas)    
 
 
 @app.route("/wake")

@@ -134,7 +134,7 @@ function tokenize(;
     tokens, positions
 end
 
-function process_tokens(sentences, config)
+function query_tokens(sentences, config)
     max_sentence_len = maximum(length.(sentences))
     tokens = [tokenize(x, config, max_sentence_len) for x in sentences]
     d = Dict{String,AbstractArray}()
@@ -157,7 +157,7 @@ end
 
 const CONFIG = get_config()
 
-function process_medialists(payload::Dict)
+function query_medialists(payload::Dict)
     sentences = [
         get_sentences(
             CONFIG[:cls_tokens],
@@ -166,57 +166,22 @@ function process_medialists(payload::Dict)
             payload,
         ) for include_ptw in [false, true]
     ]
-    process_tokens(sentences, CONFIG)
-end
-
-function compute_transformer(payload::Dict, embeddings::Dict, medium::String)
-    ret = Dict()
-    version = "v1"
-    seen = get_raw_split(payload, medium, [:itemid], nothing).itemid
-    ptw = get_split(payload, "plantowatch", medium, [:itemid], nothing).itemid
-    watched = [x for x in seen if x ∉ Set(ptw)]
-    for metric in ALL_METRICS
-        M = embeddings["$(medium)_$(metric)"]
-        r = M[1] # regular items
-        p = M[2] # plantowatch items
-        if metric in ["watch", "plantowatch"]
-            r = exp.(r)
-            r[seen.+1] .= 0
-            r = r ./ sum(r)
-            p = exp.(p)
-            p[watched.+1] .= 0
-            p = p ./ sum(p)
-        elseif metric == "drop"
-            r = sigmoid.(r)
-            p = sigmoid.(p)
-        elseif metric == "rating"
-            nothing
-        else
-            @assert false
-        end
-        e = copy(r)
-        e[ptw.+1] .= p[ptw.+1]
-        ret["$medium/Transformer/$version/$metric"] = e[1:num_items(medium)]
+    d = Dict()
+    d["dataset"] = query_tokens(sentences, CONFIG)
+    for medium in ALL_MEDIUMS
+        d["seen_$medium"] = get_raw_split(payload, medium, [:itemid], nothing).itemid
+        d["ptw_$medium"] = get_split(payload, "plantowatch", medium, [:itemid], nothing).itemid
+        d["num_items_$medium"] = num_items(medium)
     end
-    ret
+    d
 end
 
 function wake(req::HTTP.Request)
     msgpack(Dict("success" => true))
 end
 
-function process(req::HTTP.Request)
-    payload = unpack(req.body)
-    msgpack(process_medialists(payload))
-end
-
-function compute(req::HTTP.Request)
-    d = unpack(req.body)
-    params = Oxygen.queryparams(req)
-    payload = d["payload"]
-    embeddings = d["embedding"]
-    alpha = compute_transformer(payload, embeddings, params["medium"])
-    msgpack(alpha)
+function query(req::HTTP.Request)
+    msgpack(query_medialists(unpack(req.body)))
 end
 
 function precompile_run(running::Bool, port::Int, query::String)
@@ -300,17 +265,7 @@ function precompile(running::Bool, port::Int)
             ),
         ),
     )
-    precompile_run(running, port, "/process", payload)
-
-    for medium in ALL_MEDIUMS  
-        d = Dict()
-        d["payload"] = unpack(payload)        
-        d["embedding"] = Dict(
-            "$(medium)_$(metric)" => [ones(Float32, num_items(medium)) for _ = 1:2]
-            for metric in ALL_METRICS
-        )
-        precompile_run(running, port, "/compute?medium=$medium", pack(d))
-    end
+    precompile_run(running, port, "/query", payload)
 end
 
 end

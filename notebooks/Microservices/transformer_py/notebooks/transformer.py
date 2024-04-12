@@ -22,6 +22,7 @@ def unpack(response):
     reader = zstd.ZstdDecompressor().stream_reader(io.BytesIO(response.data))
     return msgpack.unpackb(reader.read())
 
+
 class InferenceDataset(Dataset):
     def __init__(self, data, vocab_names, vocab_types):
         def process(x, dtype):
@@ -72,14 +73,18 @@ def load_transformer_model(medium):
 
 def detach(x):
     x = x.to("cpu").to(torch.float32).numpy().astype(float)
-    return [list(x[0, :]), list(x[1, :])]
+    return [x[0, :], x[1, :]]
+
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
 
 def compute_embeddings(data, medium):
     config, model = MODELS[medium]
     dataloader = DataLoader(
         InferenceDataset(
-            data,
+            data["dataset"],
             config["vocab_names"],
             config["vocab_types"],
         ),
@@ -90,9 +95,36 @@ def compute_embeddings(data, medium):
         data = next(iter(dataloader))
         output = model(*data, inference=True)        
         embeddings = [detach(y) for y in output]            
-    names = [f"{medium}_{metric}" for medium in ALL_MEDIUMS for metric in ALL_METRICS]
+    names = [(medium, metric) for medium in ALL_MEDIUMS for metric in ALL_METRICS]
     d = {x: y for (x, y) in zip(names, embeddings)}
-    return {x: y for (x, y) in d.items() if medium in x}
+    return {x: y for (x, y) in d.items() if x[0] == medium}
+
+
+def compute_alphas(data, embeddings, medium):
+    ret = {}
+    seen = data[f"seen_{medium}"]
+    ptw = data[f"ptw_{medium}"]
+    N = data[f"num_items_{medium}"]
+    watched = [x for x in seen if x not in set(ptw)]
+    for metric in ALL_METRICS:
+        r, p = embeddings[(medium, metric)] # regular, ptw items
+        if metric in ["watch", "plantowatch"]:
+            r = np.exp(r)
+            r[seen] = 0
+            r = r / np.sum(r)
+            p = np.exp(p)
+            p[watched] = 0
+            p = p / np.sum(p)
+        elif metric == "drop":
+            r = sigmoid(r)
+            p = sigmoid(p)
+        elif metric == "rating":
+            pass
+        else:
+            assert False
+        r[ptw] = p[ptw]
+        ret[f"{medium}/Transformer/v1/{metric}"] = list(r[:N])
+    return ret
 
 
 def precompile():
@@ -114,7 +146,14 @@ def precompile():
             else:
                 assert False
         data["positions"] = np.ones((2, 1), dtype=np.int32)
-        compute_embeddings(data, k)
+        d = {
+            "dataset": data,
+            f"seen_{k}": [],
+            f"ptw_{k}": [],
+            f"num_items_{k}": 1,
+        }
+        embeddings = compute_embeddings(d, k)
+        compute_alphas(d, embeddings, k)
 
 
 MODELS = {x: load_transformer_model(x) for x in ["manga", "anime"]}
@@ -125,7 +164,9 @@ precompile()
 def query():
     data = unpack(request)
     medium = request.args.get("medium", type=str)
-    return pack(compute_embeddings(data, medium))
+    embeddings = compute_embeddings(data, medium)
+    alphas = compute_alphas(data, embeddings, medium)
+    return pack(alphas)
 
 
 @app.route("/wake")

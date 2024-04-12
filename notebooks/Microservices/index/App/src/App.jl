@@ -1,16 +1,24 @@
 module App
 
 import CodecZstd
+import CSV
+import DataFrames
+import Dates
 import HTTP
 import JSON
 import MsgPack
 import Oxygen
+import NBInclude: @nbinclude
+@nbinclude("notebooks/TrainingAlphas/AlphaBase.ipynb")
+
+include("./Linear.jl")
+include("./Ranking.jl")
+include("./Filter.jl")
+include("./Render.jl")
 
 TEMPLATE = open(joinpath(@__DIR__, "index.html")) do f
     read(f, String)
 end
-ALL_MEDIUMS = ["manga", "anime"]
-ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
 URLS = open(joinpath(@__DIR__, "environment/endpoints.json")) do f
     JSON.parse(read(f, String))
 end
@@ -28,15 +36,73 @@ function msgpack(d::Dict)::HTTP.Response
 end
 
 function mock_response(app::String, path::String)
-    if app == "ensemble" && startswith(path, "/query?")
-        return Oxygen.text("success")
-    else
+    if path == "/wake"
+        return msgpack(Dict("success" => true))
+    elseif app in ["fetch_media_lists", "transformer_jl"]
+        return msgpack(Dict("success" => true))
+    elseif app == "compress_media_lists"
+        m = findfirst(x -> x == split(path, "=")[end], ALL_MEDIUMS)
         return msgpack(
             Dict(
-                "alpha" => Dict("success" => true), 
-                "features" => Dict("success" => true)
+                "created_at" => Float32[0.0],
+                "rating" => Float32[1.0],
+                "update_order" => Int32[0],
+                "sentiment_score" => Float32[0.0],
+                "medium" => Int32[m],
+                "priority" => Int32[0],
+                "status" => Int32[6],
+                "progress" => Float32[1.0],
+                "updated_at" => Float32[1.0],
+                "started_at" => Float32[0.0],
+                "repeat_count" => Int32[0],
+                "owned" => Int32[0],
+                "sentiment" => Int32[0],
+                "itemid" => Int32[0],
+                "finished_at" => Float32[0.0],
+                "source" => Int32[0],
+                "userid" => Int32[0],
             )
         )
+    elseif app == "nondirectional"
+        d = Dict()
+        for x in ALL_MEDIUMS
+            for y in [
+                "RelatedSeries",
+                "SequelSeries",
+                "CrossRelatedSeries",
+                "CrossRecapSeries",
+                "RecapSeries",
+                "DirectSequelSeries",
+                "Dependencies",
+            ]
+                d["$x/Nondirectional/$y"] = zeros(Float32, num_items(x))
+            end
+        end
+        return msgpack(d)
+    elseif app == "bagofwords_jl"
+        return msgpack(
+            Dict(
+                "alphas" => Dict(
+                    "$x/Baseline/rating" => zeros(Float32, num_items(x))
+                    for x in ALL_MEDIUMS
+                ),
+                "dataset" => Dict("test" => [1])
+            )
+        )
+    elseif startswith(app, "bagofwords_py")
+        medium, metric = split(app, "_")[3:4]
+        return msgpack(
+            Dict("$medium/BagOfWords/v1/$metric" => zeros(Float32, num_items(medium)))
+        )
+    elseif startswith(app, "transformer_py")
+        medium = split(app, "_")[3]
+        d = Dict()
+        for metric in ALL_METRICS
+            d["$medium/Transformer/v1/$metric"] = zeros(Float32, num_items(medium))
+        end
+        return msgpack(d)                
+    else
+        @assert false
     end
 end
 
@@ -81,32 +147,23 @@ function nondirectional(data::Vector{UInt8}, precompile::Bool)::Dict
 end
 
 function bagofwords(data::Vector{UInt8}, precompile::Bool)::Dict
-    r_process = run("bagofwords_jl", "/process", data, precompile)
+    r_process = run("bagofwords_jl", "/query", data, precompile)
     process = unpack(r_process.body)
-    alphas = process["alpha"]
-    input = pack(process["features"])
+    alphas = process["alphas"]
+    delete!(process, "alphas")
+    input = pack(process)
 
     responses = Dict{Any,Any}((x, y) => nothing for x in ALL_MEDIUMS for y in ALL_METRICS)
     @sync for metric in ALL_METRICS
         for medium in ALL_MEDIUMS
             Threads.@spawn begin
-                r1 = run(
+                r = run(
                     "bagofwords_py_$(medium)_$(metric)",
                     "/query?medium=$medium&metric=$metric",
                     input,
                     precompile,
                 )
-                d = Dict(
-                    "embedding" => unpack(r1.body),
-                    "payload" => unpack(data),
-                )
-                r2 = run(
-                    "bagofwords_jl",
-                    "/compute?medium=$medium&metric=$metric",
-                    pack(d),
-                    precompile,
-                )
-                responses[(medium, metric)] = unpack(r2.body)
+                responses[(medium, metric)] = unpack(r.body)
             end
         end
     end
@@ -114,23 +171,13 @@ function bagofwords(data::Vector{UInt8}, precompile::Bool)::Dict
 end
 
 function transformer(data::Vector{UInt8}, precompile::Bool)::Dict
-    r_process = run("transformer_jl", "/process", data, precompile)
+    r_process = run("transformer_jl", "/query", data, precompile)
     input = r_process.body
 
     responses = Dict{String,Any}(x => nothing for x in ALL_MEDIUMS)
     Threads.@threads for medium in ALL_MEDIUMS
-        r1 = run("transformer_py_$(medium)", "/query?medium=$medium", input, precompile)
-        d = Dict(
-            "embedding" => unpack(r1.body),
-            "payload" => unpack(data),
-        )
-        r2 = run(
-            "transformer_jl",
-            "/compute?medium=$medium",
-            pack(d),
-            precompile,
-        )
-        responses[medium] = unpack(r2.body)
+        r = run("transformer_py_$(medium)", "/query?medium=$medium", input, precompile)
+        responses[medium] = unpack(r.body)
     end
     merge(collect(values(responses))...)
 end
@@ -140,33 +187,30 @@ function ensemble(
     source::String,
     data::Vector{UInt8},
     responses::Dict,
-    precompile::Bool,
 )::String
-    inputs = Dict(
-        "payload" => unpack(data),
-        "alphas" => merge(collect(values(responses))...),
-    )
-    r = run(
-        "ensemble",
-        "/query?username=$username&source=$source",
-        pack(inputs),
-        precompile,
-    )
-    String(r.body)
+    payload = unpack(data)
+    alphas = merge(collect(values(responses))...)
+    linear = compute_linear(payload, alphas)
+    alphas = merge(linear, alphas)
+    d = Dict{String, Any}(x => nothing for x in ALL_MEDIUMS)
+    Threads.@threads for x in ALL_MEDIUMS
+        d[x] = recommend(payload, alphas, x, source)
+    end
+    render_html_page(username, d["anime"], d["manga"])
 end
 
 function get_recs(username::String, source::String, precompile::Bool)::String
-    data = pack(get_media_lists(username, source, precompile))
+    @time data = pack(get_media_lists(username, source, precompile))
     models = Dict(
         "bagofwords" => bagofwords,
         "transformer" => transformer,
         "nondirectional" => nondirectional,
     )
     responses = Dict{String,Any}(x => nothing for x in keys(models))
-    Threads.@threads for k in collect(keys(models))
+    @time Threads.@threads for k in collect(keys(models))
         responses[k] = models[k](data, precompile)
     end
-    ensemble(username, source, data, responses, precompile)
+    @time ensemble(username, source, data, responses)
 end
 
 wake(req::HTTP.Request) = msgpack(Dict("success" => true))
