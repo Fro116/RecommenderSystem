@@ -114,6 +114,7 @@ def process_json(json, media):
     mal_mapping = get_mal_id_mapping(json, media)
     records = [
         (
+            x["relationships"][media]["data"]["id"],
             mal_mapping.get(x["relationships"][media]["data"]["id"], None),
             process_rating(x["attributes"]["ratingTwenty"], x["attributes"]["rating"]),
             x["attributes"]["status"],
@@ -135,7 +136,8 @@ def process_json(json, media):
     df = pd.DataFrame.from_records(
         records,
         columns=[
-            "uid",
+            "kitsuid",
+            "malid",
             "score",
             "status",
             "progress",
@@ -152,8 +154,7 @@ def process_json(json, media):
             "finished_at",
         ],
     )
-    df = df.loc[lambda x: ~x["uid"].isna()].copy()
-    df["uid"] = df["uid"].astype(int)
+    df["kitsuid"] = df["kitsuid"].astype(int)
     return df
 
 

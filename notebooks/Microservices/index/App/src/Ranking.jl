@@ -76,9 +76,9 @@ function get_media_df(medium, source)
     prune_media_df(df, medium)
 end
 
-ALL_SOURCES = ["mal", "animeplanet", "kitsu", "animeplanet"]
+ALL_SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
 MEDIA_DFS = Dict(
-    "$(medium)_$(source)" => get_media_df(medium, source) 
+    (medium, source) => get_media_df(medium, source) 
     for medium in ALL_MEDIUMS for source in ALL_SOURCES
 )
 
@@ -118,6 +118,6 @@ end
 
 function get_ranking_df(payload::Dict, alphas::Dict, medium::String, source::String)
     rating_df = get_rating_df(payload, alphas, medium)
-    media_df = get_media_df(medium, source)
+    media_df = MEDIA_DFS[(medium, source)]
     DataFrames.innerjoin(media_df, rating_df, on = "uid")
 end

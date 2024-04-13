@@ -27,17 +27,23 @@ def call_api(session, url):
     )
 
 
-MATCHFIELD = """([^<>]+)"""
-TITLE_REGEX = re.compile('<h3 class="cardName">' + MATCHFIELD + "</h3>")
-SCORE_REGEX = re.compile('<div class="ttRating">' + MATCHFIELD + "</div>")
-STATUS_REGEX = re.compile('<span class="status' + MATCHFIELD + '">')
+# Get media lists
+
+MATCH_FIELD = """([^<>]+)"""
+MATCH_NONSPACE = """([^<> ]+)"""
+TITLE_REGEX = re.compile('<h3 class="cardName">' + MATCH_FIELD + "</h3>")
+TITLE_URL_REGEXES = {
+    x: re.compile(f'href="/{x}/' + MATCH_NONSPACE + '"') for x in ["manga", "anime"]
+}
+SCORE_REGEX = re.compile('<div class="ttRating">' + MATCH_FIELD + "</div>")
+STATUS_REGEX = re.compile('<span class="status' + MATCH_FIELD + '">')
 PROGRESS_REGEXES = {
-    x: re.compile("</span> " + MATCHFIELD + f" {y}</div>")
+    x: re.compile("</span> " + MATCH_FIELD + f" {y}</div>")
     for (x, y) in zip(["manga", "anime"], ["chs", "eps"])
 }
 PAGE_REGEX = re.compile('page=([0-9]*)">')
-FEED_TITLE_REGEX = re.compile('">' + MATCHFIELD + f"</h5>")
-FEED_TIMESTAMP_REGEX = re.compile('data-timestamp="' + MATCHFIELD + f'">')
+FEED_TITLE_REGEX = re.compile('">' + MATCH_FIELD + f"</h5>")
+FEED_TIMESTAMP_REGEX = re.compile('data-timestamp="' + MATCH_FIELD + f'">')
 
 
 def unpack(x):
@@ -55,6 +61,10 @@ def is_invalid_user(resp, username):
 
 def get_title(x):
     return sanitize_string(unpack(TITLE_REGEX.findall(x)))
+
+
+def get_title_url(x, medium):
+    return sanitize_string(unpack(TITLE_URL_REGEXES[medium].findall(x)))
 
 
 def get_score(x):
@@ -76,12 +86,14 @@ def get_progress(x, medium):
     return unpack(progress)
 
 
-def parse_entry(x, medium):
-    return (get_title(x), get_score(x), get_status(x), get_progress(x, medium))
-
-
-def get_page_entries(resp):
-    return [x for x in resp.text.split("\n") if '<h3 class="cardName">' in x]
+def parse_entry(line, prev_line, medium):
+    return (
+        get_title(line),
+        get_title_url(prev_line, medium),
+        get_score(line),
+        get_status(line),
+        get_progress(line, medium),
+    )
 
 
 def get_page_numbers(resp):
@@ -104,7 +116,7 @@ def get_feed_data(session, username, medium):
     feed_data = {}
     next_page = True
     page = 0
-    while next_page and page < 15:
+    while next_page and page < 4:
         page += 1
         url = (
             f"https://www.anime-planet.com/users/{username}"
@@ -142,12 +154,15 @@ def get_user_media_list(session, username, medium):
             or is_invalid_user(resp, username)
         ):
             return pd.DataFrame(), False
-        for x in get_page_entries(resp):
-            records.append(parse_entry(x, medium))
+        prev_line = ""
+        for line in resp.text.split("\n"):
+            if '<h3 class="cardName">' in line:
+                records.append(parse_entry(line, prev_line, medium))
+            prev_line = line
         if str(page + 1) not in get_page_numbers(resp):
             next_page = False
     df = pd.DataFrame(
-        data=list(reversed(records)), columns=["title", "score", "status", "progress"]
+        data=list(reversed(records)), columns=["title", "url", "score", "status", "progress"]
     )
     if len(df) > 0:
         feed_data, feed_ok = get_feed_data(session, username, medium)
@@ -161,3 +176,71 @@ def get_user_media_list(session, username, medium):
     df["item_order"] = list(range(len(df)))
     df["username"] = username
     return df, True
+
+# Get media
+
+MEDIA_TITLE_REGEX = re.compile('<h1 itemprop="name">' + MATCH_FIELD + "</h1>")
+MEDIA_ALTTITLE_REGEX = re.compile('<h2 class="aka">' + MATCH_FIELD + "</h2>")
+MEDIA_YEAR_REGEX = re.compile('<span class="iconYear"> ' + MATCH_FIELD + "</span>")
+MEDIA_SEASON_REGEX = re.compile("/seasons/" + MATCH_FIELD + '">')
+MEDIA_STUDIO_REGEXES = {
+    "anime": re.compile("/anime/studios/" + MATCH_FIELD + '">'),
+    "manga": re.compile("/manga/magazines/" + MATCH_FIELD + '">'),
+}
+
+
+def get_media_title(text):
+    matches = MEDIA_TITLE_REGEX.findall(text)
+    if matches:
+        return sanitize_string(unpack(matches))
+    else:
+        return ""
+
+
+def get_media_alttitle(text):
+    matches = MEDIA_ALTTITLE_REGEX.findall(text)
+    if matches:
+        return sanitize_string(unpack(matches).split("Alt title: ")[1].strip())
+    else:
+        return ""
+
+
+def get_media_year(text):
+    matches = MEDIA_YEAR_REGEX.findall(text)
+    if matches:
+        return sanitize_string(unpack(matches))
+    else:
+        return ""
+
+
+def get_media_season(text):
+    matches = MEDIA_SEASON_REGEX.findall(text)
+    if len(matches) == 2:  # first match is a link to the current season
+        return sanitize_string(matches[-1])
+    else:
+        return ""
+
+
+def get_media_studios(text, medium):
+    matches = MEDIA_STUDIO_REGEXES[medium].findall(text)
+    if matches:
+        return sanitize_string(" ".join(matches))
+    else:
+        return ""
+
+
+def get_media_facts(session, url, medium):
+    url = f"https://www.anime-planet.com/{medium}/{url}"
+    r = call_api(session, url)
+    if not r.ok:
+        return pd.DataFrame()
+    return pd.DataFrame.from_dict(
+        {
+            "url": [url],
+            "title": [get_media_title(r.text)],
+            "alttitle": [get_media_alttitle(r.text)],
+            "year": [get_media_year(r.text)],
+            "season": [get_media_season(r.text)],
+            "studios": [get_media_studios(r.text, medium)],
+        }
+    )

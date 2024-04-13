@@ -26,6 +26,7 @@ def sanitize_date(x):
 def process_json(json):
     records = [
         (
+            entry["media"]["id"],            
             entry["media"]["idMal"],
             entry["score"],
             entry["status"],
@@ -45,7 +46,8 @@ def process_json(json):
     df = pd.DataFrame.from_records(
         records,
         columns=[
-            "uid",
+            "anilistid"
+            "malid",
             "score",
             "status",
             "progress",
@@ -59,8 +61,7 @@ def process_json(json):
             "created_at",
         ],
     )
-    df = df.loc[lambda x: ~x["uid"].isna()].copy()
-    df["uid"] = df["uid"].astype(int)
+    df["anilistid"] = df["anilistid"].astype(int)
     return df
 
 
@@ -98,6 +99,7 @@ def get_user_media_list(session, userid, mediatype):
                         createdAt
                         media
                         {
+                            id
                             idMal
                         }
                     }
@@ -122,7 +124,7 @@ def get_user_media_list(session, userid, mediatype):
     # deduplicate shows that appear on multiple lists
     media_list = (
         media_list.sort_values(by=["updated_at", "created_at"])
-        .groupby("uid")
+        .groupby("anilistid")
         .last()
         .reset_index()
     )

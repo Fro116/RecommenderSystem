@@ -63,7 +63,7 @@ def fetch_media_list(username, source, medium):
             usertag = kitsu_api.get_userid(s, username)
         df, ret = kitsu_api.get_user_media_list(s, usertag, medium)
     elif source == "animeplanet":
-        s = animeplanet_api.make_session(proxies, 20)  # need burst to fetch feed
+        s = animeplanet_api.make_session(proxies, 8)
         df, ret = animeplanet_api.get_user_media_list(s, username, medium)
     else:
         assert False

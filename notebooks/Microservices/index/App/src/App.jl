@@ -83,7 +83,7 @@ function mock_response(app::String, path::String)
         return msgpack(
             Dict(
                 "alphas" => Dict(
-                    "$x/Baseline/rating" => zeros(Float32, num_items(x))
+                    "$x/Baseline/rating" => rand(Float32, num_items(x))
                     for x in ALL_MEDIUMS
                 ),
                 "dataset" => Dict("test" => [1])
@@ -92,13 +92,13 @@ function mock_response(app::String, path::String)
     elseif startswith(app, "bagofwords_py")
         medium, metric = split(app, "_")[3:4]
         return msgpack(
-            Dict("$medium/BagOfWords/v1/$metric" => zeros(Float32, num_items(medium)))
+            Dict("$medium/BagOfWords/v1/$metric" => rand(Float32, num_items(medium)))
         )
     elseif startswith(app, "transformer_py")
         medium = split(app, "_")[3]
         d = Dict()
         for metric in ALL_METRICS
-            d["$medium/Transformer/v1/$metric"] = zeros(Float32, num_items(medium))
+            d["$medium/Transformer/v1/$metric"] = rand(Float32, num_items(medium))
         end
         return msgpack(d)                
     else
@@ -200,17 +200,17 @@ function ensemble(
 end
 
 function get_recs(username::String, source::String, precompile::Bool)::String
-    @time data = pack(get_media_lists(username, source, precompile))
+    data = pack(get_media_lists(username, source, precompile))
     models = Dict(
         "bagofwords" => bagofwords,
         "transformer" => transformer,
         "nondirectional" => nondirectional,
     )
     responses = Dict{String,Any}(x => nothing for x in keys(models))
-    @time Threads.@threads for k in collect(keys(models))
+    Threads.@threads for k in collect(keys(models))
         responses[k] = models[k](data, precompile)
     end
-    @time ensemble(username, source, data, responses)
+    ensemble(username, source, data, responses)
 end
 
 wake(req::HTTP.Request) = msgpack(Dict("success" => true))
