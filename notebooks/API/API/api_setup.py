@@ -91,6 +91,10 @@ class ProxySession:
         self.session = None
         self.ratelimit_calls = ratelimit_calls
         self.ratelimit_period = ratelimit_period
+        try:
+            self.ratelimit_period *= int(RATELIMIT_MULT)
+        except:
+            pass
         self.request_times = []
         self.reset()
 

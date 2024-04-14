@@ -11,7 +11,7 @@ import requests
 sys.path.append("..")
 from API import animeplanet_api, api_setup, mal_web_api
 
-PROXIES = api_setup.load_proxies(PROXY_NUMBER, PARTITION, NUM_PARTITIONS)
+PROXIES = api_setup.load_proxies(PROXY_NUMBER, NUM_PROXIES)
 
 if source == "mal":
     SESSION = mal_web_api.make_session(PROXIES, 1)

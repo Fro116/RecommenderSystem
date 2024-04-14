@@ -1,5 +1,8 @@
-from . import api_setup
+import html
+
 import pandas as pd
+
+from . import api_setup
 from .api_setup import sanitize_string
 
 
@@ -20,13 +23,13 @@ def sanitize_date(x):
             return default
         return y
 
-    return f'{get(x, "year", "")}-{get(x, "month", "")}-{get(x, "date", "")}'
+    return f'{get(x, "year", "")}-{get(x, "month", "")}-{get(x, "date", get(x, "day", ""))}'
 
 
 def process_json(json):
     records = [
         (
-            entry["media"]["id"],            
+            entry["media"]["id"],
             entry["media"]["idMal"],
             entry["score"],
             entry["status"],
@@ -156,3 +159,142 @@ def get_username(session, userid):
         logging.warning(f"Received error {str(e)} while accessing {url}")
         return f"{userid}"
     return response.json()["data"]["User"]["name"]
+
+
+def process_media_facts_json(json):
+    def getstr(d, k):
+        if k not in d or d[k] is None:
+            return ""
+        return str(d[k])
+
+    entry = json["data"]["Media"]
+    df = pd.DataFrame.from_records(
+        [
+            (
+                entry["id"],
+                getstr(entry, "idMal"),
+                getstr(entry["title"], "romaji"),
+                getstr(entry["title"], "english"),
+                getstr(entry, "format"),
+                html.unescape(getstr(entry, "description")),
+                getstr(entry, "genres"),
+                sanitize_date(entry["startDate"]),
+                sanitize_date(entry["endDate"]),
+                getstr(entry, "seasonYear") + " " + getstr(entry, "season"),
+                getstr(entry, "episodes"),
+                getstr(entry, "chapters"),
+                getstr(entry, "volumes"),
+                str(
+                    [
+                        x["node"]["name"]
+                        for x in entry.get("studios", {}).get("edges", [])
+                    ]
+                ),
+            )
+        ],
+        columns=[
+            "anilistid",
+            "malid",
+            "title",
+            "alttitle",
+            "type",
+            "summary",
+            "genres",
+            "startdate",
+            "enddate",
+            "season",
+            "episodes",
+            "chapters",
+            "volumes",
+            "studios",
+        ],
+    )
+    return df
+
+
+def process_media_relations_json(json):
+    def getstr(d, k):
+        if k not in d or d[k] is None:
+            return ""
+        return str(d[k])
+
+    entry = json["data"]["Media"]
+    records = []
+    for e in entry["relations"]["edges"]:
+        records.append(
+            (
+                e["relationType"],
+                entry["id"],
+                entry["type"],
+                e["node"]["id"],
+                e["node"]["type"],
+            )
+        )
+    df = pd.DataFrame.from_records(
+        records,
+        columns=[
+            "relation",
+            "source_id",
+            "source_media",
+            "target_id",
+            "target_media",
+        ],
+    )
+    return df
+
+
+def get_media_facts(session, uid, mediatype):
+    query = """
+    query ($id: Int, $MEDIA: MediaType)
+    {
+        Media (id: $id, type:$MEDIA) {
+            id,
+            idMal,
+            title {
+                romaji
+                english
+            },
+            format,
+            description,
+            genres,
+            startDate {
+                year
+                month
+                day
+            },
+            endDate {
+                year
+                month
+                day
+            },
+            seasonYear,
+            season,
+            episodes,
+            chapters,
+            volumes,
+            studios {
+                edges {
+                    node {
+                        name
+                    }
+                }
+            }
+            type,
+            relations {
+                edges {
+                    node {
+                        id
+                        type
+                    }
+                    relationType
+                }
+            }            
+        }       
+    }"""
+    variables = {"id": str(uid), "MEDIA": mediatype.upper()}
+    url = "https://graphql.anilist.co"
+    response = call_api(session, url, {"query": query, "variables": variables})
+    if not response.ok:
+        return pd.DataFrame(), pd.DataFrame()
+    j = response.json()
+    return process_media_facts_json(j), process_media_relations_json(j)

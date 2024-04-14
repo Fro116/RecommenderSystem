@@ -6,6 +6,7 @@ import pandas as pd
 from . import api_setup
 from .api_setup import sanitize_string, to_unix_time
 
+
 KITSU_TOKEN = None
 KITSU_TOKEN_EXPIRY = -1
 
@@ -41,7 +42,7 @@ def get_token(session):
 def call_api(session, url):
     return api_setup.call_api(
         session,
-        "GET",        
+        "GET",
         url,
         "kitsu",
         headers={"Authorization": f"Bearer {get_token(session)['access_token']}"},
@@ -199,3 +200,95 @@ def get_userid(session, username):
             f"there are multiple users with username {username}, please use userid"
         )
     return int(json[0]["id"])
+
+
+def getstr(d, k):
+    if k not in d or d[k] is None:
+        return ""
+    return str(d[k])
+
+
+def get_mediatitle(titles, slug):
+    english_names = [x for x in titles.keys() if x.startswith("en")]
+    if len(english_names) == 0:
+        logging.warning(f"Could not find any title for {titles}")
+        return slug
+    trans = [x for x in english_names if x != "en"]
+    if len(trans) > 1:
+        logging.warning(f"Found multitples title for {titles}")
+        return titles[trans[0]]
+    elif len(trans) == 1:
+        return titles[trans[0]]
+    else:
+        return titles["en"]
+
+
+def get_media_facts(session, uid, medium):
+    response = call_api(
+        session,
+        f"https://kitsu.io/api/edge/{medium}/{uid}?include=genres,mediaRelationships.destination",
+    )
+    if not response.ok:
+        return pd.DataFrame(), pd.DataFrame()
+    j = response.json()["data"]
+    details = pd.DataFrame.from_records(
+        [
+            (
+                j["id"],
+                get_mediatitle(j["attributes"]["titles"], j["attributes"]["slug"]),
+                getstr(j["attributes"]["titles"], "en"),
+                getstr(j["attributes"], "subtype"),
+                getstr(j["attributes"], "synopsis"),
+                getstr(j["attributes"], "startDate"),
+                getstr(j["attributes"], "endDate"),
+                getstr(j["attributes"], "episodeCount"),
+                getstr(j["attributes"], "chapterCount"),
+                getstr(j["attributes"], "volumeCount"),
+                str(
+                    [
+                        x["attributes"]["name"]
+                        for x in response.json().get("included", [])
+                        if x["type"] == "genres"
+                    ]
+                ),
+            )
+        ],
+        columns=[
+            "kitsuid",
+            "title",
+            "alttitle",
+            "type",
+            "summary",
+            "startdate",
+            "enddate",
+            "episodes",
+            "chapters",
+            "volumes",
+            "genres",
+        ],
+    )
+
+    records = []
+    for x in [
+        x for x in response.json().get("included", []) if x["type"] == "mediaRelationships"
+    ]:
+        records.append(
+            (
+                x["attributes"]["role"],
+                str(uid),
+                medium,
+                x["relationships"]["destination"]["data"]["id"],
+                x["relationships"]["destination"]["data"]["type"],
+            )
+        )
+    relations = pd.DataFrame.from_records(
+        records,
+        columns=[
+            "relation",
+            "source_id",
+            "source_media",
+            "target_id",
+            "target_media",
+        ],
+    )
+    return details, relations

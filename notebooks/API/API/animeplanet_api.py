@@ -1,3 +1,5 @@
+import html
+import logging
 import re
 
 from . import api_setup
@@ -30,10 +32,10 @@ def call_api(session, url):
 # Get media lists
 
 MATCH_FIELD = """([^<>]+)"""
-MATCH_NONSPACE = """([^<> ]+)"""
+MATCH_LAZY = """([^<>]+?)"""
 TITLE_REGEX = re.compile('<h3 class="cardName">' + MATCH_FIELD + "</h3>")
 TITLE_URL_REGEXES = {
-    x: re.compile(f'href="/{x}/' + MATCH_NONSPACE + '"') for x in ["manga", "anime"]
+    x: re.compile(f'href="/{x}/' + MATCH_LAZY + '"') for x in ["manga", "anime"]
 }
 SCORE_REGEX = re.compile('<div class="ttRating">' + MATCH_FIELD + "</div>")
 STATUS_REGEX = re.compile('<span class="status' + MATCH_FIELD + '">')
@@ -42,8 +44,8 @@ PROGRESS_REGEXES = {
     for (x, y) in zip(["manga", "anime"], ["chs", "eps"])
 }
 PAGE_REGEX = re.compile('page=([0-9]*)">')
-FEED_TITLE_REGEX = re.compile('">' + MATCH_FIELD + f"</h5>")
-FEED_TIMESTAMP_REGEX = re.compile('data-timestamp="' + MATCH_FIELD + f'">')
+FEED_TITLE_REGEX = re.compile('">' + MATCH_FIELD + "</h5>")
+FEED_TIMESTAMP_REGEX = re.compile('data-timestamp="' + MATCH_FIELD + '">')
 
 
 def unpack(x):
@@ -162,7 +164,8 @@ def get_user_media_list(session, username, medium):
         if str(page + 1) not in get_page_numbers(resp):
             next_page = False
     df = pd.DataFrame(
-        data=list(reversed(records)), columns=["title", "url", "score", "status", "progress"]
+        data=list(reversed(records)),
+        columns=["title", "url", "score", "status", "progress"],
     )
     if len(df) > 0:
         feed_data, feed_ok = get_feed_data(session, username, medium)
@@ -177,22 +180,32 @@ def get_user_media_list(session, username, medium):
     df["username"] = username
     return df, True
 
+
 # Get media
 
-MEDIA_TITLE_REGEX = re.compile('<h1 itemprop="name">' + MATCH_FIELD + "</h1>")
+MEDIA_TITLE_REGEX = re.compile('<h1 itemprop="name"(?: class="long")?>' + MATCH_FIELD + "</h1>")
 MEDIA_ALTTITLE_REGEX = re.compile('<h2 class="aka">' + MATCH_FIELD + "</h2>")
 MEDIA_YEAR_REGEX = re.compile('<span class="iconYear"> ' + MATCH_FIELD + "</span>")
 MEDIA_SEASON_REGEX = re.compile("/seasons/" + MATCH_FIELD + '">')
 MEDIA_STUDIO_REGEXES = {
     "anime": re.compile("/anime/studios/" + MATCH_FIELD + '">'),
-    "manga": re.compile("/manga/magazines/" + MATCH_FIELD + '">'),
+    "manga": re.compile("/manga/(magazines|publishers)/" + MATCH_FIELD + '">'),
 }
+MEDIA_TAG_REGEX = {
+    x: re.compile(f'<a href="/{x}/tags/' + MATCH_LAZY + '"') for x in ["manga", "anime"]
+}
+MEDIA_SUMMARY_REGEX = re.compile(
+    'property="og:description" content="' + MATCH_FIELD + '" />'
+)
+MEDIA_RELATION_REGEX = re.compile(
+    f'<a href="/(anime|manga)/' + MATCH_FIELD + '" class="RelatedEntry '
+)
 
 
 def get_media_title(text):
     matches = MEDIA_TITLE_REGEX.findall(text)
     if matches:
-        return sanitize_string(unpack(matches))
+        return html.unescape(unpack(matches))
     else:
         return ""
 
@@ -200,7 +213,12 @@ def get_media_title(text):
 def get_media_alttitle(text):
     matches = MEDIA_ALTTITLE_REGEX.findall(text)
     if matches:
-        return sanitize_string(unpack(matches).split("Alt title: ")[1].strip())
+        x = unpack(matches)
+        if "Alt titles" in x:
+            x = x.split("Alt titles: ")[1].strip()
+            return [html.unescape(y) for y in x.split(",")]
+        else:
+            return html.unescape(x.split("Alt title: ")[1].strip())
     else:
         return ""
 
@@ -208,7 +226,7 @@ def get_media_alttitle(text):
 def get_media_year(text):
     matches = MEDIA_YEAR_REGEX.findall(text)
     if matches:
-        return sanitize_string(unpack(matches))
+        return html.unescape(unpack(matches))
     else:
         return ""
 
@@ -216,7 +234,7 @@ def get_media_year(text):
 def get_media_season(text):
     matches = MEDIA_SEASON_REGEX.findall(text)
     if len(matches) == 2:  # first match is a link to the current season
-        return sanitize_string(matches[-1])
+        return html.unescape(matches[-1])
     else:
         return ""
 
@@ -224,23 +242,53 @@ def get_media_season(text):
 def get_media_studios(text, medium):
     matches = MEDIA_STUDIO_REGEXES[medium].findall(text)
     if matches:
+        if medium == "manga":
+            matches = [x[1] for x in matches]
         return sanitize_string(" ".join(matches))
     else:
         return ""
 
 
+def get_media_genres(text, medium):
+    return MEDIA_TAG_REGEX[medium].findall(text)
+
+
+def get_media_summary(text):
+    matches = MEDIA_SUMMARY_REGEX.findall(text)
+    if not matches:
+        return ""
+    return unpack(matches)
+
+
 def get_media_facts(session, url, medium):
-    url = f"https://www.anime-planet.com/{medium}/{url}"
-    r = call_api(session, url)
+    r = call_api(session, f"https://www.anime-planet.com/{medium}/{url}")
     if not r.ok:
-        return pd.DataFrame()
-    return pd.DataFrame.from_dict(
-        {
-            "url": [url],
-            "title": [get_media_title(r.text)],
-            "alttitle": [get_media_alttitle(r.text)],
-            "year": [get_media_year(r.text)],
-            "season": [get_media_season(r.text)],
-            "studios": [get_media_studios(r.text, medium)],
-        }
+        logging.warning(f"Received error while accessing {url}")        
+        return pd.DataFrame(), pd.DataFrame()
+    return (
+        pd.DataFrame.from_dict(
+            {
+                "url": [url],
+                "title": [get_media_title(r.text)],
+                "alttitle": [get_media_alttitle(r.text)],
+                "year": [get_media_year(r.text)],
+                "season": [get_media_season(r.text)],
+                "studios": [get_media_studios(r.text, medium)],
+                "genres": [get_media_genres(r.text, medium)],
+                "summary": [get_media_summary(r.text)],
+            }
+        ),
+        pd.DataFrame.from_records(
+            [
+                ("relation", url, medium, m, t)
+                for (m, t) in MEDIA_RELATION_REGEX.findall(r.text)
+            ],
+            columns=[
+                "relation",
+                "source_id",
+                "source_media",
+                "target_id",
+                "target_media",
+            ],
+        ),
     )
