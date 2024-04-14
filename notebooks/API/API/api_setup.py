@@ -44,7 +44,7 @@ def get_environment_path(path):
     return os.path.join(datapath, "environment", path)
 
 
-def load_proxies(proxy_number, partition=None, num_partitions=None, country_codes=None):
+def load_proxies(partition, num_partitions, country_codes=None):
     valid_ips = set()
     geofn = get_environment_path("proxies/geolocations.txt")
     if os.path.exists(geofn) and country_codes is not None:
@@ -68,18 +68,17 @@ def load_proxies(proxy_number, partition=None, num_partitions=None, country_code
                 proxies.append({domain: url for domain in ["http", "https"]})
     else:
         proxies = [None]
-    if proxy_number == "SHARED":
-        same_part = [
-            x for i, x in enumerate(proxies) if (i % num_partitions) == partition
-        ]
-        diff_part = [
-            x for i, x in enumerate(proxies) if (i % num_partitions) != partition
-        ]
-        random.shuffle(same_part)
-        random.shuffle(diff_part)
-        return same_part + diff_part
-    else:
-        return [proxies[proxy_number]]
+
+    same_part = [
+        x for i, x in enumerate(proxies) if (i % num_partitions) == partition
+    ]
+    diff_part = [
+        x for i, x in enumerate(proxies) if (i % num_partitions) != partition
+    ]
+    random.shuffle(same_part)
+    random.shuffle(diff_part)
+    return same_part + diff_part
+
 
 
 

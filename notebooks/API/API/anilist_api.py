@@ -46,7 +46,7 @@ def process_json(json):
     df = pd.DataFrame.from_records(
         records,
         columns=[
-            "anilistid"
+            "anilistid",
             "malid",
             "score",
             "status",
