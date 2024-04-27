@@ -6,7 +6,6 @@ import pandas as pd
 from . import api_setup
 from .api_setup import sanitize_string, to_unix_time
 
-
 KITSU_TOKEN = None
 KITSU_TOKEN_EXPIRY = -1
 
@@ -208,19 +207,36 @@ def getstr(d, k):
     return str(d[k])
 
 
-def get_mediatitle(titles, slug):
-    english_names = [x for x in titles.keys() if x.startswith("en")]
-    if len(english_names) == 0:
+def get_media_title(titles, slug):
+    for t in ["en_jp", "en_kr"]:
+        if titles.get(t, None) is not None:
+            return titles[t]
+    english_names = [
+        x
+        for x in titles.keys()
+        if x.startswith("en")
+        and titles[x] is not None
+        and x not in ["en", "en_us", "en_jp", "en_kr"]
+    ]
+    if len(english_names) > 1:
+        logging.warning(f"Found multitples title for {titles}")
+        return titles[english_names[0]]
+    elif len(english_names) == 1:
+        return titles[english_names[0]]
+    else:
+        for t in ["en", "en_us"]:
+            if titles.get(t, None) is not None:
+                return titles[t]
         logging.warning(f"Could not find any title for {titles}")
         return slug
-    trans = [x for x in english_names if x != "en"]
-    if len(trans) > 1:
-        logging.warning(f"Found multitples title for {titles}")
-        return titles[trans[0]]
-    elif len(trans) == 1:
-        return titles[trans[0]]
-    else:
+
+
+def get_media_alttitle(titles):
+    if titles.get("en", None) is not None:
         return titles["en"]
+    if titles.get("en_us", None) is not None:
+        return titles["en_us"]
+    return ""
 
 
 def get_media_facts(session, uid, medium):
@@ -235,8 +251,8 @@ def get_media_facts(session, uid, medium):
         [
             (
                 j["id"],
-                get_mediatitle(j["attributes"]["titles"], j["attributes"]["slug"]),
-                getstr(j["attributes"]["titles"], "en"),
+                get_media_title(j["attributes"]["titles"], j["attributes"]["slug"]),
+                get_media_alttitle(j["attributes"]["titles"]),
                 getstr(j["attributes"], "subtype"),
                 getstr(j["attributes"], "synopsis"),
                 getstr(j["attributes"], "startDate"),
@@ -270,7 +286,9 @@ def get_media_facts(session, uid, medium):
 
     records = []
     for x in [
-        x for x in response.json().get("included", []) if x["type"] == "mediaRelationships"
+        x
+        for x in response.json().get("included", [])
+        if x["type"] == "mediaRelationships"
     ]:
         records.append(
             (
