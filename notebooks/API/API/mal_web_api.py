@@ -14,7 +14,7 @@ def make_session(proxies, concurrency):
 
 
 def call_api(session, url):
-    return api_setup.call_api(session, "GET", url, "web", extra_error_codes=[403])
+    return api_setup.call_api(session, "GET", url, "web", extra_error_codes=[403, 405])
 
 
 def unpack(x):
@@ -311,7 +311,6 @@ def get_media_facts(session, uid, media):
     return details, relations
 
 
-# returns all usernames that have commented on the given userid's profile
 def get_username(session, userid):
     try:
         url = f"https://myanimelist.net/comments.php?id={userid}"
