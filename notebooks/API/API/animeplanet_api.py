@@ -9,23 +9,17 @@ from .api_setup import sanitize_string
 
 def make_session(proxies, concurrency):
     return api_setup.ProxySession(
-        proxies, ratelimit_calls=concurrency, ratelimit_period=4 * concurrency
+        proxies, ratelimit_calls=concurrency, ratelimit_period=8 * concurrency
     )
 
 
 def call_api(session, url):
-    header = (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/117.0.0.0 Safari/537.36"
-    )
     return api_setup.call_api(
         session,
         "GET",
         url,
         "web",
         extra_error_codes=[403],
-        headers={"User-Agent": header},
     )
 
 

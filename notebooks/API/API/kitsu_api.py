@@ -12,7 +12,7 @@ KITSU_TOKEN_EXPIRY = -1
 
 def make_session(proxies, concurrency):
     return api_setup.ProxySession(
-        proxies, ratelimit_calls=concurrency, ratelimit_period=2 * concurrency
+        proxies, ratelimit_calls=concurrency, ratelimit_period=4 * concurrency
     )
 
 

@@ -6,7 +6,7 @@ import sys
 import time
 
 import pandas as pd
-import requests
+from curl_cffi import requests
 
 sys.path.append("..")
 from API import animeplanet_api, api_setup, mal_web_api

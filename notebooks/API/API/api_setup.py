@@ -5,7 +5,7 @@ import random
 import time
 
 import pandas as pd
-import requests
+from curl_cffi import requests
 
 # Data cleaning
 
@@ -126,7 +126,7 @@ class ProxySession:
             call = self.session.get
         else:
             raise ValueError(f"Invalid request type {request_type}")
-        res = call(url, timeout=5, **kwargs)
+        res = call(url, impersonate="chrome", timeout=5, **kwargs)
         return res
 
 
