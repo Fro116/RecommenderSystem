@@ -59,7 +59,7 @@ ALTTITLE_REGEXES = {
 
 SUMMARY_REGEXES = {
     "anime": re.compile(
-        '<h2>Synopsis</h2></div><p itemprop="description">' + MATCH_FIELD + "</p>",
+        'Synopsis</h2></div><p itemprop="description">' + MATCH_FIELD + "</p>",
         re.DOTALL,
     ),
     "manga": re.compile(
@@ -251,35 +251,42 @@ def process_media_details_response(response, uid, medium):
 
 def process_media_relations_response(response, uid, media):
     relation_types = {
-        "Sequel:": "SEQUEL",
-        "Prequel:": "PREQUEL",
-        "Alternative setting:": "ALTERNATIVE_SETTING",
-        "Alternative version:": "ALTERNATIVE_VERSION",
-        "Side story:": "SIDE_STORY",
-        "Summary:": "SUMMARY",
-        "Full story:": "FULL_STORY",
-        "Parent story:": "PARENT_STORY",
-        "Spin-off:": "SPIN_OFF",
-        "Adaptation:": "ADAPTATION",
-        "Character:": "CHARACTER",
-        "Other:": "OTHER",
+        "Sequel": "SEQUEL",
+        "Prequel": "PREQUEL",
+        "Alternative Setting": "ALTERNATIVE_SETTING",
+        "Alternative Version": "ALTERNATIVE_VERSION",
+        "Side Story": "SIDE_STORY",
+        "Summary": "SUMMARY",
+        "Full Story": "FULL_STORY",
+        "Parent Story": "PARENT_STORY",
+        "Spin-Off": "SPIN_OFF",
+        "Adaptation": "ADAPTATION",
+        "Character": "CHARACTER",
+        "Other": "OTHER",
     }
 
     records = []
     lines = re.split("<|>", response.text)
-    starting_line = f"Related {media.capitalize()}"
+    starting_line = "Related Entries"
     if starting_line not in lines:
         return pd.DataFrame()
     start = lines.index(starting_line)
+    tile_cards = True
+    last_href = None
+    rtype = None
     for line in lines[start:]:
-        if line in relation_types:
-            rtype = relation_types[line]
-        elif "href" in line:
+        line = line.strip()
+        key = line.split("(")[0].split(":")[0].strip()
+        if key in relation_types:
+            rtype = relation_types[key]
+            if tile_cards and last_href is None:
+                tile_cards = False
+        if "href" in line:
             l = line
             for target_media in ["anime", "manga"]:
                 for target_id in re.findall(rf"/{target_media}/[0-9]+", l):
                     target_id = int(target_id.split("/")[-1])
-                    if target_id == uid:
+                    if target_id == uid and target_media == media:
                         relations = pd.DataFrame.from_records(
                             records,
                             columns=[
@@ -291,9 +298,34 @@ def process_media_relations_response(response, uid, media):
                             ],
                         )
                         return relations
-                    records.append(
-                        (rtype, uid, media.upper(), target_id, target_media.upper())
-                    )
+                    else:
+                        if tile_cards:
+                            href = (target_id, target_media)
+                            if last_href is None:
+                                last_href = href
+                            elif last_href == href:
+                                records.append(
+                                    (
+                                        rtype,
+                                        uid,
+                                        media.upper(),
+                                        target_id,
+                                        target_media.upper(),
+                                    )
+                                )
+                                last_href = None
+                            else:
+                                assert False, f"unknown href {last_href} {href} for {media} {uid}"
+                        else:
+                            records.append(
+                                (
+                                    rtype,
+                                    uid,
+                                    media.upper(),
+                                    target_id,
+                                    target_media.upper(),
+                                )
+                            )
     assert False, f"could not parse {media} relations for {uid}"
 
 
