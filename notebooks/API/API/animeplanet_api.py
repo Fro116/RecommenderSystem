@@ -1,5 +1,6 @@
 import html
 import logging
+import urllib
 import re
 
 from . import api_setup
@@ -13,11 +14,16 @@ def make_session(proxies, concurrency):
     )
 
 
+def quote_url(url):
+    scheme, rest = url.split("://", 1)
+    return f"{scheme}://{urllib.parse.quote(rest)}"
+
+
 def call_api(session, url):
     return api_setup.call_api(
         session,
         "GET",
-        url,
+        quote_url(url),
         "web",
         extra_error_codes=[403],
     )
