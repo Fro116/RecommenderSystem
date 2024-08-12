@@ -31,7 +31,7 @@ def get_token(session):
             "password": password,
         }
         response = api_setup.call_api(
-            session, "POST", "https://kitsu.io/api/oauth/token", "kitsu", data=data
+            session, "POST", "https://kitsu.app/api/oauth/token", "kitsu", data=data
         )
         KITSU_TOKEN = response.json()
         KITSU_TOKEN_EXPIRY = time.time() + KITSU_TOKEN["expires_in"]
@@ -162,7 +162,7 @@ def get_user_media_list(session, userid, media):
     has_next_chunk = True
     media_lists = []
     url = (
-        f"https://kitsu.io/api/edge/library-entries?filter[user_id]={userid}"
+        f"https://kitsu.app/api/edge/library-entries?filter[user_id]={userid}"
         f"&filter[kind]={media}&include={media}.mappings,user&fields[{media}]=mappings"
         f"&fields[mappings]=externalSite,externalId&fields[users]=name&page[limit]=500"
     )
@@ -191,7 +191,7 @@ def get_user_media_list(session, userid, media):
 
 
 def get_userid(session, username):
-    url = f"https://kitsu.io/api/edge/users?filter[name]={username}"
+    url = f"https://kitsu.app/api/edge/users?filter[name]={username}"
     response = call_api(session, url)
     json = response.json()["data"]
     if len(json) != 1:
@@ -242,7 +242,7 @@ def get_media_alttitle(titles):
 def get_media_facts(session, uid, medium):
     response = call_api(
         session,
-        f"https://kitsu.io/api/edge/{medium}/{uid}?include=genres,mediaRelationships.destination",
+        f"https://kitsu.app/api/edge/{medium}/{uid}?include=genres,mediaRelationships.destination",
     )
     if not response.ok:
         return pd.DataFrame(), pd.DataFrame()
