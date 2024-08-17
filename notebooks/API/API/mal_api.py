@@ -3,7 +3,7 @@ import logging
 import pandas as pd
 
 from . import api_setup
-from .api_setup import sanitize_string, to_unix_time
+from .api_setup import get_api_version, sanitize_string, to_unix_time
 
 MAL_ACCESS_TOKEN = None
 
@@ -33,28 +33,6 @@ def call_api(session, url):
         "mal",
         headers={"X-MAL-CLIENT-ID": MAL_ACCESS_TOKEN},
     )
-
-def get_user_media_list(session, username, media):
-    media_lists = []
-    more_pages = True
-    url = (
-        "https://api.myanimelist.net/v2/users/"
-        f"{username}/{media}list?limit=1000&fields=list_status&nsfw=true"
-    )
-    while more_pages:
-        response = call_api(session, url)
-        if response.status_code != 200 or "data" not in response.json():
-            logging.warning(f"Error {response} received when handling {url}")
-            return pd.DataFrame(), False
-
-        json = response.json()
-        media_lists.append(process_media_list_json(json, media))
-        more_pages = "next" in json["paging"]
-        if more_pages:
-            url = json["paging"]["next"]
-    user_media_list = pd.concat(media_lists, ignore_index=True)
-    user_media_list["username"] = username
-    return user_media_list, True
 
 
 def process_media_list_json(json, media):
@@ -111,3 +89,27 @@ def process_timestamp(time):
         return to_unix_time(time, "%Y-%m-%dT%H:%M:%S+00:00")
     except:
         return 0
+
+
+def get_user_media_list(session, username, media):
+    media_lists = []
+    more_pages = True
+    url = (
+        "https://api.myanimelist.net/v2/users/"
+        f"{username}/{media}list?limit=1000&fields=list_status&nsfw=true"
+    )
+    while more_pages:
+        response = call_api(session, url)
+        if response.status_code != 200 or "data" not in response.json():
+            logging.warning(f"Error {response} received when handling {url}")
+            return pd.DataFrame(), False
+
+        json = response.json()
+        media_lists.append(process_media_list_json(json, media))
+        more_pages = "next" in json["paging"]
+        if more_pages:
+            url = json["paging"]["next"]
+    user_media_list = pd.concat(media_lists, ignore_index=True)
+    user_media_list["api_version"] = get_api_version()
+    user_media_list["username"] = username
+    return user_media_list, True

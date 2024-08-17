@@ -2,9 +2,10 @@ import html
 import logging
 import re
 
-from . import api_setup
 import pandas as pd
-from .api_setup import sanitize_string
+
+from . import api_setup
+from .api_setup import get_api_version, sanitize_string
 
 
 def make_session(proxies, concurrency):
@@ -175,13 +176,16 @@ def get_user_media_list(session, username, medium):
     for i in range(len(df)):
         df.loc[i, "updated_at"] = int(feed_data.get(df.loc[i, "title"], 0))
     df["item_order"] = list(range(len(df)))
+    df["api_version"] = get_api_version()
     df["username"] = username
     return df, True
 
 
 # Get media
 
-MEDIA_TITLE_REGEX = re.compile('<h1 itemprop="name"(?: class="long")?>' + MATCH_FIELD + "</h1>")
+MEDIA_TITLE_REGEX = re.compile(
+    '<h1 itemprop="name"(?: class="long")?>' + MATCH_FIELD + "</h1>"
+)
 MEDIA_ALTTITLE_REGEX = re.compile('<h2 class="aka">' + MATCH_FIELD + "</h2>")
 MEDIA_YEAR_REGEX = re.compile('<span class="iconYear"> ' + MATCH_FIELD + "</span>")
 MEDIA_SEASON_REGEX = re.compile("/seasons/" + MATCH_FIELD + '">')
@@ -261,7 +265,7 @@ def get_media_summary(text):
 def get_media_facts(session, url, medium):
     r = call_api(session, f"https://www.anime-planet.com/{medium}/{url}")
     if not r.ok:
-        logging.warning(f"Received error while accessing {url}")        
+        logging.warning(f"Received error while accessing {url}")
         return pd.DataFrame(), pd.DataFrame()
     return (
         pd.DataFrame.from_dict(
@@ -274,11 +278,12 @@ def get_media_facts(session, url, medium):
                 "studios": [get_media_studios(r.text, medium)],
                 "genres": [get_media_genres(r.text, medium)],
                 "summary": [get_media_summary(r.text)],
+                "api_version": [get_api_version()],
             }
         ),
         pd.DataFrame.from_records(
             [
-                ("relation", url, medium, m, t)
+                ("relation", url, medium, m, t, get_api_version())
                 for (m, t) in MEDIA_RELATION_REGEX.findall(r.text)
             ],
             columns=[
@@ -287,6 +292,7 @@ def get_media_facts(session, url, medium):
                 "source_media",
                 "target_id",
                 "target_media",
+                "api_version",
             ],
         ),
     )

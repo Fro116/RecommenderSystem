@@ -4,7 +4,7 @@ import logging
 import pandas as pd
 
 from . import api_setup
-from .api_setup import sanitize_string
+from .api_setup import get_api_version, sanitize_string
 
 
 def make_session(proxies, concurrency):
@@ -132,6 +132,7 @@ def get_user_media_list(session, userid, mediatype):
         .last()
         .reset_index()
     )
+    medialist["api_version"] = get_api_version()
     media_list["username"] = f"{userid}"
     return media_list, True
 
@@ -191,6 +192,7 @@ def process_media_facts_json(json):
                         for x in entry.get("studios", {}).get("edges", [])
                     ]
                 ),
+                get_api_version(),
             )
         ],
         columns=[
@@ -208,6 +210,7 @@ def process_media_facts_json(json):
             "chapters",
             "volumes",
             "studios",
+            "api_version",
         ],
     )
     return df
@@ -229,6 +232,7 @@ def process_media_relations_json(json):
                 entry["type"],
                 e["node"]["id"],
                 e["node"]["type"],
+                get_api_version(),
             )
         )
     df = pd.DataFrame.from_records(
@@ -239,6 +243,7 @@ def process_media_relations_json(json):
             "source_media",
             "target_id",
             "target_media",
+            "api_version",
         ],
     )
     return df

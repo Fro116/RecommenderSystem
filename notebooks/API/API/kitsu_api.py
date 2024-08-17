@@ -4,7 +4,7 @@ import time
 import pandas as pd
 
 from . import api_setup
-from .api_setup import sanitize_string, to_unix_time
+from .api_setup import get_api_version, sanitize_string, to_unix_time
 
 KITSU_TOKEN = None
 KITSU_TOKEN_EXPIRY = -1
@@ -186,6 +186,7 @@ def get_user_media_list(session, userid, media):
 
     media_list = pd.concat(media_lists)
     media_list["usertag"] = sanitize_string(username)
+    media_list["api_version"] = get_api_version()
     media_list["username"] = str(userid)
     return media_list, True
 
@@ -267,6 +268,7 @@ def get_media_facts(session, uid, medium):
                         if x["type"] == "genres"
                     ]
                 ),
+                get_api_version(),
             )
         ],
         columns=[
@@ -281,6 +283,7 @@ def get_media_facts(session, uid, medium):
             "chapters",
             "volumes",
             "genres",
+            "api_version",
         ],
     )
 
@@ -297,6 +300,7 @@ def get_media_facts(session, uid, medium):
                 medium,
                 x["relationships"]["destination"]["data"]["id"],
                 x["relationships"]["destination"]["data"]["type"],
+                get_api_version(),
             )
         )
     relations = pd.DataFrame.from_records(
@@ -307,6 +311,7 @@ def get_media_facts(session, uid, medium):
             "source_media",
             "target_id",
             "target_media",
+            "api_version",
         ],
     )
     return details, relations

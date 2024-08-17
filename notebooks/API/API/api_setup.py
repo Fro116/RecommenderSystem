@@ -3,11 +3,10 @@ import logging
 import os
 import random
 import time
+from functools import cache
 
 import pandas as pd
 from curl_cffi import requests
-
-# Data cleaning
 
 
 def sanitize_string(x):
@@ -31,9 +30,6 @@ def to_unix_time(date, fmt):
         logging.warning(f"Could not parse timestamp {date} {fmt} {time}")
         time = 0
     return time
-
-
-# Proxies
 
 
 def get_environment_path(path):
@@ -69,20 +65,19 @@ def load_proxies(partition, num_partitions, country_codes=None):
     else:
         proxies = [None]
 
-    same_part = [
-        x for i, x in enumerate(proxies) if (i % num_partitions) == partition
-    ]
-    diff_part = [
-        x for i, x in enumerate(proxies) if (i % num_partitions) != partition
-    ]
+    same_part = [x for i, x in enumerate(proxies) if (i % num_partitions) == partition]
+    diff_part = [x for i, x in enumerate(proxies) if (i % num_partitions) != partition]
     random.shuffle(same_part)
     random.shuffle(diff_part)
     return same_part + diff_part
 
 
-
-
-# API endpoint
+@cache
+def get_api_version():
+    fn = get_environment_path("../notebooks/API/version")
+    with open(fn) as f:
+        version = f.readlines()[0]
+        return version.strip()
 
 
 class ProxySession:

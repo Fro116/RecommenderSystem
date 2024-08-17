@@ -5,6 +5,7 @@ import re
 import pandas as pd
 
 from . import api_setup
+from .api_setup import get_api_version
 
 
 def make_session(proxies, concurrency):
@@ -52,9 +53,7 @@ ALTTITLE_REGEXES = {
     "anime": re.compile(
         '<p class="title-english title-inherit">' + MATCH_FIELD + "</p>"
     ),
-    "manga": re.compile(
-        '<span class="title-english">' + MATCH_FIELD + "</span>"
-    ),
+    "manga": re.compile('<span class="title-english">' + MATCH_FIELD + "</span>"),
 }
 
 SUMMARY_REGEXES = {
@@ -246,6 +245,7 @@ def process_media_details_response(response, uid, medium):
         )
     else:
         assert False
+    df["api_version"] = get_api_version()
     return df
 
 
@@ -295,6 +295,7 @@ def process_media_relations_response(response, uid, media):
                                 "source_media",
                                 "target_id",
                                 "target_media",
+                                "api_version",
                             ],
                         )
                         return relations
@@ -311,11 +312,14 @@ def process_media_relations_response(response, uid, media):
                                         media.upper(),
                                         target_id,
                                         target_media.upper(),
+                                        get_api_version(),
                                     )
                                 )
                                 last_href = None
                             else:
-                                assert False, f"unknown href {last_href} {href} for {media} {uid}"
+                                assert (
+                                    False
+                                ), f"unknown href {last_href} {href} for {media} {uid}"
                         else:
                             records.append(
                                 (
@@ -324,6 +328,7 @@ def process_media_relations_response(response, uid, media):
                                     media.upper(),
                                     target_id,
                                     target_media.upper(),
+                                    get_api_version(),
                                 )
                             )
     assert False, f"could not parse {media} relations for {uid}"
