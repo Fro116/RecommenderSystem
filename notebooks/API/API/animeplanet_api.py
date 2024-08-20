@@ -189,10 +189,7 @@ MEDIA_TITLE_REGEX = re.compile(
 MEDIA_ALTTITLE_REGEX = re.compile('<h2 class="aka">' + MATCH_FIELD + "</h2>")
 MEDIA_YEAR_REGEX = re.compile('<span class="iconYear"> ' + MATCH_FIELD + "</span>")
 MEDIA_SEASON_REGEX = re.compile("/seasons/" + MATCH_FIELD + '">')
-MEDIA_STUDIO_REGEXES = {
-    "anime": re.compile("/anime/studios/" + MATCH_FIELD + '">'),
-    "manga": re.compile("/manga/(magazines|publishers)/" + MATCH_FIELD + '">'),
-}
+MEDIA_STUDIO_REGEX = re.compile(">" + MATCH_FIELD + "</a>")
 MEDIA_TAG_REGEX = {
     x: re.compile(f'<a href="/{x}/tags/' + MATCH_LAZY + '"') for x in ["manga", "anime"]
 }
@@ -242,13 +239,25 @@ def get_media_season(text):
 
 
 def get_media_studios(text, medium):
-    matches = MEDIA_STUDIO_REGEXES[medium].findall(text)
-    if matches:
+    studios = []
+    for line in text.split("\n"):
+        match = None
+        if medium == "anime":
+            if line.startswith('<a href="/anime/studios/'):
+                match = line
         if medium == "manga":
-            matches = [x[1] for x in matches]
-        return sanitize_string(" ".join(matches))
-    else:
-        return ""
+            if line.startswith('<a href="/manga/magazines/'):
+                match = line
+                studios += MEDIA_STUDIO_REGEX.findall(line)
+            elif line.startswith('<a href="/manga/publishers/'):
+                match = line
+        if match is not None:
+            matches = MEDIA_STUDIO_REGEX.findall(match)
+            if matches:
+                studios += matches
+    if studios:
+        return studios
+    return ""
 
 
 def get_media_genres(text, medium):
