@@ -132,7 +132,7 @@ def get_user_media_list(session, userid, mediatype):
         .last()
         .reset_index()
     )
-    medialist["api_version"] = get_api_version()
+    media_list["api_version"] = get_api_version()
     media_list["username"] = f"{userid}"
     return media_list, True
 
