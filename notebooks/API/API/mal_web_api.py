@@ -80,6 +80,9 @@ PROGRESS_REGEXES = {
     "episodes": re.compile(
         '<span class="dark_text">Episodes:</span>' + MATCH_FIELD + "</div>"
     ),
+    "duration": re.compile(
+        '<span class="dark_text">Duration:</span>' + MATCH_FIELD + "</div>"
+    ),
     "chapters": re.compile('<span id="totalChaps".*?>' + MATCH_FIELD + "</span>"),
     "volumes": re.compile('<span id="totalVols".*?>' + MATCH_FIELD + "</span>"),
 }
@@ -153,15 +156,27 @@ def date(text, startdate, medium):
         return x[min(len(x) - 1, 1)]
 
 
-def episodes(text):
+def episodes(text, medium):
+    if medium != "anime":
+        return ""
     return unpack(PROGRESS_REGEXES["episodes"].findall(text)).strip()
 
 
-def chapters(text):
+def duration(text, medium):
+    if medium != "anime":
+        return ""
+    return unpack(PROGRESS_REGEXES["duration"].findall(text)).strip()
+
+
+def chapters(text, medium):
+    if medium != "manga":
+        return ""
     return unique(PROGRESS_REGEXES["chapters"].findall(text))
 
 
-def volumes(text):
+def volumes(text, medium):
+    if medium != "manga":
+        return ""
     return unique(PROGRESS_REGEXES["volumes"].findall(text))
 
 
@@ -170,7 +185,8 @@ def status(text, medium):
 
 
 def season(text, medium):
-    assert medium == "anime"
+    if medium != "anime":
+        return ""
     matches = SEASON_REGEXES[medium].findall(text)
     if not matches:
         return ""
@@ -209,42 +225,25 @@ def studios(text, medium):
 def process_media_details_response(response, uid, medium):
     raw_text = response.text
     text = raw_text.replace("\n", " ")
-    if medium == "anime":
-        df = pd.DataFrame.from_dict(
-            {
-                "uid": [str(uid)],
-                "title": [title(text, medium)],
-                "english_title": [english_title(text, medium)],
-                "summary": [summary(text, medium)],
-                "type": [media_type(text, medium)],
-                "status": [status(text, medium)],
-                "num_episodes": [episodes(text)],
-                "start_date": [start_date(text, medium)],
-                "end_date": [end_date(text, medium)],
-                "season": [season(text, medium)],
-                "genres": [genres(text, medium)],
-                "studios": [studios(text, medium)],
-            }
-        )
-    elif medium == "manga":
-        df = pd.DataFrame.from_dict(
-            {
-                "uid": [str(uid)],
-                "title": [title(text, medium)],
-                "english_title": [english_title(text, medium)],
-                "summary": [summary(text, medium)],
-                "type": [media_type(text, medium)],
-                "status": [status(text, medium)],
-                "num_chapters": [chapters(text)],
-                "num_volumes": [volumes(text)],
-                "start_date": [start_date(text, medium)],
-                "end_date": [end_date(text, medium)],
-                "genres": [genres(text, medium)],
-                "studios": [studios(text, medium)],
-            }
-        )
-    else:
-        assert False
+    df = pd.DataFrame.from_dict(
+        {
+            "uid": [str(uid)],
+            "title": [title(text, medium)],
+            "english_title": [english_title(text, medium)],
+            "summary": [summary(text, medium)],
+            "type": [media_type(text, medium)],
+            "status": [status(text, medium)],
+            "num_episodes": [episodes(text, medium)],
+            "duration": [duration(text, medium)],
+            "num_chapters": [chapters(text, medium)],
+            "num_volumes": [volumes(text, medium)],
+            "start_date": [start_date(text, medium)],
+            "end_date": [end_date(text, medium)],
+            "season": [season(text, medium)],
+            "genres": [genres(text, medium)],
+            "studios": [studios(text, medium)],
+        }
+    )
     df["api_version"] = get_api_version()
     return df
 

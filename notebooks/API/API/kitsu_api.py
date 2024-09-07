@@ -259,6 +259,7 @@ def get_media_facts(session, uid, medium):
                 getstr(j["attributes"], "startDate"),
                 getstr(j["attributes"], "endDate"),
                 getstr(j["attributes"], "episodeCount"),
+                getstr(j["attributes"], "episodeLength"),
                 getstr(j["attributes"], "chapterCount"),
                 getstr(j["attributes"], "volumeCount"),
                 str(
@@ -280,6 +281,7 @@ def get_media_facts(session, uid, medium):
             "startdate",
             "enddate",
             "episodes",
+            "duration",
             "chapters",
             "volumes",
             "genres",

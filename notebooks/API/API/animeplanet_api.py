@@ -188,6 +188,7 @@ MEDIA_TITLE_REGEX = re.compile(
 )
 MEDIA_ALTTITLE_REGEX = re.compile('<h2 class="aka">' + MATCH_FIELD + "</h2>")
 MEDIA_YEAR_REGEX = re.compile('<span class="iconYear"> ' + MATCH_FIELD + "</span>")
+MEDIA_TYPE_REGEX = re.compile('<span class="type">' + MATCH_FIELD + "</span>")
 MEDIA_SEASON_REGEX = re.compile("/seasons/" + MATCH_FIELD + '">')
 MEDIA_STUDIO_REGEX = re.compile(">" + MATCH_FIELD + "</a>")
 MEDIA_TAG_REGEX = {
@@ -224,6 +225,14 @@ def get_media_alttitle(text):
 
 def get_media_year(text):
     matches = MEDIA_YEAR_REGEX.findall(text)
+    if matches:
+        return html.unescape(unpack(matches))
+    else:
+        return ""
+
+
+def get_media_type(text):
+    matches = MEDIA_TYPE_REGEX.findall(text)
     if matches:
         return html.unescape(unpack(matches))
     else:
@@ -283,6 +292,7 @@ def get_media_facts(session, url, medium):
                 "title": [get_media_title(r.text)],
                 "alttitle": [get_media_alttitle(r.text)],
                 "year": [get_media_year(r.text)],
+                "type": [get_media_type(r.text)],
                 "season": [get_media_season(r.text)],
                 "studios": [get_media_studios(r.text, medium)],
                 "genres": [get_media_genres(r.text, medium)],

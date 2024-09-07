@@ -184,6 +184,7 @@ def process_media_facts_json(json):
                 sanitize_date(entry["endDate"]),
                 getstr(entry, "seasonYear") + " " + getstr(entry, "season"),
                 getstr(entry, "episodes"),
+                getstr(entry, "duration"),
                 getstr(entry, "chapters"),
                 getstr(entry, "volumes"),
                 str(
@@ -207,6 +208,7 @@ def process_media_facts_json(json):
             "enddate",
             "season",
             "episodes",
+            "duration",
             "chapters",
             "volumes",
             "studios",
@@ -276,6 +278,7 @@ def get_media_facts(session, uid, mediatype):
             seasonYear,
             season,
             episodes,
+            duration,
             chapters,
             volumes,
             studios {
