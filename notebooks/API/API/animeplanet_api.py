@@ -188,7 +188,14 @@ MEDIA_TITLE_REGEX = re.compile(
 )
 MEDIA_ALTTITLE_REGEX = re.compile('<h2 class="aka">' + MATCH_FIELD + "</h2>")
 MEDIA_YEAR_REGEX = re.compile('<span class="iconYear"> ' + MATCH_FIELD + "</span>")
-MEDIA_TYPE_REGEX = re.compile('<span class="type">' + MATCH_FIELD + "</span>")
+MEDIA_TYPE_REGEX = {
+    "anime": re.compile('<span class="type">' + MATCH_FIELD + "\n</span>"),
+    "manga": re.compile(
+        '<section class="pure-g entryBar">\n<div class="pure-1 md-1-5">\n'
+        + MATCH_FIELD
+        + "\n</div>"
+    ),
+}
 MEDIA_SEASON_REGEX = re.compile("/seasons/" + MATCH_FIELD + '">')
 MEDIA_STUDIO_REGEX = re.compile(">" + MATCH_FIELD + "</a>")
 MEDIA_TAG_REGEX = {
@@ -231,8 +238,8 @@ def get_media_year(text):
         return ""
 
 
-def get_media_type(text):
-    matches = MEDIA_TYPE_REGEX.findall(text)
+def get_media_type(text, medium):
+    matches = MEDIA_TYPE_REGEX[medium].findall(text)
     if matches:
         return html.unescape(unpack(matches))
     else:
@@ -292,7 +299,7 @@ def get_media_facts(session, url, medium):
                 "title": [get_media_title(r.text)],
                 "alttitle": [get_media_alttitle(r.text)],
                 "year": [get_media_year(r.text)],
-                "type": [get_media_type(r.text)],
+                "type": [get_media_type(r.text, medium)],
                 "season": [get_media_season(r.text)],
                 "studios": [get_media_studios(r.text, medium)],
                 "genres": [get_media_genres(r.text, medium)],
