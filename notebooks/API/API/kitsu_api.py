@@ -262,6 +262,7 @@ def get_media_facts(session, uid, medium):
                 getstr(j["attributes"], "episodeLength"),
                 getstr(j["attributes"], "chapterCount"),
                 getstr(j["attributes"], "volumeCount"),
+                getstr(j["attributes"], "status"),
                 str(
                     [
                         x["attributes"]["name"]
@@ -284,6 +285,7 @@ def get_media_facts(session, uid, medium):
             "duration",
             "chapters",
             "volumes",
+            "status",
             "genres",
             "api_version",
         ],

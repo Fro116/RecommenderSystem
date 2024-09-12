@@ -187,6 +187,7 @@ def process_media_facts_json(json):
                 getstr(entry, "duration"),
                 getstr(entry, "chapters"),
                 getstr(entry, "volumes"),
+                getstr(entry, "status"),
                 str(
                     [
                         x["node"]["name"]
@@ -211,6 +212,7 @@ def process_media_facts_json(json):
             "duration",
             "chapters",
             "volumes",
+            "status",
             "studios",
             "api_version",
         ],
@@ -281,6 +283,7 @@ def get_media_facts(session, uid, mediatype):
             duration,
             chapters,
             volumes,
+            status,
             studios {
                 edges {
                     node {
