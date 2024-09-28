@@ -1,8 +1,10 @@
 import datetime
+import json
 import logging
 import os
 import random
 import time
+import uuid
 from functools import cache
 
 import pandas as pd
@@ -44,7 +46,7 @@ def load_proxies(partition, num_partitions, country_codes=None):
     valid_ips = set()
     geofn = get_environment_path("proxies/geolocations.txt")
     if os.path.exists(geofn) and country_codes is not None:
-        with open(geofn, "r") as f:
+        with open(geofn) as f:
             for line in f:
                 ip, cc = line.strip().split(",")
                 if cc in country_codes:
@@ -53,7 +55,7 @@ def load_proxies(partition, num_partitions, country_codes=None):
     proxies = []
     proxyfn = get_environment_path("proxies/proxies.txt")
     if os.path.exists(proxyfn):
-        with open(proxyfn, "r") as f:
+        with open(proxyfn) as f:
             for line in f:
                 proxyurl, port, username, password = line.strip().split(":")
                 if valid_ips:
@@ -72,6 +74,16 @@ def load_proxies(partition, num_partitions, country_codes=None):
     return same_part + diff_part
 
 
+def load_scp_key():
+    fn = get_environment_path("scrapfly/key.txt")
+    if not os.path.exists(fn):
+        return None
+    with open(fn) as f:
+        lines = f.readlines()
+        assert len(lines) == 1
+        return lines[0].strip()
+
+
 @cache
 def get_api_version():
     fn = get_environment_path("../notebooks/API/version")
@@ -80,10 +92,27 @@ def get_api_version():
         return version.strip()
 
 
-class ProxySession:
-    def __init__(self, proxies, ratelimit_calls, ratelimit_period):
-        self.proxies = proxies
-        self.session = None
+class Response:
+    def __init__(self, text, status_code, headers):
+        self.status_code = status_code
+        self.text = text
+        self.headers = {k.lower(): v for (k, v) in headers.items()}
+
+    @property
+    def ok(self):
+        return self.status_code == 200
+
+    def json(self):
+        return json.loads(self.text)
+
+    def raise_for_status(self):
+        if not self.ok:
+            raise requests.exceptions.HTTPError
+        return self
+
+
+class RatelimitedSession:
+    def __init__(self, ratelimit_calls, ratelimit_period):
         self.ratelimit_calls = ratelimit_calls
         self.ratelimit_period = ratelimit_period
         try:
@@ -91,6 +120,29 @@ class ProxySession:
         except:
             pass
         self.request_times = []
+
+    def ratelimit(self):
+        t = time.time()
+        recent_calls = [x for x in self.request_times if t - x < self.ratelimit_period]
+        assert len(recent_calls) <= self.ratelimit_calls
+        if len(recent_calls) == self.ratelimit_calls:
+            time.sleep(recent_calls[0] + self.ratelimit_period - t)
+            recent_calls = recent_calls[1:]
+        recent_calls.append(time.time())
+        self.request_times = recent_calls
+
+    def multiply_ratelimit_period(self, mult):
+        self.ratelimit_period *= mult
+
+    def reset(self):
+        pass
+
+
+class ProxySession(RatelimitedSession):
+    def __init__(self, proxies, ratelimit_calls, ratelimit_period):
+        RatelimitedSession.__init__(self, ratelimit_calls, ratelimit_period)
+        self.proxies = proxies.copy()
+        self.session = None
         self.reset()
 
     def reset(self):
@@ -103,16 +155,6 @@ class ProxySession:
             self.session.close()
         self.session = session
 
-    def ratelimit(self):
-        t = time.time()
-        recent_calls = [x for x in self.request_times if t - x < self.ratelimit_period]
-        assert len(recent_calls) <= self.ratelimit_calls
-        if len(recent_calls) == self.ratelimit_calls:
-            time.sleep(recent_calls[0] + self.ratelimit_period - t)
-            recent_calls = recent_calls[1:]
-        recent_calls.append(time.time())
-        self.request_times = recent_calls
-
     def call(self, request_type, url, **kwargs):
         self.ratelimit()
         if request_type == "POST":
@@ -121,8 +163,37 @@ class ProxySession:
             call = self.session.get
         else:
             raise ValueError(f"Invalid request type {request_type}")
-        res = call(url, impersonate="chrome", timeout=5, **kwargs)
-        return res
+        r = call(url, impersonate="chrome", timeout=5, **kwargs)
+        return Response(r.text, r.status_code, r.headers)
+
+
+class ScrapflySession(RatelimitedSession):
+    def __init__(self, key, ratelimit_calls, ratelimit_period):
+        RatelimitedSession.__init__(self, ratelimit_calls, ratelimit_period)
+        self.key = key
+        self.reset()
+
+    def call(self, request_type, url, **kwargs):
+        assert request_type == "GET"
+        assert not kwargs
+        self.ratelimit()
+        r = requests.get(
+            url="https://api.scrapfly.io/scrape",
+            params={
+                "session": self.sessionid,
+                "key": self.key,
+                "proxy_pool": "public_datacenter_pool",
+                "url": url,
+                "country": "us",
+            },
+        )
+        if not r.ok:
+            return Response(r.text, r.status_code, r.headers)
+        data = r.json()["result"]
+        return Response(data["content"], data["status_code"], data["request_headers"])
+
+    def reset(self):
+        self.sessionid = str(uuid.uuid4())
 
 
 def call_api(
@@ -152,8 +223,8 @@ def call_api(
             return response
     except Exception as e:
         if response is not None:
-            if "Retry-After" in response.headers:
-                retry_timeout = int(response.headers["Retry-After"])
+            if "retry-after" in response.headers:
+                retry_timeout = int(response.headers["retry-after"])
             logging.warning(f"Error {response} received when handling {url}")
         logging.warning(
             f"Received error '{str(e)}' while accessing {url}. Retrying in {retry_timeout} seconds"

@@ -8,10 +8,20 @@ from . import api_setup
 from .api_setup import get_api_version, sanitize_string
 
 
-def make_session(proxies, concurrency):
-    return api_setup.ProxySession(
-        proxies, ratelimit_calls=concurrency, ratelimit_period=8 * concurrency
-    )
+def make_session(proxies, scp_key, concurrency):
+    period = 8
+    if scp_key is None:
+        return api_setup.ProxySession(
+            proxies,
+            ratelimit_calls=concurrency,
+            ratelimit_period=period * concurrency,
+        )
+    else:
+        return api_setup.ScrapflySession(
+            scp_key,
+            ratelimit_calls=concurrency,
+            ratelimit_period=period * concurrency,
+        )
 
 
 def quote_url(url):
@@ -58,6 +68,10 @@ def is_private_list(resp, username):
 
 def is_invalid_user(resp, username):
     return f"<title>Search Results for {username}" in resp.text
+
+
+def has_default_pagelimit(resp):
+    return '<option value="35" selected="selected">35</option>' in resp.text
 
 
 def get_title(x):
@@ -117,7 +131,7 @@ def get_feed_data(session, username, medium):
     feed_data = {}
     next_page = True
     page = 0
-    while next_page and page < 4:
+    while next_page and page < 1:
         page += 1
         url = (
             f"https://www.anime-planet.com/users/{username}"
@@ -145,7 +159,7 @@ def get_user_media_list(session, username, medium):
         page += 1
         url = (
             f"https://www.anime-planet.com/users/{username}"
-            + f"/{medium}?sort=user_updated&order=desc&per_page=560"
+            + f"/{medium}?sort=user_updated&order=desc"
             + f"&page={page}"
         )
         resp = call_api(session, url)
@@ -155,6 +169,11 @@ def get_user_media_list(session, username, medium):
             or is_invalid_user(resp, username)
         ):
             return pd.DataFrame(), False
+        if has_default_pagelimit(resp):
+            logging.info(f"Trying expanded pagelimit for {username} {medium}")
+            resp = call_api(session, url + "&per_page=560")
+            if not resp.ok:
+                return pd.DataFrame(), False
         prev_line = ""
         for line in resp.text.split("\n"):
             if '<h3 class="cardName">' in line:

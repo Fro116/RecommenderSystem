@@ -12,12 +12,14 @@ sys.path.append("..")
 from API import animeplanet_api, api_setup, mal_web_api
 
 PROXIES = api_setup.load_proxies(PROXY_NUMBER, NUM_PROXIES)
-
+SCP_KEY = api_setup.load_scp_key()
 if source == "mal":
     SESSION = mal_web_api.make_session(PROXIES, 1)
     get_username = lambda userid: mal_web_api.get_username(SESSION, userid)
 elif source == "animeplanet":
-    SESSION = animeplanet_api.make_session(PROXIES, 1)
+    SESSION = animeplanet_api.make_session(
+        proxies=PROXIES, scp_key=SCP_KEY, concurrency=1
+    )
     call_api = lambda url: animeplanet_api.call_api(SESSION, url)
 else:
     assert False
