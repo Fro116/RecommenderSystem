@@ -328,7 +328,7 @@ def get_media_facts(session, url, medium):
         ),
         pd.DataFrame.from_records(
             [
-                ("relation", url, medium, m, t, get_api_version())
+                ("relation", url, medium, t, m, get_api_version())
                 for (m, t) in MEDIA_RELATION_REGEX.findall(r.text)
             ],
             columns=[
