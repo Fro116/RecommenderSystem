@@ -123,6 +123,15 @@ STUDIO_REGEXES = {
     "title": re.compile('title="' + MATCH_FIELD + '"'),
 }
 
+SOURCE_REGEXES = {
+    "anime": re.compile(
+        '<span class="dark_text">Source:</span>' + MATCH_FIELD + "</div>"
+    ),
+    "manga": re.compile(
+        '<span class="dark_text">Source:</span>' + MATCH_FIELD + "</div>"
+    ),
+    "anchortext": re.compile(">" + MATCH_FIELD + "</a>"),
+}
 
 def title(text, medium):
     x = unpack(TITLE_REGEXES[medium].findall(text))
@@ -222,6 +231,16 @@ def studios(text, medium):
     return STUDIO_REGEXES["title"].findall(x)
 
 
+def source(text, medium):
+    x = maybe_unpack(SOURCE_REGEXES[medium].findall(text)).strip()
+    if x == "":
+        return x
+    href = maybe_unpack(SOURCE_REGEXES["anchortext"].findall(x))
+    if href != "":
+        return href.strip()
+    return x
+
+
 def process_media_details_response(response, uid, medium):
     raw_text = response.text
     text = raw_text.replace("\n", " ")
@@ -242,6 +261,7 @@ def process_media_details_response(response, uid, medium):
             "season": [season(text, medium)],
             "genres": [genres(text, medium)],
             "studios": [studios(text, medium)],
+            "source": [source(text, medium)],
         }
     )
     df["api_version"] = get_api_version()

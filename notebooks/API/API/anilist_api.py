@@ -194,6 +194,7 @@ def process_media_facts_json(json):
                         for x in entry.get("studios", {}).get("edges", [])
                     ]
                 ),
+                getstr(entry, "source"),
                 get_api_version(),
             )
         ],
@@ -214,6 +215,7 @@ def process_media_facts_json(json):
             "volumes",
             "status",
             "studios",
+            "source",
             "api_version",
         ],
     )
@@ -283,7 +285,7 @@ def get_media_facts(session, uid, mediatype):
             duration,
             chapters,
             volumes,
-            status,
+            status(version: 2),
             studios {
                 edges {
                     node {
@@ -292,6 +294,7 @@ def get_media_facts(session, uid, mediatype):
                 }
             }
             type,
+            source(version: 3),            
             relations {
                 edges {
                     node {
@@ -300,7 +303,7 @@ def get_media_facts(session, uid, mediatype):
                     }
                     relationType
                 }
-            }            
+            }
         }       
     }"""
     variables = {"id": str(uid), "MEDIA": mediatype.upper()}
