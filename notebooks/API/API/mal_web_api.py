@@ -1,6 +1,7 @@
 import html
 import logging
 import re
+import time
 
 import pandas as pd
 
@@ -377,6 +378,10 @@ def get_username(session, userid):
         if not response.ok:
             logging.warning(f"Error {response} received when handling {url}")
             return ""
+        if not response.text.strip():
+            timeout = 60 * 10
+            logging.warning(f"Received empty {response} for {url}. Sleeping for {timeout} seconds")
+            time.sleep(timeout)
         urls = re.findall('''/profile/[^"/%]+"''', response.text)
         users = [x[len("/profile/") : -len('"')] for x in urls]
         return html.unescape(users[0])
