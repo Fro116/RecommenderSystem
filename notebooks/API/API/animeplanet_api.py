@@ -42,18 +42,17 @@ def call_api(session, url):
 
 MATCH_FIELD = """([^<>]+)"""
 MATCH_LAZY = """([^<>]+?)"""
-TITLE_REGEX = re.compile('<h3 class="cardName">' + MATCH_FIELD + "</h3>")
+TITLE_REGEX = re.compile("<h3 class='cardName' >" + MATCH_FIELD + "</h3>")
 TITLE_URL_REGEXES = {
     x: re.compile(f'href="/{x}/' + MATCH_LAZY + '"') for x in ["manga", "anime"]
 }
-SCORE_REGEX = re.compile('<div class="ttRating">' + MATCH_FIELD + "</div>")
-STATUS_REGEX = re.compile('<span class="status' + MATCH_FIELD + '">')
+SCORE_REGEX = re.compile("<div class='ttRating'>" + MATCH_FIELD + "</div>")
+STATUS_REGEX = re.compile("<span class='status" + MATCH_FIELD + "'>")
 PROGRESS_REGEXES = {
     x: re.compile("</span> " + MATCH_FIELD + f" {y}</div>")
     for (x, y) in zip(["manga", "anime"], ["chs", "eps"])
 }
-PAGE_REGEX = re.compile('page=([0-9]*)">')
-FEED_TITLE_REGEX = re.compile('">' + MATCH_FIELD + "</h5>")
+PAGE_REGEX = re.compile("&amp;page=([0-9]*)'>")
 FEED_TIMESTAMP_REGEX = re.compile('data-timestamp="' + MATCH_FIELD + '">')
 
 
@@ -119,8 +118,8 @@ def get_feed_entries(resp):
     return [x for x in resp.text.split("\n") if "data-timestamp" in x]
 
 
-def get_feed_title(x):
-    return unpack(FEED_TITLE_REGEX.findall(x))
+def get_feed_title_url(x, medium):
+    return unpack(list(set(TITLE_URL_REGEXES[medium].findall(x))))
 
 
 def get_feed_timestamp(x):
@@ -145,7 +144,7 @@ def get_feed_data(session, username, medium):
         if data:
             next_page = True
             for x in data:
-                key = get_feed_title(x)
+                key = get_feed_title_url(x, medium)
                 if key not in feed_data:
                     feed_data[key] = get_feed_timestamp(x)
     return feed_data, True
@@ -176,7 +175,7 @@ def get_user_media_list(session, username, medium):
                 return pd.DataFrame(), False
         prev_line = ""
         for line in resp.text.split("\n"):
-            if '<h3 class="cardName">' in line:
+            if "<h3 class='cardName' >" in line:
                 records.append(parse_entry(line, prev_line, medium))
             prev_line = line
         if str(page + 1) not in get_page_numbers(resp):
@@ -193,7 +192,7 @@ def get_user_media_list(session, username, medium):
         feed_data = {}
     df["updated_at"] = 0
     for i in range(len(df)):
-        df.loc[i, "updated_at"] = int(feed_data.get(df.loc[i, "title"], 0))
+        df.loc[i, "updated_at"] = int(feed_data.get(df.loc[i, "url"], 0))
     df["item_order"] = list(range(len(df)))
     df["api_version"] = get_api_version()
     df["username"] = username

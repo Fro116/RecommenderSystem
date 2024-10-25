@@ -110,6 +110,9 @@ class Response:
             raise requests.exceptions.HTTPError
         return self
 
+    def __repr__(self):
+        return f"Response{(self.status_code, len(self.text))}"
+
 
 class RatelimitedSession:
     def __init__(self, ratelimit_calls, ratelimit_period):
