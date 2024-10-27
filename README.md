@@ -1,5 +1,5 @@
 # RecommenderSystem
-This is an anime and manga recommender system based off of MyAnimeList, AniList, Kitsu, and Anime-Planet user ratings. This codebase has been used to train a model on over 1.4 billion user-item interactions. See the notebook in `notebooks/README.ipynb` for usage instructions.
+This is an anime and manga recommender system based off of MyAnimeList, AniList, Kitsu, and Anime-Planet user ratings. This codebase has been used to train a model on over 1.5 billion user-item interactions. See the notebook in `notebooks/README.ipynb` for usage instructions.
 
 Details on the recommender system can be found by inspecting the source code at `notebooks/TrainingAlphas`. At a high level, there are four main steps:
 1. Pretraining a transformer model and a bag-of-items model on watch histories
@@ -11,8 +11,4 @@ Details on the recommender system can be found by inspecting the source code at 
 3. Using a ranking model to combine these metrics into a relevance score
 4. Reranking the outputs to generate a list of recommendations
 
-See [BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding](https://arxiv.org/pdf/1810.04805.pdf), [Deep Neural Networks for YouTube Recommendations](https://static.googleusercontent.com/media/research.google.com/en//pubs/archive/45530.pdf), [Position-Aware ListMLE: A Sequential Learning Process for Ranking](https://auai.org/uai2014/proceedings/individuals/164.pdf), and [Deep Learning for Recommender Systems: A Netflix Case Study](https://ojs.aaai.org/index.php/aimagazine/article/view/18140) for relevant prior work.
-
-Once the system has been trained, run `notebooks/Recommendations/start_servers.py` to setup a local web app that you can connect to at localhost:5000. This will fetch the latest anime and manga lists for a given user, perform model inference, and display recommendations.
-
-At some point I'll figure out web hosting works and spin up a public website, but until then the local app will have to do.
+See [Deep Neural Networks for YouTube Recommendations](https://static.googleusercontent.com/media/research.google.com/en//pubs/archive/45530.pdf), [BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding](https://arxiv.org/pdf/1810.04805.pdf), [Position-Aware ListMLE: A Sequential Learning Process for Ranking](https://auai.org/uai2014/proceedings/individuals/164.pdf), and [Deep Learning for Recommender Systems: A Netflix Case Study](https://ojs.aaai.org/index.php/aimagazine/article/view/18140) for relevant prior work.

@@ -11,10 +11,10 @@ import Memoize: @memoize
     itemid::Vector{Int32}
     status::Vector{Int32}
     rating::Vector{Float32}
-    updated_at::Vector{Float32}
-    created_at::Vector{Float32}
-    started_at::Vector{Float32}
-    finished_at::Vector{Float32}
+    updated_at::Vector{Float64}
+    created_at::Vector{Float64}
+    started_at::Vector{Float64}
+    finished_at::Vector{Float64}
     update_order::Vector{Int32}
     progress::Vector{Float32}
     progress_volumes::Vector{Float32}
@@ -117,23 +117,22 @@ const MIN_TS =
     parse(Float64, first(read_csv(get_data_path("processed_data/timestamps.csv")).min_ts))
 const MAX_TS =
     parse(Float64, first(read_csv(get_data_path("processed_data/timestamps.csv")).max_ts))
-const MAX_VALID_TS = Dates.datetime2unix(Dates.now())
 
-function parse_timestamp(x::Number)::Float32
-    if x < MIN_TS || x > MAX_VALID_TS
+function parse_timestamp(x::Number, max_valid_ts::Number)::Float64
+    if x < MIN_TS || x > max_valid_ts
         return 0
     end
     convert(Float32, (x - MIN_TS) / (MAX_TS - MIN_TS))
 end
 
-function parse_timestamp(x::String)::Float32
+function parse_timestamp(x::String, max_valid_ts::Number)::Float64
     if isempty(x)
         return 0
     end
-    parse_timestamp(parse(Float64, x))
+    parse_timestamp(parse(Float64, x), max_valid_ts)
 end
 
-@memoize function parse_date(x)::Float32
+@memoize function parse_date(x, max_valid_ts)::Float32
     fields = split(x, "-")
     if length(fields) != 3
         return 0
@@ -143,7 +142,7 @@ end
     day = parse_int(fields[3], 1)
     try
         dt = Dates.DateTime(year, month, day)
-        return parse_timestamp(Dates.datetime2unix(dt))
+        return parse_timestamp(Dates.datetime2unix(dt), max_valid_ts)
     catch e
         return 0
     end
@@ -171,7 +170,7 @@ function parse_sentiment(x::String)::Int32
     isempty(x) ? 0 : 1
 end
 
-function import_mal(medium, userid_map, df)
+function import_mal(medium, userid_map, max_valid_ts, df)
     @memoize function process_status(status)
         mal_status_map = Dict(
             "completed" => "completed",
@@ -190,6 +189,9 @@ function import_mal(medium, userid_map, df)
         repeat_map = Dict("True" => "rewatching", "False" => "none")
         STATUS_MAP[repeat_map[x]]
     end
+
+    parse_timestamp(x) = Main.parse_timestamp(x, max_valid_ts)
+    parse_date(x) = Main.parse_date(x, max_valid_ts)
 
     s = "mal"
     RatingsDataset(
@@ -212,7 +214,7 @@ function import_mal(medium, userid_map, df)
     )
 end
 
-function import_anilist(medium, userid_map, df)
+function import_anilist(medium, userid_map, max_valid_ts, df)
     @memoize function process_status(status)
         anilist_status_map = Dict(
             "REPEATING" => "rewatching",
@@ -224,6 +226,9 @@ function import_anilist(medium, userid_map, df)
         )
         STATUS_MAP[anilist_status_map[status]]
     end
+
+    parse_timestamp(x) = Main.parse_timestamp(x, max_valid_ts)
+    parse_date(x) = Main.parse_date(x, max_valid_ts)
 
     s = "anilist"
     RatingsDataset(
@@ -246,7 +251,7 @@ function import_anilist(medium, userid_map, df)
     )
 end
 
-function import_kitsu(medium, userid_map, df)
+function import_kitsu(medium, userid_map, max_valid_ts, df)
     @memoize function process_status(status)
         kitsu_status_map = Dict(
             "completed" => "completed",
@@ -262,6 +267,9 @@ function import_kitsu(medium, userid_map, df)
         repeat_map = Dict("True" => "rewatching", "False" => "none")
         STATUS_MAP[repeat_map[x]]
     end
+
+    parse_timestamp(x) = Main.parse_timestamp(x, max_valid_ts)
+    parse_date(x) = Main.parse_date(x, max_valid_ts)
 
     s = "kitsu"
     RatingsDataset(
@@ -284,7 +292,7 @@ function import_kitsu(medium, userid_map, df)
     )
 end
 
-function import_animeplanet(medium, userid_map, df)
+function import_animeplanet(medium, userid_map, max_valid_ts, df)
     @memoize function process_status(status)
         animeplanet_status_map = Dict(
             "1" => "completed",
@@ -296,6 +304,9 @@ function import_animeplanet(medium, userid_map, df)
         )
         STATUS_MAP[animeplanet_status_map[status]]
     end
+
+    parse_timestamp(x) = Main.parse_timestamp(x, max_valid_ts)
+    parse_date(x) = Main.parse_date(x, max_valid_ts)
 
     s = "animeplanet"
     RatingsDataset(
@@ -318,14 +329,14 @@ function import_animeplanet(medium, userid_map, df)
     )
 end
 
-function import_list(medium, source, userid_map, df)::RatingsDataset
+function import_list(medium, source, userid_map, max_valid_ts, df)::RatingsDataset
     source_map = Dict(
         "mal" => import_mal,
         "anilist" => import_anilist,
         "kitsu" => import_kitsu,
         "animeplanet" => import_animeplanet,
     )
-    df = source_map[source](medium, userid_map, df)
+    df = source_map[source](medium, userid_map, max_valid_ts, df)
 
     # drop invalid users and items
     df = subset(df, (df.itemid .!= 0) .&& (df.userid .!= 0))
@@ -334,6 +345,6 @@ function import_list(medium, source, userid_map, df)::RatingsDataset
     dups = collect(zip(df.userid, df.itemid))
     df = subset(df, BitVector([dups[1:end-1] .!= dups[2:end]; true]))
     # sort by update time
-    df = subset(df, sortperm(collect(zip(df.userid, df.updated_at, df.update_order))))    
+    df = subset(df, sortperm(collect(zip(df.userid, df.updated_at, df.update_order))))
     df
 end
