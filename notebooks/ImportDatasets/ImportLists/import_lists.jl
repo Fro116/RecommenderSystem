@@ -34,12 +34,7 @@ function cat(x::RatingsDataset, y::RatingsDataset)
 end
 
 function get_data_path(file)
-    path = pwd()
-    while basename(path) != "notebooks"
-        path = dirname(path)
-    end
-    path = dirname(path)
-    joinpath(path, "data", file)
+    joinpath(@__DIR__, "../../../data/$file");
 end
 
 function read_csv(x; kw...)
