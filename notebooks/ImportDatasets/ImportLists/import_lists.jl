@@ -109,9 +109,9 @@ const PROGRESS_MAP = get_progress_map(Dict("anime" => "episodes", "manga" => "ch
 const PROGRESS_VOLUMES_MAP =
     get_progress_map(Dict("anime" => nothing, "manga" => "volumes"))
 const MIN_TS =
-    parse(Float64, first(read_csv(get_data_path("processed_data/timestamps.csv")).min_ts))
+    parse(Float64, first(read_csv(get_data_path("processed_data/training.timestamps.csv")).min_ts))
 const MAX_TS =
-    parse(Float64, first(read_csv(get_data_path("processed_data/timestamps.csv")).max_ts))
+    parse(Float64, first(read_csv(get_data_path("processed_data/training.timestamps.csv")).max_ts))
 
 function parse_timestamp(x::Number, max_valid_ts::Number)::Float64
     if x < MIN_TS || x > max_valid_ts
