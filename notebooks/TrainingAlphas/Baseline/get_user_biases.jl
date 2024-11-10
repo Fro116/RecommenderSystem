@@ -1,3 +1,5 @@
+import NNlib: sigmoid
+
 function get_user_biases(df, params)
     get_user_biases(df, params["λ"], params["a"], params["a_counts"])
 end;

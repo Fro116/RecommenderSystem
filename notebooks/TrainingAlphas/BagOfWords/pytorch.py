@@ -1,32 +1,30 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# prevent multithreading deadlocks
-import os
-
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["OMP_NUM_THREADS"] = "1"
-
 import argparse
-import glob
+import itertools
 import json
 import logging
-import math
-import random
-import shutil
-import time
+import os
+import warnings
 
 import h5py
-import hdf5plugin
 import numpy as np
 import scipy
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
 exec(open("./bagofwords.py").read())
+
+
+def get_data_path(file):
+    path = os.getcwd()
+    while os.path.basename(path) != "notebooks":
+        path = os.path.dirname(path)
+    path = os.path.dirname(path)
+    return os.path.join(path, "data", file)
 
 
 def get_logger(outdir):
@@ -49,50 +47,28 @@ def get_logger(outdir):
 
 
 class BagOfWordsDataset(Dataset):
-    def __init__(self, file, basename, shuffle):
-        self.filename = file
-        f = h5py.File(os.path.join(self.filename, basename), "r")
-        self.length = np.array(f[f"epoch_size"]).item()
-        self.shuffle = shuffle
-        f.close()
-
-    def load(self, basename):
-        f = h5py.File(os.path.join(self.filename, basename), "r")
-        self.inputs = self.process_sparse_matrix(f, "inputs")
-        self.labels = self.process_sparse_matrix(f, "labels")
-        self.weights = self.process_sparse_matrix(f, "weights")
-        self.users = f["users"][:]
-        valid_users = set(f["valid_users"][:])
-        valid_indices = []
-        for i in range(len(self.users)):
-            if self.users[i] in valid_users:
-                valid_indices.append(i)
-        self.valid_indices = valid_indices
-        self.index = len(self.valid_indices)
-        f.close()
-
-    def process_sparse_matrix(self, f, name):
-        i = f[f"{name}_i"][:] - 1
-        j = f[f"{name}_j"][:] - 1
-        v = f[f"{name}_v"][:]
-        m, n = f[f"{name}_size"][:]
-        return scipy.sparse.coo_matrix((v, (j, i)), shape=(n, m)).tocsr()
+    def __init__(self, fn):
+        def load_sparse_matrix(f, name):
+            i = f[f"{name}_i"][:] - 1
+            j = f[f"{name}_j"][:] - 1
+            v = f[f"{name}_v"][:]
+            m, n = f[f"{name}_size"][:]
+            return scipy.sparse.coo_matrix((v, (j, i)), shape=(n, m)).tocsr()
+            
+        with h5py.File(fn, "r") as f:
+            self.users = f["users"][:]
+            self.inputs = load_sparse_matrix(f, "inputs")
+            self.labels = load_sparse_matrix(f, "labels")
+            self.weights = load_sparse_matrix(f, "weights")
 
     def __len__(self):
-        return self.length
+        return len(self.users)
 
-    def __getitem__(self, _):
-        if self.index >= len(self.valid_indices):
-            self.index = 0
-            if self.shuffle:
-                random.shuffle(self.valid_indices)
-        i = self.valid_indices[self.index]
-        self.index += 1
+    def __getitem__(self, i):
         X = self.inputs[i, :]
         Y = self.labels[i, :]
         W = self.weights[i, :]
-        user = self.users[i]
-        return X, Y, W, user
+        return X, Y, W, self.users[i]
 
 
 def to_sparse_tensor(csr):
@@ -107,38 +83,29 @@ def to_device(data, device):
     return [to_sparse_tensor(x).to(device).to_dense() for x in data[:-1]]
 
 
-def sparse_collate(X):
-    return [scipy.sparse.vstack([x[i] for x in X]) for i in range(len(X[0]))]
+def collate(data):
+    X = scipy.sparse.vstack([x[0] for x in data])
+    Y = scipy.sparse.vstack([x[1] for x in data])
+    W = scipy.sparse.vstack([x[2] for x in data])
+    users = [x[3] for x in data]
+    return [X, Y, W, users]
 
 
-def dataloader_init_fn(worker_id):
-    worker_info = torch.utils.data.get_worker_info()
-    worker_info.dataset.load(f"data.{worker_info.id+1}.h5")
-
-
-def get_dataloader(
-    outdir,
-    split,
-    batch_size,
-    num_workers,
-    shuffle,
-):
-    dataset = BagOfWordsDataset(os.path.join(outdir, split), "data.1.h5", shuffle)
+def get_dataloader(file, batch_size, shuffle):
+    dataset = BagOfWordsDataset(file)
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
-        num_workers=num_workers,
-        shuffle=False,
+        num_workers=4,
+        shuffle=shuffle,
         drop_last=False,
         persistent_workers=True,
         pin_memory=True,
-        collate_fn=sparse_collate,
-        worker_init_fn=dataloader_init_fn,
+        collate_fn=collate,
     )
     return dataloader
 
 
-# Training
 def create_optimizer(model, config):
     decay_parameters = []
     no_decay_parameters = []
@@ -152,7 +119,7 @@ def create_optimizer(model, config):
             {"params": decay_parameters, "weight_decay": config["weight_decay"]},
             {"params": no_decay_parameters, "weight_decay": 0.0},
         ],
-        lr=config["peak_learning_rate"],
+        lr=config["learning_rate"],
         betas=(0.9, 0.999),
     )
 
@@ -179,216 +146,201 @@ class EarlyStopper:
             self.save_model = True
 
 
-def train_epoch(outdir, model, dataloader, config, optimizer, scaler, device):
+def train_epoch(model, dataloader, mask, optimizer, scaler):
     training_loss = 0.0
-    training_weights = 0
+    weights = 0
+    device = get_device()
     progress = tqdm(desc="Training batches", total=len(dataloader), mininterval=1)
     for data in dataloader:
         optimizer.zero_grad(set_to_none=True)
-        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-            dev_data = to_device(data, device)
-            loss = model(
+        dev_data = to_device(data, device)
+        with torch.amp.autocast(device, dtype=torch.bfloat16):
+            loss, wsum = model(
                 *dev_data,
-                mask=config["mask"],
-                evaluate=False,
-                inference=False,
+                mask=mask,
+                mode="training",
             )
-            training_weights += 1
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
         training_loss += float(loss)
+        weights += float(wsum)
         progress.update()
     progress.close()
-    return training_loss / training_weights
+    return training_loss / weights
 
 
 def minimize_quadratic(x, y):
-    c = y[1]
-    a = ((y[0] - y[1]) + (y[2] - y[1])) / 2
-    b = ((y[0] - y[1]) - (y[2] - y[1])) / 2
-    miny = c - (b * b) / (4 * a)
-    minx = -b / (2 * a)
-    return (miny, minx)
+    assert len(x) == 3 and len(y) == 3
+    A = np.array([[x[0] ** 2, x[0], 1], [x[1] ** 2, x[1], 1], [x[2] ** 2, x[2], 1]])
+    B = np.array(y)
+    a, b, c = np.linalg.solve(A, B)
+    x_extremum = -b / (2 * a)
+    y_extremum = a * x_extremum**2 + b * x_extremum + c
+    return x_extremum, y_extremum
 
 
-def evaluate_metrics(outdir, model, dataloader, config, device):
-    losses = [0.0, 0.0, 0.0] if config["metric"] == "rating" else 0.0
+def evaluate_metrics(model, dataloader, mask):
+    losses = [0.0, 0.0, 0.0] if model.metric == "rating" else 0.0
     weights = 0.0
+    device = get_device()
     progress = tqdm(desc="Test batches", total=len(dataloader), mininterval=1)
     model.eval()
     for data in dataloader:
         with torch.no_grad():
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                users = data[-1]
-                dev_data = to_device(data, device)
-                loss = model(*dev_data, mask=False, evaluate=True, predict=False)
-                if config["metric"] == "rating":
-                    for i in range(len(losses)):
-                        losses[i] += float(loss[i])
-                else:
-                    losses += float(loss)
-                weights += float(dev_data[-1].sum())
+            dev_data = to_device(data, device)
+            with torch.amp.autocast(device, dtype=torch.bfloat16):
+                loss, wsum = model(*dev_data, mask=mask, mode="evaluation")
+            if model.metric == "rating":
+                for i in range(len(losses)):
+                    losses[i] += float(loss[i])
+            else:
+                losses += float(loss)
+            weights += float(wsum)
         progress.update()
     progress.close()
     model.train()
-    if config["metric"] == "rating":
-        miny, minx = minimize_quadratic([1, 0, -1], losses)
-        return (miny / weights, minx)
+    if model.metric == "rating":
+        _, miny = minimize_quadratic([1, 0, -1], losses)
+        return miny / weights
     else:
-        return (losses / weights,)
+        return losses / weights
 
 
 def save_model(model, outdir):
-    checkpoint = os.path.join(outdir, "model.pt")
-    torch.save(model.state_dict(), checkpoint + "~")
-    os.rename(checkpoint + "~", checkpoint)
+    fn = os.path.join(outdir, "model.pt")
+    temp = fn + "~"
+    torch.save(model._orig_mod.state_dict(), temp)
+    os.rename(temp, fn)
+    return fn
 
 
-def create_model(config, outdir, device):
-    model = BagOfWordsModel(config)
-    model.load_state_dict(load_model(outdir))
-    model = model.to(device)
+def create_model(config, init):
+    model = BagOfWordsModel(
+        config["input_sizes"],
+        config["output_index"],
+        config["metric"],
+    )
+    if init is not None:
+        model.load_state_dict(torch.load(init, weights_only=True))
+    model = model.to(get_device())
     model = torch.compile(model)
     return model
 
 
-def get_batch_size(batch_size, epoch_size, num_workers):
-    worker_size = int(
-        round(epoch_size / num_workers / 3)
-    )  # ensure that each worker gets sampled
-    return max(min(batch_size, worker_size), 1)
-
-
-def train(config, outdir, logger, training, test):
-    logger.info(f"Training on {training} data. Early stopping on {test} data")
+def train(config, init, outdir):
+    logger = get_logger(outdir)
+    logger.info(f"Training model {config}")
+    model = create_model(config, init)
     dataloaders = {
         x: get_dataloader(
-            outdir,
-            y,
-            get_batch_size(
-                config["batch_size"],
-                config[f"epoch_size_{y}"],
-                config["num_data_shards"],
-            ),
-            num_workers=config["num_data_shards"],
-            shuffle=x == "training",
+            f"{outdir}/{x}.h5",
+            config["batch_size"],
+            shuffle=x == "train",
         )
-        for (x, y) in zip(["training", "validation"], [training, test])
+        for x in ["train", "test"]
     }
-
-    logger.info(f"Initializing model")
-    device = get_device()
-    model = create_model(config, outdir, device)
-
     starting_epoch = 0
     optimizer = create_optimizer(model, config)
-    scaler = torch.cuda.amp.GradScaler()
-    stopper = EarlyStopper(patience=5, rtol=0)
-    initial_loss = evaluate_metrics(
-        outdir, model, dataloaders["validation"], config, device
-    )
+    scaler = torch.amp.GradScaler(get_device())
+    stopper = EarlyStopper(patience=5, rtol=1e-4)
+    get_loss = lambda x: evaluate_metrics(x, dataloaders["test"], config["mask_rate"])
+    initial_loss = get_loss(model)
     logger.info(f"Initial Loss: {initial_loss}")
-    stopper(initial_loss[0])
+    stopper(initial_loss)
+    save_model(model, outdir)
 
     for epoch in range(starting_epoch, 100):
         training_loss = train_epoch(
-            outdir,
             model,
-            dataloaders["training"],
-            config,
+            dataloaders["train"],
+            config["mask_rate"],
             optimizer,
             scaler,
-            device,
         )
         logger.info(f"Epoch: {epoch}, Training Loss: {training_loss}")
-        validation_loss = evaluate_metrics(
-            outdir, model, dataloaders["validation"], config, device
-        )
-        logger.info(f"Epoch: {epoch}, Validation Loss: {validation_loss}")
-        stopper(validation_loss[0])
+        test_loss = get_loss(model)
+        logger.info(f"Epoch: {epoch}, Test Loss: {test_loss}")
+        stopper(test_loss)
         if stopper.save_model:
             save_model(model, outdir)
         if stopper.early_stop:
             break
 
 
-def record_predictions(model, outdir, dataloader):
-    user_batches = []
-    embed_batches = []
+def predict(config, init, file):
+    model = create_model(config, init)
     model.eval()
-    device = get_device()
+    dataloader = get_dataloader(
+        file,
+        config["batch_size"],
+        shuffle=False,
+    )
 
+    user_batches = []
+    output_batches = []
+    device = get_device()
     found_users = set()
     while len(found_users) < len(dataloader.dataset):
         # so we don't miss any users from having num_dataloader_workers > 1
-        progress = tqdm(desc="Inference batches", total=len(dataloader), mininterval=1)
+        progress = tqdm(desc=f"Batches", total=len(dataloader), mininterval=1)
         for data in dataloader:
             with torch.no_grad():
-                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                dev_data = to_device(data, device)
+                with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                     x = (
                         model(
-                            *to_device(data, device),
+                            *dev_data,
                             mask=False,
-                            evaluate=False,
-                            inference=True,
+                            mode="inference",
                         )
                         .to("cpu")
                         .to(torch.float32)
                         .numpy()
                     )
-                    users = data[-1].todense()
-                    found_users |= set(np.asarray(users).flatten())
-                    user_batches.append(users)
-                    embed_batches.append(x)
-                    progress.update(1)
+                users = data[-1]
+                found_users |= set(users)
+                user_batches.append(users)
+                output_batches.append(x)
+                progress.update(1)
         progress.close()
-    model.train()
 
-    f = h5py.File(os.path.join(outdir, "predictions.h5"), "w")
-    f.create_dataset("users", data=np.vstack(user_batches))
-    f.create_dataset("predictions", data=np.vstack(embed_batches))
-    f.close()
+    with h5py.File(f"{file}.out", "w") as f:
+        f.create_dataset("users", data=list(itertools.chain(*user_batches)))
+        f.create_dataset("predictions", data=np.vstack(output_batches))
 
 
-def run_process(name, mode):
-    outdir = get_data_path(os.path.join("alphas", name))
-    logger = get_logger(outdir)
-    config_file = os.path.join(outdir, "config.json")
-    config = create_training_config(config_file, mode)
+def create_training_config(config_file, init):
+    config = json.load(open(config_file, "r"))
+    return {
+        # model
+        "input_sizes": config["input_sizes"],
+        "output_index": config["output_index"] - 1,
+        "metric": config["metric"],
+        # training
+        "learning_rate": 4e-5 if init is None else 4e-6,
+        "weight_decay": 1e-2,
+        "mask_rate": 0.25,
+        "batch_size": 2048,
+    }
+
+
+def run_process(outdir, init, predict_file):
     torch.set_float32_matmul_precision("high")
-    if mode == "pretrain":
-        save_model(BagOfWordsModel(config), outdir)
-        train(config, outdir, logger, "pretrain", "test")
-    elif mode == "finetune":
-        train(config, outdir, logger, "finetune", "test")
-    elif mode == "inference":
-        model = create_model(config, outdir, get_device())
-        dataloader = get_dataloader(
-            outdir,
-            "inference",
-            get_batch_size(
-                config["batch_size"],
-                config["epoch_size_test"],
-                config["num_data_shards"],
-            ),
-            num_workers=config["num_data_shards"],
-            shuffle=False,
-        )
-        record_predictions(model, outdir, dataloader)
+    warnings.filterwarnings("ignore", ".*Sparse CSR tensor support is in beta state.*")
+    config_file = os.path.join(outdir, "config.json")
+    config = create_training_config(config_file, init)
+    if predict_file is not None:
+        predict(config, init, predict_file)
     else:
-        assert False
+        train(config, init, outdir)
 
 
 # Main
-parser = argparse.ArgumentParser(description="Pytorch")
+parser = argparse.ArgumentParser(description="Train BagOfWords models")
 parser.add_argument("--outdir", type=str, help="name of the data directory")
-parser.add_argument(
-    "--mode",
-    type=str,
-    choices=["pretrain", "finetune", "inference"],
-    help="training strategy",
-)
+parser.add_argument("--init", type=str, help="path of pretrained model")
+parser.add_argument("--predict", type=str, help="file to perform inference on")
 args = parser.parse_args()
 if __name__ == "__main__":
-    run_process(args.outdir, args.mode)
+    run_process(args.outdir, args.init, args.predict)
