@@ -150,7 +150,7 @@ def get_feed_data(session, username, medium):
     return feed_data, True
 
 
-def get_user_media_list(session, username, medium):
+def get_user_media_data(session, username, medium):
     page = 0
     next_page = True
     records = []
@@ -168,9 +168,8 @@ def get_user_media_list(session, username, medium):
             or is_invalid_user(resp, username)
         ):
             return pd.DataFrame(), False
-        if has_default_pagelimit(resp):
-            logging.info(f"Trying expanded pagelimit for {username} {medium}")
-            resp = call_api(session, url + "&per_page=560")
+        if has_default_pagelimit(resp) and str(page + 1) in get_page_numbers(resp):
+            resp = call_api(session, url.split("?")[0] + "?per_page=560")
             if not resp.ok:
                 return pd.DataFrame(), False
         prev_line = ""
@@ -184,19 +183,21 @@ def get_user_media_list(session, username, medium):
         data=list(reversed(records)),
         columns=["title", "url", "score", "status", "progress"],
     )
-    if len(df) > 0:
-        feed_data, feed_ok = get_feed_data(session, username, medium)
-        if not feed_ok:
-            logging.info(f"Cannot parse feed for {username} {medium}")
-    else:
-        feed_data = {}
     df["updated_at"] = 0
-    for i in range(len(df)):
-        df.loc[i, "updated_at"] = int(feed_data.get(df.loc[i, "url"], 0))
     df["item_order"] = list(range(len(df)))
     df["api_version"] = get_api_version()
     df["username"] = username
     return df, True
+
+
+def get_user_media_list(session, username, medium):
+    df = get_user_media_data(session, username, medium)
+    if len(df) == 0:
+        return df
+    feed = get_feed_data(session, username, medium)
+    for i in range(len(df)):
+        df.loc[i, "updated_at"] = int(feed.get(df.loc[i, "url"], 0))
+    return df
 
 
 # Get media

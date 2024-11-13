@@ -1,0 +1,15 @@
+import Pkg
+Pkg.add(; name="CodecZstd", version="0.8.6")
+Pkg.add(; name="CSV", version="0.10.15")
+Pkg.add(; name="DataFrames", version="1.7.0")
+Pkg.add(; name="HTTP", version="1.10.10")
+Pkg.add(; name="JLD2", version="0.5.8")
+Pkg.add(; name="JSON", version="0.21.4")
+Pkg.add(; name="Memoize", version="0.4.4")
+Pkg.add(; name="MsgPack", version="1.2.1")
+Pkg.add(; name="NBInclude", version="2.4.0")
+Pkg.add(; name="NNlib", version="0.9.24")
+Pkg.add(; name="Oxygen", version="1.5.14")
+Pkg.add(; name="PackageCompiler", version="2.1.22")
+Pkg.add(; name="Setfield", version="1.1.1")
+import PackageCompiler

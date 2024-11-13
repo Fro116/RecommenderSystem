@@ -1,7 +1,9 @@
 import NNlib: sigmoid
 
 function get_user_biases(df, params)
-    get_user_biases(df, params["λ"], params["a"], params["a_counts"])
+    counts = params["item_countmap"]
+    item_counts = [get(counts, x, 1) for x in df.itemid]
+    get_user_biases(df, params["λ"], params["a"], item_counts)
 end;
 
 function get_user_biases(df, λ, a, item_counts)
@@ -19,7 +21,7 @@ function get_user_biases(df, λ, a, item_counts)
     @sync for t = 1:T
         Threads.@spawn begin
             @inbounds for i in get_user_partition(df.userid, t, T)
-                w = (item_counts[df.itemid[i]]^λ_wa) * (λ_wt^(1 - df.updated_at[i]))
+                w = (item_counts[i]^λ_wa) * (λ_wt^(1 - df.updated_at[i]))
                 user_bias[df.userid[i]] += (df.rating[i] - a[df.itemid[i]]) * w
                 denom[df.userid[i]] += w
             end

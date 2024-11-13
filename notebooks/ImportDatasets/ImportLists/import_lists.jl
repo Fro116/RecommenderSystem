@@ -336,9 +336,11 @@ function import_list(medium, source, userid_map, max_valid_ts, df)::RatingsDatas
     # drop invalid users and items
     df = subset(df, (df.itemid .!= 0) .&& (df.userid .!= 0))
     # drop duplicate rows
-    df = subset(df, sortperm(collect(zip(df.userid, df.itemid))))
-    dups = collect(zip(df.userid, df.itemid))
-    df = subset(df, BitVector([dups[1:end-1] .!= dups[2:end]; true]))
+    if length(df.userid) > 0
+        df = subset(df, sortperm(collect(zip(df.userid, df.itemid))))
+        dups = collect(zip(df.userid, df.itemid))
+        df = subset(df, BitVector([dups[1:end-1] .!= dups[2:end]; true]))
+    end
     # sort by update time
     df = subset(df, sortperm(collect(zip(df.userid, df.updated_at, df.update_order))))
     df

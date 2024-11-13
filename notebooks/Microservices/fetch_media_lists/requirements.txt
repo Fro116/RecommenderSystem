@@ -1,7 +1,0 @@
-Flask==3.0.2
-gevent==24.2.1
-gunicorn==21.2.0
-msgpack==1.0.7
-pandas==2.0.3
-requests==2.31.0
-zstandard==0.22.0
