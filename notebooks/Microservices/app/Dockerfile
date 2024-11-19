@@ -15,9 +15,11 @@ RUN julia requirements.jl
 COPY import_media_lists import_media_lists
 COPY nondirectional nondirectional
 COPY bagofwords_jl bagofwords_jl
+COPY compute compute
 RUN cd import_media_lists && julia ../compile.jl && cd ..
 RUN cd nondirectional && julia ../compile.jl && cd ..
 RUN cd bagofwords_jl && julia ../compile.jl && cd ..
+RUN cd compute && julia ../compile.jl && cd ..
 
 COPY fetch_media_lists fetch_media_lists
 COPY bagofwords_py_manga_rating bagofwords_py_manga_rating

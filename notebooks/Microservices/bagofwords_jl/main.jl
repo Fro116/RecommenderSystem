@@ -12,10 +12,10 @@ unpack(d::Vector{UInt8}) =
 
 function msgpack(d::Dict)::HTTP.Response
     body = pack(d)
-    response = HTTP.Response(200, [], body = body)
-    HTTP.setheader(response, "Content-Type" => "application/msgpack")
-    HTTP.setheader(response, "Content-Length" => string(sizeof(body)))
-    response
+    headers = Dict(
+        "Content-Type" => "application/msgpack",
+    )
+    HTTP.Response(200, headers, body)
 end
 
 const PARAMS = Dict(
@@ -23,15 +23,22 @@ const PARAMS = Dict(
     for m in ["manga", "anime"]
 )
 
-Oxygen.@get "/heartbeat" function heartbeat(req::HTTP.Request)
-    msgpack(Dict("success" => true))
+READY::Bool = false
+
+Oxygen.@get "/ready" function ready(req::HTTP.Request)
+    if !READY
+        return HTTP.Response(503, [])
+    else
+        return HTTP.Response(200, [])
+    end
 end
 
-Oxygen.@get "/terminate" function terminate(req::HTTP.Request)
-    Oxygen.terminate()
-end
+Oxygen.@get "/terminate" terminate(req::HTTP.Request) = Oxygen.terminate()
 
 Oxygen.@post "/query" function query(req::HTTP.Request)
+    if !READY && !HTTP.Messages.hasheader(req, "Startup")
+        return HTTP.Response(503, [])
+    end
     dfs = Dict(k => RatingsDataset(v) for (k, v) in unpack(req.body))
     # baseline
     ret = Dict()
@@ -64,12 +71,12 @@ Oxygen.@post "/query" function query(req::HTTP.Request)
     msgpack(ret)
 end
 
-function test_heartbeat(port)
+function test_ready(port)
     running = false
     while !running
         try
-            ret = HTTP.get("http://localhost:$port/heartbeat")
-            running = !HTTP.Messages.iserror(ret)
+            ret = HTTP.get("http://localhost:$port/ready"; status_exception=false)
+            running = ret.status == 503
         catch e
             sleep(1)
         end
@@ -124,13 +131,12 @@ end
 function test_query(port)
     pack(d::Dict) = CodecZstd.transcode(CodecZstd.ZstdCompressor, MsgPack.pack(d))
     url = "http://localhost:$port/query"
-    d = pack(test_query_inputs())
+    body = pack(test_query_inputs())
     headers = Dict(
         "Content-Type" => "application/msgpack",
-        "Content-Length" => string(sizeof(d)),
+        "Startup" => true,
     )
-    ret = HTTP.post(url, headers, d)
-    @assert !HTTP.Messages.iserror(ret)
+    ret = HTTP.post(url, headers, body)
 end
 
 if isempty(ARGS)
@@ -139,10 +145,12 @@ else
     port = parse(Int, ARGS[1])        
 end
 Threads.@spawn begin
-    test_heartbeat(port)
+    test_ready(port)
     test_query(port)
     if isempty(ARGS)
         test_terminate(port)
     end
+    global READY
+    READY = true
 end
 Oxygen.serveparallel(; host="0.0.0.0", port=port, access_log=nothing)

@@ -192,13 +192,11 @@ def get_user_media_list(session, userid, media):
 
 
 def get_userid(session, username):
-    url = f"https://kitsu.app/api/edge/users?filter[name]={username}"
+    url = f"https://kitsu.app/api/edge/users?filter[slug]={username}"
     response = call_api(session, url)
     json = response.json()["data"]
     if len(json) != 1:
-        raise ValueError(
-            f"there are multiple users with username {username}, please use userid"
-        )
+        raise ValueError(f"there are {len(json)} users with slug {username}")
     return int(json[0]["id"])
 
 

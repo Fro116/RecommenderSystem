@@ -13,19 +13,23 @@ unpack(d::Vector{UInt8}) =
 
 function msgpack(d::Dict)::HTTP.Response
     body = pack(d)
-    response = HTTP.Response(200, [], body = body)
-    HTTP.setheader(response, "Content-Type" => "application/msgpack")
-    HTTP.setheader(response, "Content-Length" => string(sizeof(body)))
-    response
+    headers = Dict(
+        "Content-Type" => "application/msgpack",
+    )
+    HTTP.Response(200, headers, body)
 end
 
-Oxygen.@get "/heartbeat" function heartbeat(req::HTTP.Request)
-    msgpack(Dict("success" => true))
+READY::Bool = false
+
+Oxygen.@get "/ready" function ready(req::HTTP.Request)
+    if !READY
+        return HTTP.Response(503, [])
+    else
+        return HTTP.Response(200, [])
+    end
 end
 
-Oxygen.@get "/terminate" function terminate(req::HTTP.Request)
-    Oxygen.terminate()
-end
+Oxygen.@get "/terminate" terminate(req::HTTP.Request) = Oxygen.terminate()
 
 struct UnitaryDict
     value::Any
@@ -34,6 +38,9 @@ Base.get(x::UnitaryDict, k) = x.value;
 Base.get(x::UnitaryDict, k, default) = x.value;
 
 Oxygen.@post "/query" function query(req::HTTP.Request)
+    if !READY && !HTTP.Messages.hasheader(req, "Startup")
+        return HTTP.Response(503, [])
+    end
     qp = Oxygen.queryparams(req)
     medium, source = qp["medium"], qp["source"]
     df = DataFrames.DataFrame(unpack(req.body))
@@ -42,12 +49,12 @@ Oxygen.@post "/query" function query(req::HTTP.Request)
     msgpack(Dict(k => getfield(df, k) for k in fieldnames(typeof(df))))
 end
 
-function test_heartbeat(port)
+function test_ready(port)
     running = false
     while !running
         try
-            ret = HTTP.get("http://localhost:$port/heartbeat")
-            running = !HTTP.Messages.iserror(ret)
+            ret = HTTP.get("http://localhost:$port/ready"; status_exception = false)
+            running = ret.status == 503
         catch e
             sleep(1)
         end
@@ -202,13 +209,12 @@ function test_query(port)
     for source in ["mal", "anilist", "kitsu", "animeplanet"]
         for medium in ["manga", "anime"]
             url = "http://localhost:$port/query?source=$source&medium=$medium"
-            d = pack(test_query_inputs(source, medium))
+            body = pack(test_query_inputs(source, medium))
             headers = Dict(
                 "Content-Type" => "application/msgpack",
-                "Content-Length" => string(sizeof(d)),
+                "Startup" => true,
             )
-            ret = HTTP.post(url, headers, d)
-            @assert !HTTP.Messages.iserror(ret)
+            HTTP.post(url, headers, body)
         end
     end
 end
@@ -216,13 +222,15 @@ end
 if isempty(ARGS)
     port = 8080
 else
-    port = parse(Int, ARGS[1])        
+    port = parse(Int, ARGS[1])
 end
 Threads.@spawn begin
-    test_heartbeat(port)
+    test_ready(port)
     test_query(port)
     if isempty(ARGS)
         test_terminate(port)
     end
+    global READY
+    READY = true
 end
 Oxygen.serveparallel(; host="0.0.0.0", port=port, access_log=nothing)
