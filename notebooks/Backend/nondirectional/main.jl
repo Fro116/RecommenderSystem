@@ -20,9 +20,16 @@ end
 
 const PARAMS = Dict(
     (m, x) => read_params("nondirectional/v1/training/$m/watch/$x")["S"] for
-    m in ["manga", "anime"] for
+    m in ALL_MEDIUMS for
     x in ["adaptations", "dependencies", "recaps", "related"]
 )
+
+function get_mappings(medium)
+    df = read_csv(get_data_path("processed_data/$medium.mapping.csv"))
+    Dict(k => df[:, k] for k in DataFrames.names(df))
+end
+
+const MAPPINGS = Dict(m => get_mappings(m) for m in ALL_MEDIUMS)
 
 READY::Bool = false
 
@@ -55,6 +62,9 @@ Oxygen.@post "/query" function query(req::HTTP.Request)
             k,
         ) for (k, v) in dfs
     )
+    planned = Dict(
+        k => spvec(subset(v, v.status .== get_status(:planned)), k) for (k, v) in dfs
+    )
     ret = Dict()
     mediat = Dict("anime" => "manga", "manga" => "anime")
     for m in ALL_MEDIUMS
@@ -72,7 +82,9 @@ Oxygen.@post "/query" function query(req::HTTP.Request)
                 (dependency_blacklist && !dependency_whitelist)
             )
         )
-        ret["nondirectional/$m/seen"] = collect(started[m] .> 0)
+        ret["nondirectional/$m/started"] = collect(started[m] .> 0)
+        ret["nondirectional/$m/planned"] = collect(planned[m] .> 0)
+        ret["nondirectional/$m/mapping"] = MAPPINGS[m]
     end
     msgpack(ret)
 end

@@ -146,18 +146,24 @@ function ensemble(alphas, PARAMS)
 end
 
 Oxygen.@get "/query" function query(req::HTTP.Request)
+    timetrace = [time()]
     if !READY && !HTTP.Messages.hasheader(req, "Startup")
         return HTTP.Response(503, [])
     end
     qp = Oxygen.queryparams(req)
     username, source = qp["username"], qp["source"]
     lists = fetch_media_lists(username, source)
+    push!(timetrace, time())
     nondirectional_task = Threads.@spawn nondirectional(lists)
     alpha_tasks = [Threads.@spawn bagofwords(lists)]
     alphas = merge(fetch.(alpha_tasks)...)
+    push!(timetrace, time())
     ens = ensemble(alphas, PARAMS)
     nd = fetch(nondirectional_task)
-    msgpack(merge(nd, ens))
+    ret = merge(nd, ens)
+    push!(timetrace, time())
+    ret["debug"] = Dict("timetrace" => timetrace[2:end] - timetrace[1:end-1])
+    msgpack(ret)
 end
 
 function test_ready(port)

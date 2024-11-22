@@ -1,4 +1,4 @@
-FROM julia:1.10.2 AS src_j
+FROM julia:1.10.2
 ENV JULIA_NUM_THREADS=auto
 RUN apt-get update -y && apt-get install clang python3 python3-pip python3-venv supervisor -y
 WORKDIR /usr/src/app
@@ -15,11 +15,11 @@ RUN julia requirements.jl
 COPY import_media_lists import_media_lists
 COPY nondirectional nondirectional
 COPY bagofwords_jl bagofwords_jl
-COPY compute compute
+COPY backend backend
 RUN cd import_media_lists && julia ../compile.jl && cd ..
 RUN cd nondirectional && julia ../compile.jl && cd ..
 RUN cd bagofwords_jl && julia ../compile.jl && cd ..
-RUN cd compute && julia ../compile.jl && cd ..
+RUN cd backend && julia ../compile.jl && cd ..
 
 COPY fetch_media_lists fetch_media_lists
 COPY bagofwords_py_manga_rating bagofwords_py_manga_rating

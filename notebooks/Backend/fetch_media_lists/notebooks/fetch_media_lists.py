@@ -36,11 +36,7 @@ def get_proxies(username, source, medium):
     m.update(source.encode("utf-8"))
     m.update(medium.encode("utf-8"))
     idx = int(m.hexdigest(), 16) % len(PROXIES)
-    proxies = [PROXIES[idx]]
-    for i, x in enumerate(PROXIES):
-        if i != idx:
-            proxies.append(x)
-    return proxies
+    return [PROXIES[i % len(PROXIES)] for i in range(idx, idx + 5)]
 
 
 def fetch_media_list(username, source, medium, datatype):
@@ -92,15 +88,13 @@ def query():
         df = fetch_media_list(username, source, medium, datatype)
         return pack(df.fillna("").astype(str).to_dict("list"))
     except Exception as e:
-        # TODO handle kitsu users with multiple usernames
-        # TODO show an error page
         print(e)
         abort(400)
 
 
-@app.route("/heartbeat")
-def heartbeat():
-    return pack({"success": True})
+@app.route("/ready")
+def ready():
+    return Response(status=200)
 
 
 if __name__ == "__main__":

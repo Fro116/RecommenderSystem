@@ -1,0 +1,11 @@
+curl_cffi==0.7.3
+filelock==3.16.1
+h5py==3.12.1
+hdf5plugin==5.0.0
+numpy==2.1.2
+pandas==2.2.3
+papermill==2.6.0
+ratelimit==2.2.1
+scipy==1.14.1
+torch==2.5.1
+tqdm==4.66.6

@@ -70,9 +70,9 @@ def query():
     return pack({f"bagofwords/v1/streaming/{medium}/{metric}": output})
 
 
-@app.route("/heartbeat")
-def wake():
-    return pack({"success": True})
+@app.route("/ready")
+def ready():
+    return Response(status=200)
 
 
 if __name__ == "__main__":
