@@ -11,9 +11,7 @@ unpack(d::Vector{UInt8}) =
 
 function msgpack(d::Dict)::HTTP.Response
     body = pack(d)
-    headers = Dict(
-        "Content-Type" => "application/msgpack",
-    )
+    headers = Dict("Content-Type" => "application/msgpack")
     HTTP.Response(200, headers, body)
 end
 
