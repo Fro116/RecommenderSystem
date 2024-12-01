@@ -2,8 +2,8 @@
 
 import asyncio
 import contextlib
+import json
 import time
-from uuid import uuid4
 
 from curl_cffi import requests
 from fastapi import FastAPI, HTTPException, Request
@@ -42,36 +42,36 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-
-@app.post("/proxy")
-async def proxy(request: Request):
-    data = await request.json()
-    url = data["url"]
-    method = data["method"]
-    headers = data["headers"]
-    body = data["body"]
-    proxyurl = data["proxyurl"]
-    sessionid = data["sessionid"]
+async def get_session(sessionid, proxyurl):
+    if proxyurl is not None:
+        proxies = {"http": proxyurl, "https": proxyurl}
+    else:
+        proxies = {}
     current_time = time.time()
     async with sessions_lock:
         if sessionid in sessions:
             session, _ = sessions[sessionid]
             sessions[sessionid] = (session, current_time)
-        else:
-            session = requests.AsyncSession()
-            sessionid = str(uuid4())
-            sessions[sessionid] = (session, current_time)
+            if session.proxies == proxies:
+                return session
+        session = requests.AsyncSession(proxies=proxies)
+        sessions[sessionid] = (session, current_time)
+        return session
+
+@app.post("/proxy")
+async def proxy(request: Request):
+    data = await request.json()
+    session = await get_session(data["sessionid"], data.get("proxyurl", None))
+    args = {}
+    for k in ["method", "url", "headers", "impersonate", "timeout"]:
+        if k in data:
+            args[k] = data[k]
+    if "json" in data:
+        args["json"] = json.loads(data["json"])
     try:
-        request_args = {"method": method, "url": url, "headers": headers}
-        if body:
-            request_args["data"] = body
-        if proxyurl:
-            request_args["proxies"] = {"http": proxyurl, "https": proxyurl}
-        response = await session.request(
-            **request_args, impersonate="chrome", timeout=5
-        )
+        response = await session.request(**args)
     except Exception as e:
-        {"status_code": 500, "headers": dict(), "body": ""}
+        return {"status_code": 500, "headers": dict(), "content": str(args) + "\n" + str(e)}
     return {
         "status_code": response.status_code,
         "headers": dict(response.headers),
