@@ -1,15 +1,11 @@
-# Setup
-
 const PORT = parse(Int, ARGS[1])
 const RATELIMIT_WINDOW = parse(Int, ARGS[2])
 const LAYER_1_URL = ARGS[3]
-const DEFAULT_IMPERSONATE = ARGS[4]
+const DEFAULT_IMPERSONATE = parse(Bool, ARGS[4])
 const DEFAULT_TIMEOUT = parse(Int, ARGS[5])
 const RESOURCE_PATH = ARGS[6]
 const API_VERSION = "5.0.0"
-const RAND_SALT = rand() # randomize sessionids
 
-import CodecZstd
 import CSV
 import DataFrames
 import Dates
@@ -17,17 +13,13 @@ import Glob
 import HTTP
 import JSON3
 import Memoize: @memoize
-import MsgPack
 import Oxygen
 import UUIDs
-
-
-# Resources
 
 function get_partition()
     # set this to (machine index, num machines) if running in a cluster
     (0, 1)
-end;
+end
 
 const Resource = Dict{String,Any}
 
@@ -246,25 +238,21 @@ function put!(r::Resources, resource::Dict, version::Integer)
     end
 end
 
-Threads.@spawn update_resources(RESOURCES, 60.0, 600.0);
+Threads.@spawn update_resources(RESOURCES, 60.0, 600.0)
 
 function encode(d::Dict, encoding::Symbol)
     if encoding == :json
         headers = Dict("Content-Type" => "application/json")
         body = Vector{UInt8}(JSON3.write(d))
-    elseif encoding == :msgpack
-        headers = Dict("Content-Type" => "application/msgpack")
-        body = CodecZstd.transcode(CodecZstd.ZstdCompressor, MsgPack.pack(d))
     else
         @assert false
     end
     headers, body
 end
+
 function decode(r::HTTP.Message)::Dict
     if HTTP.headercontains(r, "Content-Type", "application/json")
         return JSON3.read(String(r.body), Dict{String,Any})
-    elseif HTTP.headercontains(r, "Content-Type", "application/msgpack")
-        return MsgPack.unpack(CodecZstd.transcode(CodecZstd.ZstdDecompressor, r.body))
     else
         @assert false
     end
@@ -309,16 +297,21 @@ struct Response
     headers::Dict{String,String}
 end
 
+function HTTP.Response(x::Response)
+    HTTP.Response(x.status, HTTP.Headers(collect(x.headers)), Vector{UInt8}(x.body))
+end
+
+
 function callproxy(
     method::String,
     url::String,
-    headers::Dict{String,String},
+    headers::Dict{String, <:Any},
     body::Union{Vector{UInt8},Nothing},
     proxyurl::Union{String,Nothing},
     sessionid::String,
 )
     args = Dict{String,Any}("method" => method, "url" => url, "sessionid" => sessionid)
-    if get(headers, "impersonate", DEFAULT_IMPERSONATE) == "true"
+    if get(headers, "impersonate", DEFAULT_IMPERSONATE)
         args["impersonate"] = "chrome"
         delete!(headers, "impersonate")
     end
@@ -330,7 +323,7 @@ function callproxy(
         args["json"] = String(body)
     end
     if !isempty(headers)
-        args["headers"] = headers
+        args["headers"] = Dict{String, String}(headers)
     end
     if !isnothing(proxyurl)
         args["proxyurl"] = proxyurl
@@ -343,7 +336,7 @@ function callproxy(
     Response(
         data["status_code"],
         data["content"],
-        Dict(lowercase(k) => v for (k, v) in data["headers"]),
+        Dict(k => v for (k, v) in data["headers"]),
     )
 end
 
@@ -351,7 +344,7 @@ function request(
     resource::Resource,
     method::String,
     url::String,
-    headers::Dict{String,String} = Dict(),
+    headers::Dict{String, <:Any} = Dict(),
     body::Union{Vector{UInt8},Nothing} = nothing,
 )::Response
     metadata = lock(RESOURCES.lock) do
@@ -378,23 +371,29 @@ function request(
             headers,
             body,
             proxyurl,
-            string(hash((resource, proxyurl, RAND_SALT))),
+            string(hash((resource, proxyurl, Dates.today()))),
         )
     elseif resource["location"] == "animeplanet"
-        sessionid = string(hash((resource, RAND_SALT)))
         url = string(
             HTTP.URI(
                 "https://api.scrapfly.io/scrape";
                 query = Dict(
-                    "session" => sessionid,
+                    "session" => pop!(headers, "sessionid"),
                     "key" => resource["token"],
                     "proxy_pool" => "public_datacenter_pool",
                     "url" => url,
                     "country" => "us",
                 ),
-            ),
+            )
         )
-        return callproxy(method, url, headers, body, nothing, sessionid)
+        return callproxy(
+            method,
+            url,
+            headers,
+            body,
+            nothing,
+            string(hash((resource, Dates.today()))),
+        )
     else
         @assert false
     end
@@ -405,17 +404,24 @@ const STDOUT_LOCK = ReentrantLock()
 function logerror(x::String)
     Threads.lock(STDOUT_LOCK) do
         println("$(Dates.now()) [ERROR] $x")
+        println(join(stacktrace(catch_backtrace()), "\n"))
         flush(stdout)
     end
-end;
+end
+
+function logstatus(tag::String, r::Response, url::String)
+    if r.status in [403, 404]
+        return
+    end
+    logerror("$tag $(r.status) $url $(r.body)")
+end
+
 
 @memoize function html_entity_map()
     Dict(
         String(k) => v["characters"] for (k, v) in JSON3.read(read("entities.json", String))
     )
 end
-
-# HTML parsing
 
 function html_unescape(text::AbstractString)
     text = HTTP.unescapeuri(text)
@@ -455,7 +461,8 @@ function extract(
     multiple = false,
 )
     regex = Regex(start * capture * stop)
-    matches = Set(only(m.captures) for m in eachmatch(regex, text))
+    matches = [only(m.captures) for m in eachmatch(regex, text)]
+    matches = [x for (i, x) in enumerate(matches) if findfirst(==(x), matches) == i]
     if optional && isempty(matches)
         return nothing
     end
@@ -466,8 +473,6 @@ function extract(
 end
 
 optget(x::AbstractDict, k::String) = get(x, k, nothing)
-
-# MAL
 
 Oxygen.@post "/mal" function mal_api(r::HTTP.Request)::HTTP.Response
     data = decode(r)
@@ -503,7 +508,7 @@ function mal_time(x)
             Dates.DateTime(x, Dates.dateformat"yyyy-mm-ddTHH:MM:SS+00:00"),
         )
     catch
-        logerror("mal_get_list could not parse time $x for $url")
+        logerror("mal_get_list could not parse time $x")
         return nothing
     end
 end
@@ -536,8 +541,8 @@ function mal_get_list(resource::Resource, username::String, medium::String, offs
     headers = Dict("X-MAL-CLIENT-ID" => resource["token"])
     r = request(resource, "GET", url, headers)
     if r.status >= 400
-        logerror("mal_get_list received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("mal_get_list", r, url)
+        return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
     if "data" ∉ keys(json)
@@ -549,6 +554,7 @@ function mal_get_list(resource::Resource, username::String, medium::String, offs
         d = Dict(
             "version" => API_VERSION,
             "username" => username,
+            "medium" => medium,
             "uid" => x["node"]["id"],
             "status" => optget(ls, "status"),
             "score" => optget(ls, "score"),
@@ -566,7 +572,7 @@ function mal_get_list(resource::Resource, username::String, medium::String, offs
         )
         push!(entries, d)
     end
-    ret = Dict("data" => entries, "offset" => offset)
+    ret = Dict("entries" => entries, "offset" => offset, "limit" => params["limit"])
     if "next" in keys(json["paging"])
         ret["next"] = json["paging"]["next"]
     end
@@ -610,8 +616,8 @@ function mal_get_media(resource::Resource, medium::String, itemid::Int)
     headers = Dict("X-MAL-CLIENT-ID" => resource["token"])
     r = request(resource, "GET", url, headers)
     if r.status >= 400
-        logerror("mal_get_media received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("mal_get_media", r, url)
+        return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
     details = Dict(
@@ -656,12 +662,9 @@ function mal_get_media(resource::Resource, medium::String, itemid::Int)
             [Dict("id" => x["node"]["id"], "role" => x["role"]) for x in json["authors"]] : nothing,
     )
     # the mal API does not return manga relations for anime entries and vice versa        
-    relations = nothing
-    ret = Dict("details" => details, "relations" => relations)
+    ret = Dict("details" => details)
     HTTP.Response(200, encode(ret, :json)...)
 end
-
-# MAL Web
 
 Oxygen.@post "/malweb" function malweb_api(r::HTTP.Request)::HTTP.Response
     data = decode(r)
@@ -692,14 +695,14 @@ end
 
 function malweb_get_username(resource::Resource, userid::Int)
     url = "https://myanimelist.net/comments.php?id=$userid"
-    r = request(resource, "GET", url, Dict{String,String}())
+    r = request(resource, "GET", url, Dict("impersonate" => true))
     if r.status >= 400
-        logerror("malweb_get_username received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("malweb_get_username", r, url)
+        return HTTP.Response(r)
     end
     for m in eachmatch(r"/profile/([^\"/%]+)\"", r.body)
         username = html_unescape(only(m.captures))
-        ret = Dict("version" => API_VERSION, "username" => username)
+        ret = Dict("version" => API_VERSION, "userid" => userid, "username" => username)
         return HTTP.Response(200, encode(ret, :json)...)
     end
     HTTP.Response(404, [])
@@ -707,13 +710,13 @@ end
 
 function malweb_get_media(resource::Resource, medium::String, itemid::Int)
     url = "https://myanimelist.net/$medium/$itemid"
-    r = request(resource, "GET", url, Dict{String,String}())
+    r = request(resource, "GET", url, Dict("impersonate" => true))
     if r.status >= 400
-        logerror("malweb_get_media status code $(r.status) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("malweb_get_media", r, url)
+        return HTTP.Response(r)
     end
     relations = malweb_get_media_relations(r.body, medium, itemid)
-    ret = Dict("details" => nothing, "relations" => relations)
+    ret = Dict("relations" => relations)
     HTTP.Response(200, encode(ret, :json)...)
 end
 
@@ -753,7 +756,7 @@ function malweb_get_media_relations(text::String, medium::String, itemid::Int)
         if line == """<td class="pb24">"""
             if !isnothing(last_href)
                 logerror(
-                    "malweb_get_media_relations did not finish parsing $last_href for $medium $itemid",
+                    "malweb_get_media_relations $medium $itemid did not finish parsing $last_href",
                 )
             end
             return collect(records)
@@ -763,7 +766,7 @@ function malweb_get_media_relations(text::String, medium::String, itemid::Int)
             last_relation = get(relation_types, line, nothing)
             if isnothing(last_relation)
                 logerror(
-                    "malweb_get_media_relations could not parse relation $line for $medium $itemid",
+                    "malweb_get_media_relations $medium $itemid could not parse relation $line",
                 )
                 continue
             end
@@ -775,7 +778,7 @@ function malweb_get_media_relations(text::String, medium::String, itemid::Int)
             last_relation = get(relation_types, line, nothing)
             if isnothing(last_relation)
                 logerror(
-                    "malweb_get_media_relations could not parse relation $line for $medium $itemid",
+                    "malweb_get_media_relations $medium $itemid could not parse relation $line",
                 )
                 continue
             end
@@ -791,7 +794,7 @@ function malweb_get_media_relations(text::String, medium::String, itemid::Int)
                     last_href = nothing
                 else
                     logerror(
-                        "malweb_get_media_relations unexpected href $line for $medium $itemid",
+                        "malweb_get_media_relations $medium $itemid unexpected href $line",
                     )
                     last_href = nothing
                     continue
@@ -799,7 +802,7 @@ function malweb_get_media_relations(text::String, medium::String, itemid::Int)
             end
             if isnothing(last_relation)
                 logerror(
-                    "malweb_get_media_relations could not find relation for $line for $medium $itemid",
+                    "malweb_get_media_relations $medium $itemid could not find relation for $line",
                 )
                 continue
             end
@@ -816,16 +819,16 @@ function malweb_get_media_relations(text::String, medium::String, itemid::Int)
             continue
         end
     end
-    logerror("malweb_get_media_relations could not parse relations $medium $itemid")
+    logerror("malweb_get_media_relations $medium $itemid could not parse relations")
     collect(records)
 end
 
 function malweb_get_user(resource::Resource, username::String)
     url = "https://myanimelist.net/profile/$username"
-    r = request(resource, "GET", url, Dict{String,String}())
+    r = request(resource, "GET", url, Dict("impersonate" => true))
     if r.status >= 400
-        logerror("malweb_get_media status code $(r.status) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("malweb_get_media", r, url)
+        return HTTP.Response(r)
     end
 
     function info_panel(field)
@@ -884,8 +887,6 @@ function malweb_get_user(resource::Resource, username::String)
     )
     HTTP.Response(200, encode(ret, :json)...)
 end
-
-# Anilist
 
 Oxygen.@post "/anilist" function anilist_api(r::HTTP.Request)::HTTP.Response
     data = decode(r)
@@ -986,8 +987,8 @@ function anilist_get_list(resource::Resource, userid::Int, medium::String, chunk
         encode(Dict("query" => query, "variables" => variables), :json)...,
     )
     if r.status >= 400
-        logerror("anilist_get_list received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("anilist_get_list", r, url)
+        return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
     username = json["data"]["MediaListCollection"]["user"]["name"]
@@ -1000,6 +1001,7 @@ function anilist_get_list(resource::Resource, userid::Int, medium::String, chunk
                     "version" => API_VERSION,
                     "userid" => userid,
                     "username" => username,
+                    "medium" => medium,
                     "anilistid" => entry["mediaId"],
                     "status" => entry["status"],
                     "score" => entry["score"],
@@ -1023,8 +1025,11 @@ function anilist_get_list(resource::Resource, userid::Int, medium::String, chunk
         end
     end
     has_next_chunk = json["data"]["MediaListCollection"]["hasNextChunk"]
-    ret =
-        Dict("data" => collect(values(entries)), "chunk" => chunk, "next" => has_next_chunk)
+    ret = Dict(
+        "entries" => collect(values(entries)),
+        "chunk" => chunk,
+        "next" => has_next_chunk,
+    )
     HTTP.Response(200, encode(ret, :json)...)
 end
 
@@ -1040,10 +1045,13 @@ function anilist_get_userid(resource::Resource, username::String)
     )
     if r.status >= 400
         logerror("anilist_get_userid received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        return HTTP.Response(r)
     end
-    ret =
-        Dict("version" => API_VERSION, "userid" => JSON3.read(r.body)["data"]["User"]["id"])
+    ret = Dict(
+        "version" => API_VERSION,
+        "username" => username,
+        "userid" => JSON3.read(r.body)["data"]["User"]["id"],
+    )
     HTTP.Response(200, encode(ret, :json)...)
 end
 
@@ -1177,8 +1185,8 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Int)
         encode(Dict("query" => query, "variables" => variables), :json)...,
     )
     if r.status >= 400
-        logerror("anilist_get_media received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("anilist_get_media", r, url)
+        return HTTP.Response(r)
     end
 
     function season(year, season)
@@ -1351,8 +1359,8 @@ function anilist_get_user(resource::Resource, userid::Int)
         encode(Dict("query" => query, "variables" => variables), :json)...,
     )
     if r.status >= 400
-        logerror("anilist_get_media received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("anilist_get_user", r, url)
+        return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
     data = json["data"]["User"]
@@ -1402,8 +1410,6 @@ function anilist_get_user(resource::Resource, userid::Int)
     HTTP.Response(200, encode(ret, :json)...)
 end
 
-# Kitsu
-
 Oxygen.@post "/kitsu" function kitsu_api(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     endpoint = data["endpoint"]
@@ -1450,7 +1456,7 @@ function kitsu_time(x)
             Dates.DateTime(x, Dates.dateformat"yyyy-mm-ddTHH:MM:SS.sssZ"),
         )
     catch
-        logerror("kitsu_get_list could not parse time $x for $url")
+        logerror("kitsu_time could not parse time $x")
         return nothing
     end
 end
@@ -1462,11 +1468,11 @@ function kitsu_get_token(resource::Resource)
     url = "https://kitsu.app/api/oauth/token"
     body = Dict("grant_type" => "password", "username" => username, "password" => password)
     headers, content = encode(body, :json)
-    headers["impersonate"] = "true"
+    headers["impersonate"] = true
     r = request(resource, "POST", url, headers, content)
     if r.status >= 400
-        logerror("kitsu_get_token received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("kitsu_get_token", r, url)
+        return HTTP.Response(r)
     end
     data = JSON3.read(r.body)
     token = data["access_token"]
@@ -1483,11 +1489,11 @@ function kitsu_get_userid(resource::Resource, auth::String, username::String, ke
             query = Dict("filter[$key]" => username),
         ),
     )
-    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => "true")
+    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
     r = request(resource, "GET", url, headers)
     if r.status >= 400
-        logerror("kitsu_get_userid received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("kitsu_get_userid", r, url)
+        return HTTP.Response(r)
     end
     data = JSON3.read(r.body)["data"]
     if length(data) != 1
@@ -1504,11 +1510,11 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
         "fields[mappings]" => "externalSite,externalId",
     )
     url = string(HTTP.URI("https://kitsu.app/api/edge/$medium/$itemid"; query = params))
-    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => "true")
+    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
     r = request(resource, "GET", url, headers)
     if r.status >= 400
-        logerror("kitsu_get_media received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("kitsu_get_media", r, url)
+        return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
     data = json["data"]["attributes"]
@@ -1610,11 +1616,11 @@ function kitsu_get_list(
         params["page[offset]"] = offset
     end
     url = string(HTTP.URI("https://kitsu.app/api/edge/library-entries"; query = params))
-    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => "true")
+    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
     r = request(resource, "GET", url, headers)
     if r.status >= 400
-        logerror("kitsu_get_media received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        logerror("kitsu_get_media", r, url)
+        return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
     kitsu_rating(x::Nothing) = nothing
@@ -1627,6 +1633,7 @@ function kitsu_get_list(
             "userid" => userid,
             "username" => only(json["included"])["attributes"]["name"],
             "userslug" => only(json["included"])["attributes"]["slug"],
+            "medium" => medium,
             "kitsuid" => parse(Int, x["id"]),
             "status" => x["attributes"]["status"],
             "progress" => x["attributes"]["progress"],
@@ -1646,28 +1653,29 @@ function kitsu_get_list(
         )
         push!(entries, d)
     end
-    ret = Dict("data" => entries, "offset" => offset)
+    ret = Dict("entries" => entries, "offset" => offset)
     if "next" in keys(json["links"])
         ret["next"] = json["links"]["next"]
     end
+    ret["limit"] = params["page[limit]"]
     HTTP.Response(200, encode(ret, :json)...)
 end
 
 function kitsu_get_user(resource::Resource, auth::String, userid::Int)
     params = Dict("include" => "stats")
     url = string(HTTP.URI("https://kitsu.app/api/edge/users/$userid"; query = params))
-    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => "true")
+    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
     r = request(resource, "GET", url, headers)
     if r.status >= 400
-        logerror("kitsu_get_user received status $(r.status) $(r.body) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("kitsu_get_user", r, url)
+        return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
     data = json["data"]["attributes"]
     included = json["included"]
-
     ret = Dict(
         "version" => API_VERSION,
+        "userid" => userid,
         "createdAt" => kitsu_time(data["createdAt"]),
         "updatedAt" => kitsu_time(data["updatedAt"]),
         "name" => data["name"],
@@ -1695,23 +1703,22 @@ function kitsu_get_user(resource::Resource, auth::String, userid::Int)
         "coverImage" => data["coverImage"],
         "status" => data["status"],
         "subscribedToNewsletter" => data["subscribedToNewsletter"],
-        "manga_counts" => only([
+        "manga_count" => only([
             x for x in included if x["attributes"]["kind"] == "manga-amount-consumed"
         ])["attributes"]["statsData"]["media"],
-        "anime_counts" => only([
+        "anime_count" => only([
             x for x in included if x["attributes"]["kind"] == "anime-amount-consumed"
         ])["attributes"]["statsData"]["media"],
     )
     HTTP.Response(200, encode(ret, :json)...)
 end
 
-# Animeplanet
-
 Oxygen.@post "/animeplanet" function animeplanet_api(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     endpoint = data["endpoint"]
     token = data["token"]
     resource = token["resource"]
+    sessionid = data["sessionid"]
     if resource["location"] != "animeplanet"
         logerror("""animeplanet_api invalid resource $(resource["location"])""")
         return HTTP.Response(500, [])
@@ -1720,17 +1727,30 @@ Oxygen.@post "/animeplanet" function animeplanet_api(r::HTTP.Request)::HTTP.Resp
         if endpoint == "list"
             return animeplanet_get_list(
                 resource,
+                sessionid,
                 data["medium"],
                 data["username"],
                 data["page"],
                 data["expand_pagelimit"],
             )
         elseif endpoint == "media"
-            return animeplanet_get_media(resource, data["medium"], data["itemid"])
+            return animeplanet_get_media(
+                resource,
+                sessionid,
+                data["medium"],
+                data["itemname"],
+            )
         elseif endpoint == "user"
-            return animeplanet_get_user(resource, data["username"])
+            return animeplanet_get_user(resource, sessionid, data["username"])
         elseif endpoint == "username"
-            return animeplanet_get_username(resource, data["userid"])
+            return animeplanet_get_username(resource, sessionid, data["userid"])
+        elseif endpoint == "feed"
+            return animeplanet_get_feed(
+                resource,
+                sessionid,
+                data["medium"],
+                data["username"],
+            )
         else
             logerror("animeplanet_api invalid endpoint $endpoint")
             return HTTP.Response(500, [])
@@ -1744,48 +1764,51 @@ end
 
 function animeplanet_get_list(
     resource::Resource,
+    sessionid::String,
     medium::String,
     username::String,
-    page::String,
+    page::Int,
     expand_pagelimit::Bool,
 )
-    params = Dict("sort" => "user_updated", "order" => "desc")
+    params = Dict{String,Any}("sort" => "user_updated", "order" => "desc")
     if page != 1
         params["page"] = page
     end
     if expand_pagelimit
-        params["per_page"] = 560
+        params = Dict("per_page" => 560)
     end
     url = string(
         HTTP.URI("https://www.anime-planet.com/users/$username/$medium"; query = params),
     )
-    r = request(resource, "GET", url, Dict{String,String}())
+    r = request(resource, "GET", url, Dict("sessionid" => sessionid))
     if r.status >= 400
-        logerror("animeplanet_get_media received status $(r.status) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("animeplanet_get_list", r, url)
+        return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
-    if !json["result"]["success"]
-        logerror("animeplanet_get_media received status $(r.status) for $url")
-        return HTTP.Response(500, [])
-    end
-    if occursin("has chosen to make their content private.", r.body)
-        return HTTP.Response(403, [])
-    end
-    if occursin("<title>Search Results for $username", r.body)
-        # invalid username
+    text = json.result.content
+    if occursin("<title>Search Results for $username", text)
         return HTTP.Response(404, [])
+    end
+    if !json["result"]["success"]
+        logerror(
+            """animeplanet_get_list proxyerror $(json["result"]["status_code"]) $url""",
+        )
+        return HTTP.Response(401, [])
+    end
+    if occursin("has chosen to make their content private.", text)
+        return HTTP.Response(403, [])
     end
     default_pagelimit =
         occursin("""<option value="35" selected="selected">35</option>""", text)
     page_numbers = Set([
         parse(Int, only(m.captures)) for m in eachmatch(r"""&amp;page=([0-9]*)'>""", text)
     ])
-    if default_pagelimit && page + 1 in page_numbers
-        ret = Dict("next_page" => true, "extend_pagelimit" => true)
+    next_page = page + 1 in page_numbers
+    if default_pagelimit && next_page
+        ret = Dict("extend_pagelimit" => true)
         return HTTP.Response(200, encode(ret, :json)...)
     end
-    text = json.result.content
 
     function get_score(line)
         matches = extract(line, """<div class='ttRating'>""", "</div>", multiple = true)
@@ -1809,6 +1832,10 @@ function animeplanet_get_list(
         parse(Int, m)
     end
 
+    item_order = 0
+    if page != 1
+        item_order += 560 * (page - 1)
+    end
     entries = []
     prevline = nothing
     for line in split(text, "\n")
@@ -1816,6 +1843,7 @@ function animeplanet_get_list(
             d = Dict(
                 "version" => API_VERSION,
                 "username" => username,
+                "medium" => medium,
                 "title" =>
                     html_unescape(extract(line, """<h3 class='cardName' >""", "</h3>")),
                 "url" => html_unescape(extract(prevline, """href="/$medium/""", '"')),
@@ -1825,29 +1853,40 @@ function animeplanet_get_list(
                     html_unescape(extract(line, """<span class='status""", "'>")),
                 ),
                 "progress" => get_progress(line),
-                "item_order" => nothing,
+                "item_order" => item_order,
             )
+            item_order += 1
             push!(entries, d)
         end
         prevline = line
     end
-    ret = Dict("data" => entries)
+    ret = Dict("entries" => entries, "next" => next_page)
     HTTP.Response(200, encode(ret, :json)...)
 end
 
-function animeplanet_get_media(resource::Resource, medium::String, itemname::String)
+function animeplanet_get_media(
+    resource::Resource,
+    sessionid::String,
+    medium::String,
+    itemname::String,
+)
     url = "https://www.anime-planet.com/$medium/$itemname"
-    r = request(resource, "GET", url, Dict{String,String}())
+    r = request(resource, "GET", url, Dict("sessionid" => sessionid))
     if r.status >= 400
-        logerror("animeplanet_get_media received status $(r.status) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("animeplanet_get_media", r, url)
+        return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
-    if !json["result"]["success"]
-        logerror("animeplanet_get_media received status $(r.status) for $url")
-        return HTTP.Response(500, [])
-    end
     text = json.result.content
+    if occursin("<h1>You searched for $itemname</h1>", text)
+        return HTTP.Response(404, [])
+    end
+    if !json["result"]["success"]
+        logerror(
+            """animeplanet_get_media proxyerror $(json["result"]["status_code"]) $url""",
+        )
+        return HTTP.Response(401, [])
+    end
 
     function get_media_season(text)
         matches = extract(text, "/seasons/", "\">", optional = true, multiple = true)
@@ -1948,25 +1987,27 @@ function animeplanet_get_media(resource::Resource, medium::String, itemname::Str
     HTTP.Response(200, encode(ret, :json)...)
 end
 
-function animeplanet_get_user(resource::Resource, username::String)
+function animeplanet_get_user(resource::Resource, sessionid::String, username::String)
     url = "https://www.anime-planet.com/users/$username"
-    r = request(resource, "GET", url, Dict{String,String}())
+    r = request(resource, "GET", url, Dict("sessionid" => sessionid))
     if r.status >= 400
-        logerror("animeplanet_get_media received status $(r.status) for $url")
-        return HTTP.Response(r.status, [])
+        logstatus("animeplanet_get_user", r, url)
+        return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
-    if !json["result"]["success"]
-        logerror("animeplanet_get_media received status $(r.status) for $url")
-        return HTTP.Response(500, [])
-    end
     text = json.result.content
     has_profile = occursin(
         """<meta name="description" content="Meet $username on Anime-Planet.""",
         text,
     )
     if !has_profile
-        return HTTP.Response(403, [])
+        return HTTP.Response(404, [])
+    end
+    if !json["result"]["success"]
+        logerror(
+            """animeplanet_get_user proxyerror $(json["result"]["status_code"]) $url""",
+        )
+        return HTTP.Response(401, [])
     end
     anime_counts = extract(
         text,
@@ -1983,6 +2024,8 @@ function animeplanet_get_user(resource::Resource, username::String)
         multiple = true,
     )
     ret = Dict(
+        "version" => VERSION,
+        "username" => username,
         "about" =>
             extract(text, """<section class="profBio userContent">""", "</section>"),
         "joined" =>
@@ -2006,24 +2049,26 @@ function animeplanet_get_user(resource::Resource, username::String)
     HTTP.Response(200, encode(ret, :json)...)
 end
 
-function animeplanet_get_username(resource::Resource, userid::Int)
+function animeplanet_get_username(resource::Resource, sessionid::String, userid::Int)
     url = "https://www.anime-planet.com/forum/members/$userid"
-    r = request(resource, "GET", url, Dict{String,String}())
+    r = request(resource, "GET", url, Dict("sessionid" => sessionid))
     if r.status >= 400
-        logerror("animeplanet_get_media received status $(r.status) for $url")
-        return HTTP.Response(r.status, [])
+        logerror("animeplanet_get_username", r, url)
+        return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
-    if !json["result"]["success"]
-        if occursin("Oops! We ran into some problems", json.result.content)
-            # user does not exist
-            return HTTP.Response(404, [])
-        end
-        logerror("animeplanet_get_media received status $(r.status) for $url")
-        return HTTP.Response(500, [])
-    end
     text = json.result.content
+    if occursin("The requested user could not be found.", text)
+        return HTTP.Response(404, [])
+    end
+    if !json["result"]["success"]
+        logerror(
+            """animeplanet_get_username proxyerror $(json["result"]["status_code"]) $url""",
+        )
+        return HTTP.Response(401, [])
+    end
     ret = Dict(
+        "version" => VERSION,
         "userid" => userid,
         "username" => extract(
             text,
@@ -2032,6 +2077,44 @@ function animeplanet_get_username(resource::Resource, userid::Int)
             capture = "([a-zA-Z0-9_]+?)",
         ),
     )
+    HTTP.Response(200, encode(ret, :json)...)
 end
+
+function animeplanet_get_feed(
+    resource::Resource,
+    sessionid::String,
+    medium::String,
+    username::String,
+)
+
+    params = Dict("type" => medium)
+    url = string(
+        HTTP.URI("https://www.anime-planet.com/users/$username/feed", query = params),
+    )
+    r = request(resource, "GET", url, Dict("sessionid" => sessionid))
+    if r.status >= 400
+        logstatus("animeplanet_get_feed", r, url)
+        return HTTP.Response(r)
+    end
+    json = JSON3.read(r.body)
+    text = json.result.content
+    if occursin("<h1>You searched for $username</h1>", text)
+        return HTTP.Response(404, [])
+    end
+    if !json["result"]["success"]
+        logerror(
+            """animeplanet_get_feed proxyerror $(json["result"]["status_code"]) $url""",
+        )
+        return HTTP.Response(401, [])
+    end
+    feed_entries = [x for x in split(text, "\n") if occursin("data-timestamp", x)]
+    ret = Dict{String,Int}()
+    for x in reverse(feed_entries)
+        title = extract(x, """href="/$medium/""", "\"")
+        updated_at = parse(Int, extract(x, "data-timestamp=\"", "\">"))
+        ret[title] = updated_at
+    end
+    HTTP.Response(200, encode(ret, :json)...)
+end;
 
 Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing)

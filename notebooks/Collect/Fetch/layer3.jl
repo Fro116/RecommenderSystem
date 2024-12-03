@@ -1,0 +1,787 @@
+const PORT = parse(Int, ARGS[1])
+const LAYER_2_URL = ARGS[2]
+const TOKEN_TIMEOUT = parse(Int, ARGS[3])
+
+import Dates
+import HTTP
+import JSON3
+import Oxygen
+import UUIDs
+
+const STDOUT_LOCK = ReentrantLock()
+
+function logerror(x::String)
+    Threads.lock(STDOUT_LOCK) do
+        println("$(Dates.now()) [ERROR] $x")
+        println(join(stacktrace(catch_backtrace()), "\n"))
+        flush(stdout)
+    end
+end
+
+struct Response
+    status::Int
+    body::Vector{UInt8}
+    headers::Dict{String,String}
+end
+
+function encode(d::Dict, encoding::Symbol)
+    if encoding == :json
+        headers = Dict("Content-Type" => "application/json")
+        body = Vector{UInt8}(JSON3.write(d))
+    else
+        @assert false
+    end
+    headers, body
+end
+
+function decode(r::HTTP.Message)::Dict
+    if HTTP.headercontains(r, "Content-Type", "application/json")
+        return JSON3.read(String(r.body), Dict{String,Any})
+    else
+        @assert false
+    end
+end
+
+function decode(r::Response)::Dict
+    if r.headers["Content-Type"] == "application/json"
+        return JSON3.read(String(r.body), Dict{String,Any})
+    else
+        @assert false
+    end
+end
+
+function request(query::String, params::Dict{String,Any})
+    for delay in ExponentialBackOff(;
+        n = 9,
+        first_delay = 1,
+        max_delay = 300,
+        factor = 2.0,
+        jitter = 0.1,
+    )
+        r = HTTP.request(
+            "POST",
+            "$LAYER_2_URL/$query",
+            encode(params, :json)...,
+            status_exception = false,
+        )
+        if r.status < 400 || r.status in [400, 401, 403, 404]
+            # 400, 401 -> auth error
+            # 403 -> list is private
+            # 404 -> invalid user
+            return Response(r.status, r.body, Dict(k => v for (k, v) in r.headers))
+        end
+        if HTTP.hasheader(r.headers, "Retry-After")
+            try
+                retry_after = first(HTTP.headers(r, "Retry-After"))
+                retry_timeout = min(parse(Int, retry_after), 600)
+                delay = max(delay, retry_timeout)
+            catch
+                logerror("invalid Retry-After $retry_after for $query $params")
+            end
+        end
+        logerror("retrying $query $params after $delay seconds")
+        sleep(delay)
+    end
+    logerror("could not retrieve $query $params")
+    Response(500, [], Dict())
+end
+
+@enum Errors begin
+    TOKEN_UNAVAIABLE = 404
+    ERROR = 500
+end
+
+const SESSIONS = Dict{Any,Any}() # token -> (sessionid, access_time)
+const SESSIONS_LOCK = ReentrantLock()
+
+function get_session(token)
+    lock(SESSIONS_LOCK) do
+        if token in keys(SESSIONS)
+            sessionid, _ = SESSIONS[token]
+            SESSIONS[token] = (sessionid, Dates.datetime2unix(Dates.now()))
+            return sessionid
+        end
+    end
+    if token["resource"]["location"] == "kitsu"
+        r = request("kitsu", Dict("token" => token, "endpoint" => "token"))
+        if r.status >= 400
+            return ERROR::Errors
+        end
+        data = decode(r)
+        sessionid = data["token"]
+    elseif token["resource"]["location"] == "animeplanet"
+        sessionid = string(UUIDs.uuid4())
+    else
+        @assert false
+    end
+    lock(SESSIONS_LOCK) do
+        SESSIONS[token] = (sessionid, Dates.datetime2unix(Dates.now()))
+        if length(SESSIONS) > 1000
+            ks = collect(keys(SESSIONS))
+            for k in ks
+                _, access_time = SESSIONS[k]
+                if Dates.datetime2unix(Dates.now()) - access_time > 600
+                    delete!(SESSIONS, k)
+                end
+            end
+        end
+        return sessionid
+    end
+end
+
+function invalidate_session(token::Dict, status::Int)
+    println("INVALIDATE ", status)
+    if token["resource"]["location"] == "kitsu"
+        if status ∉ [400, 401]
+            return
+        end
+    elseif token["resource"]["location"] == "animeplanet"
+        if status != 401
+            return
+        end
+    end
+    lock(SESSIONS_LOCK) do
+        delete!(SESSIONS, token)
+    end
+end
+
+Oxygen.@post "/mal_username" function mal_username(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    userid = data["userid"]
+    data = get_malweb_username(userid)
+    if isa(data, Errors)
+        return HTTP.Response(Int(data), [])
+    end
+    HTTP.Response(200, encode(data, :json)...)
+end
+
+function get_malweb_username(userid::Int)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "malweb", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        s = request(
+            "malweb",
+            Dict("token" => token, "endpoint" => "username", "userid" => userid),
+        )
+        if s.status >= 400
+            return ERROR::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/mal_user" function mal_user(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    username = data["username"]
+    user_data = get_malweb_user(username)
+    if isa(user_data, Errors)
+        return HTTP.Response(Int(user_data), [])
+    end
+    ret = Dict{String,Any}("user" => user_data)
+    for m in ["manga", "anime"]
+        if user_data["$(m)_count"] == 0
+            ret[m] = nothing
+            continue
+        end
+        list = get_mal_list(m, username)
+        if isa(list, Errors)
+            return HTTP.Response(Int(list), [])
+        end
+        ret[m] = list
+    end
+    HTTP.Response(200, encode(ret, :json)...)
+end
+
+function get_malweb_user(username::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "malweb", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        s = request(
+            "malweb",
+            Dict("token" => token, "endpoint" => "user", "username" => username),
+        )
+        if s.status >= 400
+            return ERROR::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+function get_mal_list(medium::String, username::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "mal", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        entries = []
+        offset = 0
+        while true
+            s = request(
+                "mal",
+                Dict(
+                    "token" => token,
+                    "endpoint" => "list",
+                    "username" => username,
+                    "medium" => medium,
+                    "offset" => offset,
+                ),
+            )
+            if s.status >= 400
+                return ERROR::Errors
+            end
+            data = decode(s)
+            append!(entries, data["entries"])
+            if "next" ∉ keys(data)
+                return entries
+            end
+            offset += data["limit"]
+        end
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/mal_media" function mal_media(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    medium = data["medium"]
+    itemid = data["itemid"]
+    details = get_mal_media("mal", medium, itemid)
+    if isa(details, Errors)
+        return HTTP.Response(Int(details), [])
+    end
+    relations = get_mal_media("malweb", medium, itemid)
+    if isa(relations, Errors)
+        return HTTP.Response(Int(relations), [])
+    end
+    HTTP.Response(200, encode(merge(details, relations), :json)...)
+end
+
+function get_mal_media(location::String, medium::String, itemid::Int)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => location, "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        s = request(
+            location,
+            Dict(
+                "token" => token,
+                "endpoint" => "media",
+                "medium" => medium,
+                "itemid" => itemid,
+            ),
+        )
+        if s.status >= 400
+            return ERROR::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/anilist_user" function anilist_user(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    userid = data["userid"]
+    user_data = get_anilist_user(userid)
+    if isa(user_data, Errors)
+        return HTTP.Response(Int(user_data), [])
+    end
+    ret = Dict{String,Any}("user" => user_data)
+    seconds_in_day = 86400 # allow one day of fudge
+    if data["last_accessed_at"] > user_data["updatedAt"] + seconds_in_day
+        ret["last_access_valid"] = true
+        HTTP.Response(200, encode(ret, :json)...)
+    end
+    for m in ["manga", "anime"]
+        if user_data["$(m)Count"] == 0
+            ret[m] = nothing
+            continue
+        end
+        list = get_anilist_list(m, userid)
+        if isa(list, Errors)
+            return HTTP.Response(Int(list), [])
+        end
+        ret[m] = list
+    end
+    HTTP.Response(200, encode(ret, :json)...)
+end
+
+function get_anilist_user(userid::Int)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        s = request(
+            "anilist",
+            Dict("token" => token, "endpoint" => "user", "userid" => userid),
+        )
+        if s.status >= 400
+            return ERROR::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+function get_anilist_list(medium::String, userid::Int)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        entries = []
+        chunk = 1
+        while true
+            s = request(
+                "anilist",
+                Dict(
+                    "token" => token,
+                    "endpoint" => "list",
+                    "userid" => userid,
+                    "medium" => medium,
+                    "chunk" => chunk,
+                ),
+            )
+            if s.status >= 400
+                return ERROR::Errors
+            end
+            data = decode(s)
+            append!(entries, data["entries"])
+            if !data["next"]
+                return entries
+            end
+            chunk += 1
+        end
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/anilist_media" function anilist_media(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    medium = data["medium"]
+    itemid = data["itemid"]
+    data = get_anilist_media(medium, itemid)
+    if isa(data, Errors)
+        return HTTP.Response(Int(details), [])
+    end
+    HTTP.Response(200, encode(data, :json)...)
+end
+
+function get_anilist_media(medium::String, itemid::Int)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        s = request(
+            "anilist",
+            Dict(
+                "token" => token,
+                "endpoint" => "media",
+                "medium" => medium,
+                "itemid" => itemid,
+            ),
+        )
+        if s.status >= 400
+            return ERROR::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/kitsu_user" function kitsu_user(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    userid = data["userid"]
+    user_data = get_kitsu_user(userid)
+    if isa(user_data, Errors)
+        return HTTP.Response(Int(user_data), [])
+    end
+    ret = Dict{String,Any}("user" => user_data)
+    seconds_in_day = 86400 # allow one day of fudge
+    if data["last_accessed_at"] > user_data["updatedAt"] + seconds_in_day
+        ret["last_access_valid"] = true
+        HTTP.Response(200, encode(ret, :json)...)
+    end
+    for m in ["manga", "anime"]
+        if user_data["$(m)_count"] == 0
+            ret[m] = nothing
+            continue
+        end
+        list = get_kitsu_list(m, userid)
+        if isa(list, Errors)
+            return HTTP.Response(Int(list), [])
+        end
+        ret[m] = list
+    end
+    HTTP.Response(200, encode(ret, :json)...)
+end
+
+function get_kitsu_user(userid::Int)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        auth = get_session(token)
+        if isa(auth, Errors)
+            return auth
+        end
+        s = request(
+            "kitsu",
+            Dict(
+                "token" => token,
+                "auth" => auth,
+                "endpoint" => "user",
+                "userid" => userid,
+            ),
+        )
+        if s.status >= 400
+            invalidate_session(token, s.status)
+            return ERROR::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+function get_kitsu_list(medium::String, userid::Int)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        auth = get_session(token)
+        if isa(auth, Errors)
+            return auth
+        end
+        entries = []
+        offset = 0
+        while true
+            s = request(
+                "kitsu",
+                Dict(
+                    "token" => token,
+                    "endpoint" => "list",
+                    "auth" => auth,
+                    "userid" => userid,
+                    "medium" => medium,
+                    "offset" => offset,
+                ),
+            )
+            if s.status >= 400
+                invalidate_session(token, s.status)
+                return ERROR::Errors
+            end
+            data = decode(s)
+            append!(entries, data["entries"])
+            if "next" ∉ keys(data)
+                return entries
+            end
+            offset += data["limit"]
+        end
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/kitsu_media" function kitsu_media(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    medium = data["medium"]
+    itemid = data["itemid"]
+    data = get_kitsu_media(medium, itemid)
+    if isa(data, Errors)
+        return HTTP.Response(Int(details), [])
+    end
+    HTTP.Response(200, encode(data, :json)...)
+end
+
+function get_kitsu_media(medium::String, itemid::Int)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        auth = get_session(token)
+        if isa(auth, Errors)
+            return auth
+        end
+        s = request(
+            "kitsu",
+            Dict(
+                "token" => token,
+                "auth" => auth,
+                "endpoint" => "media",
+                "medium" => medium,
+                "itemid" => itemid,
+            ),
+        )
+        if s.status >= 400
+            invalidate_session(token, s.status)
+            return ERROR::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/animeplanet_username" function animeplanet_username(
+    r::HTTP.Request,
+)::HTTP.Response
+    data = decode(r)
+    userid = data["userid"]
+    data = get_animeplanet_username(userid)
+    if isa(data, Errors)
+        return HTTP.Response(Int(data), [])
+    end
+    HTTP.Response(200, encode(data, :json)...)
+end
+
+function get_animeplanet_username(userid::Int)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        sessionid = get_session(token)
+        s = request(
+            "animeplanet",
+            Dict(
+                "token" => token,
+                "sessionid" => sessionid,
+                "endpoint" => "username",
+                "userid" => userid,
+            ),
+        )
+        if s.status >= 400
+            invalidate_session(token, s.status)
+            return ERROR::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/animeplanet_user" function animeplanet_user(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    username = data["username"]
+    user_data = get_animeplanet_user(username)
+    if isa(user_data, Errors)
+        return HTTP.Response(Int(user_data), [])
+    end
+    ret = Dict{String,Any}("user" => user_data)
+    for m in ["manga", "anime"]
+        if user_data["$(m)_count"] == 0
+            ret[m] = nothing
+            continue
+        end
+        list = get_animeplanet_list(m, username)
+        if isa(list, Errors)
+            return HTTP.Response(Int(list), [])
+        end
+        ret[m] = list
+    end
+    HTTP.Response(200, encode(ret, :json)...)
+end
+
+function get_animeplanet_user(username::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        sessionid = get_session(token)
+        s = request(
+            "animeplanet",
+            Dict(
+                "token" => token,
+                "sessionid" => sessionid,
+                "endpoint" => "user",
+                "username" => username,
+            ),
+        )
+        if s.status >= 400
+            invalidate_session(token, s.status)
+            return ERROR::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+function get_animeplanet_list(medium::String, username::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        sessionid = get_session(token)
+        feed = let
+            s = request(
+                "animeplanet",
+                Dict(
+                    "token" => token,
+                    "sessionid" => sessionid,
+                    "endpoint" => "feed",
+                    "username" => username,
+                    "medium" => medium,
+                ),
+            )
+            if s.status >= 400
+                invalidate_session(token, s.status)
+                return ERROR::Errors
+            end
+            decode(s)
+        end
+        entries = []
+        page = 1
+        expand_pagelimit = false
+        while true
+            s = request(
+                "animeplanet",
+                Dict(
+                    "token" => token,
+                    "sessionid" => sessionid,
+                    "endpoint" => "list",
+                    "username" => username,
+                    "medium" => medium,
+                    "page" => page,
+                    "expand_pagelimit" => expand_pagelimit,
+                ),
+            )
+            if s.status >= 400
+                invalidate_session(token, s.status)
+                return ERROR::Errors
+            end
+            data = decode(s)
+            if get(data, "extend_pagelimit", false)
+                expand_pagelimit = true
+                continue
+            end
+            expand_pagelimit = false
+            for x in data["entries"]
+                x["updated_at"] = get(feed, x["url"], nothing)
+            end
+            append!(entries, data["entries"])
+            if !data["next"]
+                return entries
+            end
+            page += 1
+        end
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/animeplanet_media" function animeplanet_media(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    medium = data["medium"]
+    itemname = data["itemname"]
+    data = get_animeplanet_media(medium, itemname)
+    if isa(data, Errors)
+        return HTTP.Response(Int(details), [])
+    end
+    HTTP.Response(200, encode(data, :json)...)
+end
+
+function get_animeplanet_media(medium::String, itemname::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAIABLE::Errors
+    end
+    token = decode(r)
+    try
+        sessionid = get_session(token)
+        s = request(
+            "animeplanet",
+            Dict(
+                "token" => token,
+                "sessionid" => sessionid,
+                "endpoint" => "media",
+                "medium" => medium,
+                "itemname" => itemname,
+            ),
+        )
+        if s.status >= 400
+            invalidate_session(token, s.status)
+            return ERROR::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing)
