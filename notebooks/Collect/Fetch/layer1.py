@@ -1,5 +1,3 @@
-# sends requests through curl_cffi
-
 import asyncio
 import contextlib
 import json
@@ -19,12 +17,12 @@ async def remove_expired_sessions():
                 expired_sessions = [
                     sid
                     for sid, (sess, last_access) in sessions.items()
-                    if current_time - last_access > SESSION_TIMEOUT
+                    if current_time - last_access > 10_000
                 ]
                 for sid in expired_sessions:
                     await sessions[sid][0].aclose()
                     del sessions[sid]
-            await asyncio.sleep(600)
+            await asyncio.sleep(1000)
     except asyncio.CancelledError:
         pass
 

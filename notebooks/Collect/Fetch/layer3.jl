@@ -13,8 +13,6 @@ const STDOUT_LOCK = ReentrantLock()
 function logerror(x::String)
     Threads.lock(STDOUT_LOCK) do
         println("$(Dates.now()) [ERROR] $x")
-        println(join(stacktrace(catch_backtrace()), "\n"))
-        flush(stdout)
     end
 end
 
@@ -52,14 +50,13 @@ end
 
 function request(query::String, params::Dict{String,Any})
     for delay in ExponentialBackOff(;
-        n = 9,
+        n = 10,
         first_delay = 1,
-        max_delay = 300,
+        max_delay = 1000,
         factor = 2.0,
         jitter = 0.1,
     )
-        r = HTTP.request(
-            "POST",
+        r = HTTP.post(
             "$LAYER_2_URL/$query",
             encode(params, :json)...,
             status_exception = false,
@@ -73,7 +70,7 @@ function request(query::String, params::Dict{String,Any})
         if HTTP.hasheader(r.headers, "Retry-After")
             try
                 retry_after = first(HTTP.headers(r, "Retry-After"))
-                retry_timeout = min(parse(Int, retry_after), 600)
+                retry_timeout = min(parse(Int, retry_after), 1000)
                 delay = max(delay, retry_timeout)
             catch
                 logerror("invalid Retry-After $retry_after for $query $params")
@@ -87,8 +84,23 @@ function request(query::String, params::Dict{String,Any})
 end
 
 @enum Errors begin
-    TOKEN_UNAVAIABLE = 404
-    ERROR = 500
+    INVALID_SESSION = 401
+    NOT_FOUND = 404
+    TOKEN_UNAVAIABLE = 503
+end
+
+function retry(f::Function; count = 10)
+    retryable = Errors[INVALID_SESSION, TOKEN_UNAVAIABLE]
+    x = f()
+    for _ = 1:count-1
+        if x ∉ retryable
+            return x
+        end
+        logerror("retrying function after error $x")
+        sleep(1)
+        x = f()
+    end
+    x
 end
 
 const SESSIONS = Dict{Any,Any}() # token -> (sessionid, access_time)
@@ -98,14 +110,14 @@ function get_session(token)
     lock(SESSIONS_LOCK) do
         if token in keys(SESSIONS)
             sessionid, _ = SESSIONS[token]
-            SESSIONS[token] = (sessionid, Dates.datetime2unix(Dates.now()))
+            SESSIONS[token] = (sessionid, time())
             return sessionid
         end
     end
     if token["resource"]["location"] == "kitsu"
         r = request("kitsu", Dict("token" => token, "endpoint" => "token"))
         if r.status >= 400
-            return ERROR::Errors
+            return TOKEN_UNAVAIABLE::Errors
         end
         data = decode(r)
         sessionid = data["token"]
@@ -115,12 +127,12 @@ function get_session(token)
         @assert false
     end
     lock(SESSIONS_LOCK) do
-        SESSIONS[token] = (sessionid, Dates.datetime2unix(Dates.now()))
-        if length(SESSIONS) > 1000
+        SESSIONS[token] = (sessionid, time())
+        if length(SESSIONS) > 10_000
             ks = collect(keys(SESSIONS))
             for k in ks
                 _, access_time = SESSIONS[k]
-                if Dates.datetime2unix(Dates.now()) - access_time > 600
+                if time() - access_time > 10_000
                     delete!(SESSIONS, k)
                 end
             end
@@ -129,17 +141,7 @@ function get_session(token)
     end
 end
 
-function invalidate_session(token::Dict, status::Int)
-    println("INVALIDATE ", status)
-    if token["resource"]["location"] == "kitsu"
-        if status ∉ [400, 401]
-            return
-        end
-    elseif token["resource"]["location"] == "animeplanet"
-        if status != 401
-            return
-        end
-    end
+function invalidate_session(token::Dict)
     lock(SESSIONS_LOCK) do
         delete!(SESSIONS, token)
     end
@@ -148,7 +150,7 @@ end
 Oxygen.@post "/mal_username" function mal_username(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     userid = data["userid"]
-    data = get_malweb_username(userid)
+    data = retry(() -> get_malweb_username(userid))
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
@@ -170,7 +172,7 @@ function get_malweb_username(userid::Int)
             Dict("token" => token, "endpoint" => "username", "userid" => userid),
         )
         if s.status >= 400
-            return ERROR::Errors
+            return NOT_FOUND::Errors
         end
         return decode(s)
     finally
@@ -181,7 +183,7 @@ end
 Oxygen.@post "/mal_user" function mal_user(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     username = data["username"]
-    user_data = get_malweb_user(username)
+    user_data = retry(() -> get_malweb_user(username))
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
     end
@@ -191,7 +193,7 @@ Oxygen.@post "/mal_user" function mal_user(r::HTTP.Request)::HTTP.Response
             ret[m] = nothing
             continue
         end
-        list = get_mal_list(m, username)
+        list = retry(() -> get_mal_list(m, username))
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
@@ -215,7 +217,7 @@ function get_malweb_user(username::String)
             Dict("token" => token, "endpoint" => "user", "username" => username),
         )
         if s.status >= 400
-            return ERROR::Errors
+            return NOT_FOUND::Errors
         end
         return decode(s)
     finally
@@ -247,7 +249,7 @@ function get_mal_list(medium::String, username::String)
                 ),
             )
             if s.status >= 400
-                return ERROR::Errors
+                return NOT_FOUND::Errors
             end
             data = decode(s)
             append!(entries, data["entries"])
@@ -265,11 +267,11 @@ Oxygen.@post "/mal_media" function mal_media(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     medium = data["medium"]
     itemid = data["itemid"]
-    details = get_mal_media("mal", medium, itemid)
+    details = retry(() -> get_mal_media("mal", medium, itemid))
     if isa(details, Errors)
         return HTTP.Response(Int(details), [])
     end
-    relations = get_mal_media("malweb", medium, itemid)
+    relations = retry(() -> get_mal_media("malweb", medium, itemid))
     if isa(relations, Errors)
         return HTTP.Response(Int(relations), [])
     end
@@ -296,7 +298,7 @@ function get_mal_media(location::String, medium::String, itemid::Int)
             ),
         )
         if s.status >= 400
-            return ERROR::Errors
+            return NOT_FOUND::Errors
         end
         return decode(s)
     finally
@@ -307,7 +309,7 @@ end
 Oxygen.@post "/anilist_user" function anilist_user(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     userid = data["userid"]
-    user_data = get_anilist_user(userid)
+    user_data = retry(() -> get_anilist_user(userid))
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
     end
@@ -315,14 +317,14 @@ Oxygen.@post "/anilist_user" function anilist_user(r::HTTP.Request)::HTTP.Respon
     seconds_in_day = 86400 # allow one day of fudge
     if data["last_accessed_at"] > user_data["updatedAt"] + seconds_in_day
         ret["last_access_valid"] = true
-        HTTP.Response(200, encode(ret, :json)...)
+        return HTTP.Response(200, encode(ret, :json)...)
     end
     for m in ["manga", "anime"]
         if user_data["$(m)Count"] == 0
             ret[m] = nothing
             continue
         end
-        list = get_anilist_list(m, userid)
+        list = retry(() -> get_anilist_list(m, userid))
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
@@ -346,7 +348,7 @@ function get_anilist_user(userid::Int)
             Dict("token" => token, "endpoint" => "user", "userid" => userid),
         )
         if s.status >= 400
-            return ERROR::Errors
+            return NOT_FOUND::Errors
         end
         return decode(s)
     finally
@@ -378,7 +380,7 @@ function get_anilist_list(medium::String, userid::Int)
                 ),
             )
             if s.status >= 400
-                return ERROR::Errors
+                return NOT_FOUND::Errors
             end
             data = decode(s)
             append!(entries, data["entries"])
@@ -396,7 +398,7 @@ Oxygen.@post "/anilist_media" function anilist_media(r::HTTP.Request)::HTTP.Resp
     data = decode(r)
     medium = data["medium"]
     itemid = data["itemid"]
-    data = get_anilist_media(medium, itemid)
+    data = retry(() -> get_anilist_media(medium, itemid))
     if isa(data, Errors)
         return HTTP.Response(Int(details), [])
     end
@@ -423,7 +425,7 @@ function get_anilist_media(medium::String, itemid::Int)
             ),
         )
         if s.status >= 400
-            return ERROR::Errors
+            return NOT_FOUND::Errors
         end
         return decode(s)
     finally
@@ -434,7 +436,7 @@ end
 Oxygen.@post "/kitsu_user" function kitsu_user(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     userid = data["userid"]
-    user_data = get_kitsu_user(userid)
+    user_data = retry(() -> get_kitsu_user(userid))
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
     end
@@ -442,14 +444,14 @@ Oxygen.@post "/kitsu_user" function kitsu_user(r::HTTP.Request)::HTTP.Response
     seconds_in_day = 86400 # allow one day of fudge
     if data["last_accessed_at"] > user_data["updatedAt"] + seconds_in_day
         ret["last_access_valid"] = true
-        HTTP.Response(200, encode(ret, :json)...)
+        return HTTP.Response(200, encode(ret, :json)...)
     end
     for m in ["manga", "anime"]
         if user_data["$(m)_count"] == 0
             ret[m] = nothing
             continue
         end
-        list = get_kitsu_list(m, userid)
+        list = retry(() -> get_kitsu_list(m, userid))
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
@@ -481,9 +483,11 @@ function get_kitsu_user(userid::Int)
                 "userid" => userid,
             ),
         )
-        if s.status >= 400
-            invalidate_session(token, s.status)
-            return ERROR::Errors
+        if s.status in [400, 401]
+            invalidate_session(token)
+            return INVALID_SESSION::Errors
+        elseif s.status >= 400
+            return NOT_FOUND::Errors
         end
         return decode(s)
     finally
@@ -519,9 +523,11 @@ function get_kitsu_list(medium::String, userid::Int)
                     "offset" => offset,
                 ),
             )
-            if s.status >= 400
-                invalidate_session(token, s.status)
-                return ERROR::Errors
+            if s.status in [400, 401]
+                invalidate_session(token)
+                return INVALID_SESSION::Errors
+            elseif s.status >= 400
+                return NOT_FOUND::Errors
             end
             data = decode(s)
             append!(entries, data["entries"])
@@ -539,7 +545,7 @@ Oxygen.@post "/kitsu_media" function kitsu_media(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     medium = data["medium"]
     itemid = data["itemid"]
-    data = get_kitsu_media(medium, itemid)
+    data = retry(() -> get_kitsu_media(medium, itemid))
     if isa(data, Errors)
         return HTTP.Response(Int(details), [])
     end
@@ -570,9 +576,11 @@ function get_kitsu_media(medium::String, itemid::Int)
                 "itemid" => itemid,
             ),
         )
-        if s.status >= 400
-            invalidate_session(token, s.status)
-            return ERROR::Errors
+        if s.status in [400, 401]
+            invalidate_session(token)
+            return INVALID_SESSION::Errors
+        elseif s.status >= 400
+            return NOT_FOUND::Errors
         end
         return decode(s)
     finally
@@ -585,7 +593,7 @@ Oxygen.@post "/animeplanet_username" function animeplanet_username(
 )::HTTP.Response
     data = decode(r)
     userid = data["userid"]
-    data = get_animeplanet_username(userid)
+    data = retry(() -> get_animeplanet_username(userid))
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
@@ -612,9 +620,11 @@ function get_animeplanet_username(userid::Int)
                 "userid" => userid,
             ),
         )
-        if s.status >= 400
-            invalidate_session(token, s.status)
-            return ERROR::Errors
+        if s.status == 401
+            invalidate_session(token)
+            return INVALID_SESSION::Errors
+        elseif s.status >= 400
+            return NOT_FOUND::Errors
         end
         return decode(s)
     finally
@@ -625,7 +635,7 @@ end
 Oxygen.@post "/animeplanet_user" function animeplanet_user(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     username = data["username"]
-    user_data = get_animeplanet_user(username)
+    user_data = retry(() -> get_animeplanet_user(username))
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
     end
@@ -635,7 +645,7 @@ Oxygen.@post "/animeplanet_user" function animeplanet_user(r::HTTP.Request)::HTT
             ret[m] = nothing
             continue
         end
-        list = get_animeplanet_list(m, username)
+        list = retry(() -> get_animeplanet_list(m, username))
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
@@ -664,9 +674,11 @@ function get_animeplanet_user(username::String)
                 "username" => username,
             ),
         )
-        if s.status >= 400
-            invalidate_session(token, s.status)
-            return ERROR::Errors
+        if s.status == 401
+            invalidate_session(token)
+            return INVALID_SESSION::Errors
+        elseif s.status >= 400
+            return NOT_FOUND::Errors
         end
         return decode(s)
     finally
@@ -696,9 +708,11 @@ function get_animeplanet_list(medium::String, username::String)
                     "medium" => medium,
                 ),
             )
-            if s.status >= 400
-                invalidate_session(token, s.status)
-                return ERROR::Errors
+            if s.status == 401
+                invalidate_session(token)
+                return INVALID_SESSION::Errors
+            elseif s.status >= 400
+                return NOT_FOUND::Errors
             end
             decode(s)
         end
@@ -718,9 +732,11 @@ function get_animeplanet_list(medium::String, username::String)
                     "expand_pagelimit" => expand_pagelimit,
                 ),
             )
-            if s.status >= 400
-                invalidate_session(token, s.status)
-                return ERROR::Errors
+            if s.status == 401
+                invalidate_session(token)
+                return INVALID_SESSION::Errors
+            elseif s.status >= 400
+                return NOT_FOUND::Errors
             end
             data = decode(s)
             if get(data, "extend_pagelimit", false)
@@ -746,7 +762,7 @@ Oxygen.@post "/animeplanet_media" function animeplanet_media(r::HTTP.Request)::H
     data = decode(r)
     medium = data["medium"]
     itemname = data["itemname"]
-    data = get_animeplanet_media(medium, itemname)
+    data = retry(() -> get_animeplanet_media(medium, itemname))
     if isa(data, Errors)
         return HTTP.Response(Int(details), [])
     end
@@ -774,9 +790,11 @@ function get_animeplanet_media(medium::String, itemname::String)
                 "itemname" => itemname,
             ),
         )
-        if s.status >= 400
-            invalidate_session(token, s.status)
-            return ERROR::Errors
+        if s.status == 401
+            invalidate_session(token)
+            return INVALID_SESSION::Errors
+        elseif s.status >= 400
+            return NOT_FOUND::Errors
         end
         return decode(s)
     finally
@@ -784,4 +802,4 @@ function get_animeplanet_media(medium::String, itemname::String)
     end
 end
 
-Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing)
+Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, show_banner=false)

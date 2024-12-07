@@ -16,6 +16,14 @@ import Memoize: @memoize
 import Oxygen
 import UUIDs
 
+const STDOUT_LOCK = ReentrantLock()
+
+function logerror(x::String)
+    Threads.lock(STDOUT_LOCK) do
+        println("$(Dates.now()) [ERROR] $x")
+    end
+end
+
 function get_partition()
     # set this to (machine index, num machines) if running in a cluster
     (0, 1)
@@ -157,7 +165,7 @@ function update_resources(r::Resources, refresh_secs::Real, timeout_secs::Real)
         old_resources = Set(keys(r.resources))
         lock(r.lock) do
             # update resources
-            t = Dates.datetime2unix(Dates.now())
+            t = time()
             for k in old_resources
                 if k ∉ new_resources
                     # resource got assigned to a different machine
@@ -183,7 +191,7 @@ function update_resources(r::Resources, refresh_secs::Real, timeout_secs::Real)
 end
 
 function take!(r::Resources, location::String, timeout::Real)
-    start = Dates.datetime2unix(Dates.now())
+    start = time()
     uuid = string(UUIDs.uuid4())
     lock(r.lock) do
         push!(RESOURCES.queue[location], uuid)
@@ -201,17 +209,13 @@ function take!(r::Resources, location::String, timeout::Real)
                 k = popfirst!(r.index[location])
                 m = r.resources[k]
                 @assert isnothing(m.checkout_time)
-                r.resources[k] = ResourceMetadata(
-                    m.version,
-                    Dates.datetime2unix(Dates.now()),
-                    m.request_times,
-                )
+                r.resources[k] = ResourceMetadata(m.version, time(), m.request_times)
                 Dict("resource" => k, "version" => m.version)
             end
             if !isnothing(val)
                 return val
             end
-            if Dates.datetime2unix(Dates.now()) - start > timeout
+            if time() - start > timeout
                 return nothing
             end
             sleep(0.001)
@@ -238,7 +242,7 @@ function put!(r::Resources, resource::Dict, version::Integer)
     end
 end
 
-Threads.@spawn update_resources(RESOURCES, 60.0, 600.0)
+Threads.@spawn update_resources(RESOURCES, 100, 1000)
 
 function encode(d::Dict, encoding::Symbol)
     if encoding == :json
@@ -280,12 +284,12 @@ function ratelimit!(x::ResourceMetadata, ratelimit::Real)
         startindex = max(1, length(x.request_times) - window + 1)
         times = x.request_times[startindex:end]
         wait_until = first(times) + length(times) * ratelimit
-        delta = wait_until - Dates.datetime2unix(Dates.now())
+        delta = wait_until - time()
         if delta > 0
             sleep(delta)
         end
     end
-    push!(x.request_times, Dates.datetime2unix(Dates.now()))
+    push!(x.request_times, time())
     if length(x.request_times) > window
         popfirst!(x.request_times)
     end
@@ -305,7 +309,7 @@ end
 function callproxy(
     method::String,
     url::String,
-    headers::Dict{String, <:Any},
+    headers::Dict{String,<:Any},
     body::Union{Vector{UInt8},Nothing},
     proxyurl::Union{String,Nothing},
     sessionid::String,
@@ -323,12 +327,12 @@ function callproxy(
         args["json"] = String(body)
     end
     if !isempty(headers)
-        args["headers"] = Dict{String, String}(headers)
+        args["headers"] = Dict{String,String}(headers)
     end
     if !isnothing(proxyurl)
         args["proxyurl"] = proxyurl
     end
-    r = HTTP.request("POST", LAYER_1_URL, encode(args, :json)..., status_exception = false)
+    r = HTTP.post(LAYER_1_URL, encode(args, :json)..., status_exception = false)
     if r.status >= 400
         return Response(r.status, "", Dict())
     end
@@ -344,7 +348,7 @@ function request(
     resource::Resource,
     method::String,
     url::String,
-    headers::Dict{String, <:Any} = Dict(),
+    headers::Dict{String,<:Any} = Dict(),
     body::Union{Vector{UInt8},Nothing} = nothing,
 )::Response
     metadata = lock(RESOURCES.lock) do
@@ -352,11 +356,8 @@ function request(
         if isnothing(m)
             return Response(500, "", Dict())
         end
-        RESOURCES.resources[resource] = ResourceMetadata(
-            m.version,
-            Dates.datetime2unix(Dates.now()),
-            m.request_times,
-        )
+        RESOURCES.resources[resource] =
+            ResourceMetadata(m.version, time(), m.request_times)
     end
     ratelimit!(metadata, resource["ratelimit"])
     if resource["location"] in ["mal", "malweb", "anilist", "kitsu"]
@@ -384,7 +385,7 @@ function request(
                     "url" => url,
                     "country" => "us",
                 ),
-            )
+            ),
         )
         return callproxy(
             method,
@@ -399,32 +400,14 @@ function request(
     end
 end
 
-const STDOUT_LOCK = ReentrantLock()
-
-function logerror(x::String)
-    Threads.lock(STDOUT_LOCK) do
-        println("$(Dates.now()) [ERROR] $x")
-        println(join(stacktrace(catch_backtrace()), "\n"))
-        flush(stdout)
-    end
-end
-
-function logstatus(tag::String, r::Response, url::String)
-    if r.status in [403, 404]
-        return
-    end
-    logerror("$tag $(r.status) $url $(r.body)")
-end
-
-
 @memoize function html_entity_map()
     Dict(
         String(k) => v["characters"] for (k, v) in JSON3.read(read("entities.json", String))
     )
 end
 
+html_unescape(::Nothing) = nothing
 function html_unescape(text::AbstractString)
-    text = HTTP.unescapeuri(text)
     entities = Dict(k => v for (k, v) in html_entity_map() if occursin(k, text))
     # greedy match replacements
     for k in sort(collect(keys(entities)), by = length, rev = true)
@@ -467,9 +450,9 @@ function extract(
         return nothing
     end
     if multiple
-        return [strip(html_unescape(x)) for x in matches]
+        return [strip(x) for x in matches]
     end
-    strip(html_unescape(only(matches)))
+    strip(only(matches))
 end
 
 optget(x::AbstractDict, k::String) = get(x, k, nothing)
@@ -496,20 +479,6 @@ Oxygen.@post "/mal" function mal_api(r::HTTP.Request)::HTTP.Response
         args = Dict(k => v for (k, v) in data if k != "token")
         logerror("mal_api error $e for $args")
         return HTTP.Response(500, [])
-    end
-end
-
-function mal_time(x)
-    if isnothing(x)
-        return nothing
-    end
-    try
-        return Dates.datetime2unix(
-            Dates.DateTime(x, Dates.dateformat"yyyy-mm-ddTHH:MM:SS+00:00"),
-        )
-    catch
-        logerror("mal_get_list could not parse time $x")
-        return nothing
     end
 end
 
@@ -555,20 +524,20 @@ function mal_get_list(resource::Resource, username::String, medium::String, offs
             "version" => API_VERSION,
             "username" => username,
             "medium" => medium,
-            "uid" => x["node"]["id"],
+            "itemid" => x["node"]["id"],
             "status" => optget(ls, "status"),
             "score" => optget(ls, "score"),
             "progress" => optget(ls, progress_col),
-            "progress_volumes" => optget(ls, "num_volumes_read"),
-            "started_at" => optget(ls, "start_date"),
-            "completed_at" => optget(ls, "finish_date"),
+            "num_volumes_read" => optget(ls, "num_volumes_read"),
+            "start_date" => optget(ls, "start_date"),
+            "finish_date" => optget(ls, "finish_date"),
             "priority" => optget(ls, "priority"),
-            "repeat" => optget(ls, "repeat_col"),
+            "repeat_col" => optget(ls, repeat_col),
             "repeat_count" => optget(ls, repeat_count_col),
             "repeat_value" => optget(ls, repeat_value_col),
             "tags" => optget(ls, "tags"),
-            "notes" => optget(ls, "comments"),
-            "updated_at" => mal_time(optget(ls, "updated_at")),
+            "comments" => optget(ls, "comments"),
+            "updated_at" => optget(ls, "updated_at"),
         )
         push!(entries, d)
     end
@@ -622,20 +591,17 @@ function mal_get_media(resource::Resource, medium::String, itemid::Int)
     json = JSON3.read(r.body)
     details = Dict(
         "version" => API_VERSION,
+        "medium" => medium,
         "malid" => json["id"],
         "title" => json["title"],
-        "synonyms" => optget(json["alternative_titles"], "synonyms"),
-        "alttitles" => Dict(
-            string(k) => v for
-            (k, v) in json["alternative_titles"] if string(k) != "synonyms"
-        ),
+        "alternative_titles" => json["alternative_titles"],
         "start_date" => optget(json, "start_date"),
         "end_date" => optget(json, "end_date"),
         "synopsis" => optget(json, "synopsis"),
-        "genres" => [x["name"] for x in json["genres"]],
-        "created_at" => mal_time(optget(json, "created_at")),
-        "updated_at" => mal_time(optget(json, "updated_at")),
-        "mediatype" => json["media_type"],
+        "genres" => json["genres"],
+        "created_at" => optget(json, "created_at"),
+        "updated_at" => optget(json, "updated_at"),
+        "media_type" => json["media_type"],
         "nsfw" => json["nsfw"],
         "pictures" => json["pictures"],
         "background" => json["background"],
@@ -652,7 +618,7 @@ function mal_get_media(resource::Resource, medium::String, itemid::Int)
         "broadcast" => optget(json, "broadcast"),
         "source" => optget(json, "source"),
         "average_episode_duration" => optget(json, "average_episode_duration"),
-        "pgrating" => optget(json, "rating"),
+        "rating" => optget(json, "rating"),
         "studios" =>
             "studios" in keys(json) ? [x["name"] for x in json["studios"]] : nothing,
         "num_volumes" => optget(json, "num_volumes"),
@@ -701,7 +667,7 @@ function malweb_get_username(resource::Resource, userid::Int)
         return HTTP.Response(r)
     end
     for m in eachmatch(r"/profile/([^\"/%]+)\"", r.body)
-        username = html_unescape(only(m.captures))
+        username = only(m.captures)
         ret = Dict("version" => API_VERSION, "userid" => userid, "username" => username)
         return HTTP.Response(200, encode(ret, :json)...)
     end
@@ -721,20 +687,20 @@ function malweb_get_media(resource::Resource, medium::String, itemid::Int)
 end
 
 function malweb_get_media_relations(text::String, medium::String, itemid::Int)
-    relation_types = Dict(
-        "Sequel" => "SEQUEL",
-        "Prequel" => "PREQUEL",
-        "Alternative Setting" => "ALTERNATIVE_SETTING",
-        "Alternative Version" => "ALTERNATIVE_VERSION",
-        "Side Story" => "SIDE_STORY",
-        "Summary" => "SUMMARY",
-        "Full Story" => "FULL_STORY",
-        "Parent Story" => "PARENT_STORY",
-        "Spin-Off" => "SPIN_OFF",
-        "Adaptation" => "ADAPTATION",
-        "Character" => "CHARACTER",
-        "Other" => "OTHER",
-    )
+    relation_types = Set([
+        "Sequel",
+        "Prequel",
+        "Alternative Setting",
+        "Alternative Version",
+        "Side Story",
+        "Summary",
+        "Full Story",
+        "Parent Story",
+        "Spin-Off",
+        "Adaptation",
+        "Character",
+        "Other",
+    ])
     records = Set()
     related_entries_section = false
     last_line = nothing
@@ -763,8 +729,8 @@ function malweb_get_media_relations(text::String, medium::String, itemid::Int)
         end
         if prev_line == """<div class="relation">"""
             line = strip(first(split(line, "\n")))
-            last_relation = get(relation_types, line, nothing)
-            if isnothing(last_relation)
+            last_relation = line
+            if last_relation ∉ relation_types
                 logerror(
                     "malweb_get_media_relations $medium $itemid could not parse relation $line",
                 )
@@ -775,8 +741,8 @@ function malweb_get_media_relations(text::String, medium::String, itemid::Int)
         if prev_line == """<td valign="top" class="ar fw-n borderClass nowrap">"""
             picture_section = false
             line = line[1:end-1] # strip trailing colon
-            last_relation = get(relation_types, line, nothing)
-            if isnothing(last_relation)
+            last_relation = line
+            if last_relation ∉ relation_types
                 logerror(
                     "malweb_get_media_relations $medium $itemid could not parse relation $line",
                 )
@@ -832,11 +798,13 @@ function malweb_get_user(resource::Resource, username::String)
     end
 
     function info_panel(field)
-        extract(
-            r.body,
-            """<span class="user-status-title di-ib fl-l fw-b">$field</span><span class="user-status-data di-ib fl-r">""",
-            "</span>";
-            optional = true,
+        html_unescape(
+            extract(
+                r.body,
+                """<span class="user-status-title di-ib fl-l fw-b">$field</span><span class="user-status-data di-ib fl-r">""",
+                "</span>";
+                optional = true,
+            ),
         )
     end
 
@@ -917,23 +885,6 @@ Oxygen.@post "/anilist" function anilist_api(r::HTTP.Request)::HTTP.Response
     end
 end
 
-function anilist_date(x)
-    function getd(x, key, default)
-        y = get(x, key, default)
-        if isnothing(y)
-            return default
-        end
-        y
-    end
-    string(
-        getd(x, "year", ""),
-        "-",
-        getd(x, "month", ""),
-        "-",
-        getd(x, "date", getd(x, "day", "")),
-    )
-end
-
 function anilist_get_list(resource::Resource, userid::Int, medium::String, chunk::Int)
     url = "https://graphql.anilist.co"
     query = """
@@ -1006,17 +957,17 @@ function anilist_get_list(resource::Resource, userid::Int, medium::String, chunk
                     "status" => entry["status"],
                     "score" => entry["score"],
                     "progress" => entry["progress"],
-                    "progress_volumes" => entry["progressVolumes"],
+                    "progressVolumes" => entry["progressVolumes"],
                     "repeat" => entry["repeat"],
                     "priority" => entry["priority"],
                     "private" => entry["private"],
                     "notes" => entry["notes"],
                     "listnames" => String[],
                     "advancedScores" => entry["advancedScores"],
-                    "started_at" => anilist_date(entry["startedAt"]),
-                    "completed_at" => anilist_date(entry["completedAt"]),
-                    "updated_at" => entry["updatedAt"],
-                    "created_at" => entry["createdAt"],
+                    "startedAt" => entry["startedAt"],
+                    "completedAt" => entry["completedAt"],
+                    "updatedAt" => entry["updatedAt"],
+                    "createdAt" => entry["createdAt"],
                 )
             end
             if x["isCustomList"]
@@ -1062,6 +1013,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Int)
     {
         Media (id: \$id, type:\$MEDIA) {
             id
+            idMal
             title {
                 romaji
                 english
@@ -1200,15 +1152,16 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Int)
     details = Dict(
         "version" => API_VERSION,
         "anilistid" => data["id"],
-        "title" => optget(data["title"], "romaji"),
-        "english_title" => optget(data["title"], "english"),
-        "native_title" => optget(data["title"], "native"),
+        "malid" => data["idMal"],
+        "medium" => medium,
+        "title" => data["title"],
         "mediatype" => optget(data, "format"),
         "status" => optget(data, "status"),
         "summary" => optget(data, "description"),
-        "startdate" => anilist_date(optget(data, "startDate")),
-        "enddate" => anilist_date(optget(data, "endDate")),
-        "season" => season(optget(data, "seasonYear"), optget(data, "season")),
+        "startdate" => optget(data, "startDate"),
+        "enddate" => optget(data, "endDate"),
+        "seasonYear" => optget(data, "seasonYear"),
+        "season" => optget(data, "season"),
         "episodes" => optget(data, "episodes"),
         "duration" => optget(data, "duration"),
         "chapters" => optget(data, "chapters"),
@@ -1447,20 +1400,6 @@ Oxygen.@post "/kitsu" function kitsu_api(r::HTTP.Request)::HTTP.Response
     end
 end
 
-function kitsu_time(x)
-    if isnothing(x)
-        return nothing
-    end
-    try
-        return Dates.datetime2unix(
-            Dates.DateTime(x, Dates.dateformat"yyyy-mm-ddTHH:MM:SS.sssZ"),
-        )
-    catch
-        logerror("kitsu_time could not parse time $x")
-        return nothing
-    end
-end
-
 function kitsu_get_token(resource::Resource)
     credentials = rand(resource["credentials"])
     username = credentials["username"]
@@ -1468,6 +1407,7 @@ function kitsu_get_token(resource::Resource)
     url = "https://kitsu.app/api/oauth/token"
     body = Dict("grant_type" => "password", "username" => username, "password" => password)
     headers, content = encode(body, :json)
+    headers = Dict{String,Any}(headers)
     headers["impersonate"] = true
     r = request(resource, "POST", url, headers, content)
     if r.status >= 400
@@ -1477,7 +1417,7 @@ function kitsu_get_token(resource::Resource)
     data = JSON3.read(r.body)
     token = data["access_token"]
     expires_in = data["expires_in"]
-    expiry_time = Dates.datetime2unix(Dates.now()) + expires_in
+    expiry_time = time() + expires_in
     ret = Dict("token" => token, "expiry_time" => expiry_time)
     HTTP.Response(200, encode(ret, :json)...)
 end
@@ -1526,24 +1466,25 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
     end
     details = Dict(
         "version" => API_VERSION,
+        "medium" => medium,
         "kitsuid" => itemid,
-        "createdAt" => kitsu_time(data["createdAt"]),
-        "updatedAt" => kitsu_time(data["updatedAt"]),
-        "summary" => data["synopsis"],
-        "alttitles" => data["titles"],
-        "title" => data["canonicalTitle"],
-        "startdate" => data["startDate"],
-        "enddate" => data["endDate"],
-        "pgrating" => data["ageRating"],
+        "createdAt" => data["createdAt"],
+        "updatedAt" => data["updatedAt"],
+        "synopsis" => data["synopsis"],
+        "titles" => data["titles"],
+        "canonicalTitle" => data["canonicalTitle"],
+        "startDate" => data["startDate"],
+        "endDate" => data["endDate"],
+        "ageRating" => data["ageRating"],
         "ageRatingGuide" => data["ageRatingGuide"],
-        "type" => data["subtype"],
+        "subtype" => data["subtype"],
         "status" => data["status"],
-        "posterImage" => Dict(k => v for (k, v) in data["posterImage"] if k != :meta),
-        "coverImage" => Dict(k => v for (k, v) in data["posterImage"] if k != :meta),
-        "episodes" => optget(data, "episodeCount"),
-        "duration" => optget(data, "episodeLength"),
-        "chapters" => optget(data, "chapterCount"),
-        "volumes" => optget(data, "volumeCount"),
+        "posterImage" => data["posterImage"],
+        "coverImage" => data["coverImage"],
+        "episodeCount" => optget(data, "episodeCount"),
+        "episodeLength" => optget(data, "episodeLength"),
+        "chapterCount" => optget(data, "chapterCount"),
+        "volumeCount" => optget(data, "volumeCount"),
         "youtubeVideoId" => optget(data, "youtubeVideoId"),
         "nsfw" => optget(data, "nsfw"),
         "genres" => [
@@ -1560,7 +1501,6 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
             startswith(x["attributes"]["externalSite"], "anilist")
         ]),
     )
-
     relations = []
     for x in filter(r -> r["type"] == "mediaRelationships", json["included"])
         d = Dict(
@@ -1606,8 +1546,7 @@ function kitsu_get_list(
             ],
             ",",
         ),
-        "fields[users]" => "name,slug",
-        "include" => "user",
+        # "include" => "user", #TODO
         "filter[user_id]" => userid,
         "filter[kind]" => medium,
         "page[limit]" => 500,
@@ -1631,22 +1570,20 @@ function kitsu_get_list(
         d = Dict(
             "version" => API_VERSION,
             "userid" => userid,
-            "username" => only(json["included"])["attributes"]["name"],
-            "userslug" => only(json["included"])["attributes"]["slug"],
             "medium" => medium,
             "kitsuid" => parse(Int, x["id"]),
             "status" => x["attributes"]["status"],
             "progress" => x["attributes"]["progress"],
-            "progress_volumes" => optget(x["attributes"], "volumesOwned"),
-            "repeat" => x["attributes"]["reconsuming"],
-            "repeat_count" => x["attributes"]["reconsumeCount"],
+            "volumesOwned" => optget(x["attributes"], "volumesOwned"),
+            "reconsuming" => x["attributes"]["reconsuming"],
+            "reconsumeCount" => x["attributes"]["reconsumeCount"],
             "notes" => x["attributes"]["notes"],
             "private" => x["attributes"]["private"],
-            "updatedAt" => kitsu_time(optget(x["attributes"], "updatedAt")),
-            "created_at" => kitsu_time(optget(x["attributes"], "created_at")),
-            "started_at" => kitsu_time(optget(x["attributes"], "started_at")),
-            "completed_at" => kitsu_time(optget(x["attributes"], "completed_at")),
-            "progressedAt" => kitsu_time(optget(x["attributes"], "progressedAt")),
+            "updatedAt" => optget(x["attributes"], "updatedAt"),
+            "createdAt" => optget(x["attributes"], "createdAt"),
+            "startedAt" => optget(x["attributes"], "startedAt"),
+            "finishedAt" => optget(x["attributes"], "finishedAt"),
+            "progressedAt" => optget(x["attributes"], "progressedAt"),
             "reactionSkipped" => x["attributes"]["reactionSkipped"],
             "ratingTwenty" => kitsu_rating(optget(x["attributes"], "ratingTwenty")),
             "rating" => kitsu_rating(optget(x["attributes"], "rating")),
@@ -1846,12 +1783,9 @@ function animeplanet_get_list(
                 "medium" => medium,
                 "title" =>
                     html_unescape(extract(line, """<h3 class='cardName' >""", "</h3>")),
-                "url" => html_unescape(extract(prevline, """href="/$medium/""", '"')),
+                "url" => extract(prevline, """href="/$medium/""", '"'),
                 "score" => get_score(line),
-                "status" => parse(
-                    Int,
-                    html_unescape(extract(line, """<span class='status""", "'>")),
-                ),
+                "status" => parse(Int, extract(line, """<span class='status""", "'>")),
                 "progress" => get_progress(line),
                 "item_order" => item_order,
             )
@@ -1940,14 +1874,18 @@ function animeplanet_get_media(
 
     details = Dict(
         "version" => API_VERSION,
+        "medium" => medium,
         "url" => itemname,
-        "title" =>
+        "title" => html_unescape(
             extract(text, """<h1 itemprop="name".*?>""", "</h1>", optional = true),
-        "alttitle" => extract(
-            text,
-            """<h2 class="aka">(?s).*?Alt title:""",
-            "</h2>",
-            optional = true,
+        ),
+        "alttitle" => html_unescape(
+            extract(
+                text,
+                """<h2 class="aka">(?s).*?Alt title:""",
+                "</h2>",
+                optional = true,
+            ),
         ),
         "year" =>
             extract(text, """<span class='iconYear'>""", "</span>", optional = true),
@@ -2026,13 +1964,15 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
     ret = Dict(
         "version" => VERSION,
         "username" => username,
-        "about" =>
+        "about" => html_unescape(
             extract(text, """<section class="profBio userContent">""", "</section>"),
+        ),
         "joined" =>
             extract(text, """<i class="fa fa-calendar"></i>""", "<", optional = true),
         "age" => extract(text, """<i class="fa fa-user"></i>""", "<", optional = true),
-        "location" =>
+        "location" => html_unescape(
             extract(text, """<i class="fa fa-home"></i>""", "<", optional = true),
+        ),
         "anime_count" =>
             isempty(anime_counts) ? 0 : parse(Int, replace(first(anime_counts), "," => "")),
         "manga_count" =>
@@ -2117,4 +2057,4 @@ function animeplanet_get_feed(
     HTTP.Response(200, encode(ret, :json)...)
 end;
 
-Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing)
+Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, show_banner=false)
