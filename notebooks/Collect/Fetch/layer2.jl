@@ -592,7 +592,7 @@ function mal_get_media(resource::Resource, medium::String, itemid::Int)
     details = Dict(
         "version" => API_VERSION,
         "medium" => medium,
-        "malid" => json["id"],
+        "itemid" => json["id"],
         "title" => json["title"],
         "alternative_titles" => json["alternative_titles"],
         "start_date" => optget(json, "start_date"),
@@ -776,8 +776,8 @@ function malweb_get_media_relations(text::String, medium::String, itemid::Int)
             d = Dict(
                 "version" => API_VERSION,
                 "relation" => last_relation,
-                "source_id" => itemid,
-                "source_medium" => medium,
+                "itemid" => itemid,
+                "medium" => medium,
                 "target_id" => parse(Int, m_itemid),
                 "target_medium" => m_medium,
             )
@@ -891,9 +891,6 @@ function anilist_get_list(resource::Resource, userid::Int, medium::String, chunk
     query (\$userID: Int, \$MEDIA: MediaType, \$chunk: Int, \$perChunk: Int) {
         MediaListCollection (userId: \$userID, type: \$MEDIA, chunk: \$chunk, perChunk: \$perChunk) {
             hasNextChunk
-            user {
-                name
-            }        
             lists {
                 name
                 isCustomList
@@ -942,7 +939,6 @@ function anilist_get_list(resource::Resource, userid::Int, medium::String, chunk
         return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
-    username = json["data"]["MediaListCollection"]["user"]["name"]
     entries = Dict()
     for x in json["data"]["MediaListCollection"]["lists"]
         for entry in x["entries"]
@@ -951,9 +947,8 @@ function anilist_get_list(resource::Resource, userid::Int, medium::String, chunk
                 entries[key] = Dict(
                     "version" => API_VERSION,
                     "userid" => userid,
-                    "username" => username,
                     "medium" => medium,
-                    "anilistid" => entry["mediaId"],
+                    "itemid" => entry["mediaId"],
                     "status" => entry["status"],
                     "score" => entry["score"],
                     "progress" => entry["progress"],
@@ -1151,7 +1146,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Int)
     data = json["data"]["Media"]
     details = Dict(
         "version" => API_VERSION,
-        "anilistid" => data["id"],
+        "itemid" => data["id"],
         "malid" => data["idMal"],
         "medium" => medium,
         "title" => data["title"],
@@ -1194,7 +1189,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Int)
             Dict(
                 "rating" => x["rating"],
                 "medium" => x["mediaRecommendation"]["type"],
-                "anilistid" => x["mediaRecommendation"]["id"],
+                "itemid" => x["mediaRecommendation"]["id"],
             ) for x in get(data["recommendations"], "nodes", [])
         ],
         "isRecommendationBlocked" => optget(data, "isRecommendationBlocked"),
@@ -1206,8 +1201,8 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Int)
         d = Dict(
             "version" => API_VERSION,
             "relation" => e["relationType"],
-            "source_id" => itemid,
-            "source_media" => medium,
+            "itemid" => itemid,
+            "medium" => medium,
             "target_id" => e["node"]["id"],
             "target_media" => e["node"]["type"],
         )
@@ -1374,13 +1369,7 @@ Oxygen.@post "/kitsu" function kitsu_api(r::HTTP.Request)::HTTP.Response
     end
     try
         if endpoint == "list"
-            return kitsu_get_list(
-                resource,
-                data["auth"],
-                data["userid"],
-                data["medium"],
-                data["offset"],
-            )
+            return kitsu_get_list(resource, data["auth"], data["userid"], data["offset"])
         elseif endpoint == "media"
             return kitsu_get_media(resource, data["auth"], data["medium"], data["itemid"])
         elseif endpoint == "userid"
@@ -1467,7 +1456,7 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
     details = Dict(
         "version" => API_VERSION,
         "medium" => medium,
-        "kitsuid" => itemid,
+        "itemid" => itemid,
         "createdAt" => data["createdAt"],
         "updatedAt" => data["updatedAt"],
         "synopsis" => data["synopsis"],
@@ -1506,8 +1495,8 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
         d = Dict(
             "version" => API_VERSION,
             "relation" => x["attributes"]["role"],
-            "source_id" => itemid,
-            "source_media" => medium,
+            "itemid" => itemid,
+            "medium" => medium,
             "target_id" => parse(Int, x["relationships"]["destination"]["data"]["id"]),
             "target_media" => x["relationships"]["destination"]["data"]["type"],
         )
@@ -1521,34 +1510,12 @@ function kitsu_get_list(
     resource::Resource,
     auth::String,
     userid::Int,
-    medium::String,
     offset::Int,
 )
     url = "https://kitsu.io/api/edge/library-entries"
     params = Dict(
-        "fields[libraryEntries]" => join(
-            [
-                "ratingTwenty",
-                "rating",
-                "status",
-                "progress",
-                "volumesOwned",
-                "reconsuming",
-                "reconsumeCount",
-                "notes",
-                "private",
-                "reactionSkipped",
-                "progressedAt",
-                "updatedAt",
-                "createdAt",
-                "startedAt",
-                "finishedAt",
-            ],
-            ",",
-        ),
-        # "include" => "user", #TODO
         "filter[user_id]" => userid,
-        "filter[kind]" => medium,
+        "include" => "media",
         "page[limit]" => 500,
     )
     if offset > 0
@@ -1570,8 +1537,8 @@ function kitsu_get_list(
         d = Dict(
             "version" => API_VERSION,
             "userid" => userid,
-            "medium" => medium,
-            "kitsuid" => parse(Int, x["id"]),
+            "medium" => x["relationships"]["media"]["data"]["type"],
+            "itemid" => parse(Int, x["relationships"]["media"]["data"]["id"]),
             "status" => x["attributes"]["status"],
             "progress" => x["attributes"]["progress"],
             "volumesOwned" => optget(x["attributes"], "volumesOwned"),
@@ -1613,8 +1580,8 @@ function kitsu_get_user(resource::Resource, auth::String, userid::Int)
     ret = Dict(
         "version" => API_VERSION,
         "userid" => userid,
-        "createdAt" => kitsu_time(data["createdAt"]),
-        "updatedAt" => kitsu_time(data["updatedAt"]),
+        "createdAt" => data["createdAt"],
+        "updatedAt" => data["updatedAt"],
         "name" => data["name"],
         "pastNames" => data["pastNames"],
         "slug" => data["slug"],
@@ -1675,7 +1642,7 @@ Oxygen.@post "/animeplanet" function animeplanet_api(r::HTTP.Request)::HTTP.Resp
                 resource,
                 sessionid,
                 data["medium"],
-                data["itemname"],
+                data["itemid"],
             )
         elseif endpoint == "user"
             return animeplanet_get_user(resource, sessionid, data["username"])
@@ -1781,9 +1748,9 @@ function animeplanet_get_list(
                 "version" => API_VERSION,
                 "username" => username,
                 "medium" => medium,
+                "itemid" => extract(prevline, """href="/$medium/""", '"'),
                 "title" =>
                     html_unescape(extract(line, """<h3 class='cardName' >""", "</h3>")),
-                "url" => extract(prevline, """href="/$medium/""", '"'),
                 "score" => get_score(line),
                 "status" => parse(Int, extract(line, """<span class='status""", "'>")),
                 "progress" => get_progress(line),
@@ -1802,9 +1769,9 @@ function animeplanet_get_media(
     resource::Resource,
     sessionid::String,
     medium::String,
-    itemname::String,
+    itemid::String,
 )
-    url = "https://www.anime-planet.com/$medium/$itemname"
+    url = "https://www.anime-planet.com/$medium/$itemid"
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
     if r.status >= 400
         logstatus("animeplanet_get_media", r, url)
@@ -1812,7 +1779,7 @@ function animeplanet_get_media(
     end
     json = JSON3.read(r.body)
     text = json.result.content
-    if occursin("<h1>You searched for $itemname</h1>", text)
+    if occursin("<h1>You searched for $itemid</h1>", text)
         return HTTP.Response(404, [])
     end
     if !json["result"]["success"]
@@ -1875,7 +1842,7 @@ function animeplanet_get_media(
     details = Dict(
         "version" => API_VERSION,
         "medium" => medium,
-        "url" => itemname,
+        "itemid" => itemid,
         "title" => html_unescape(
             extract(text, """<h1 itemprop="name".*?>""", "</h1>", optional = true),
         ),
@@ -1912,8 +1879,8 @@ function animeplanet_get_media(
         d = Dict(
             "version" => API_VERSION,
             "relation" => "relation",
-            "source_id" => itemname,
-            "source_media" => medium,
+            "itemid" => itemid,
+            "medium" => medium,
             "target_id" => m.captures[2],
             "target_media" => m.captures[1],
         ) for m in eachmatch(
@@ -1962,7 +1929,7 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
         multiple = true,
     )
     ret = Dict(
-        "version" => VERSION,
+        "version" => API_VERSION,
         "username" => username,
         "about" => html_unescape(
             extract(text, """<section class="profBio userContent">""", "</section>"),
@@ -2008,7 +1975,7 @@ function animeplanet_get_username(resource::Resource, sessionid::String, userid:
         return HTTP.Response(401, [])
     end
     ret = Dict(
-        "version" => VERSION,
+        "version" => API_VERSION,
         "userid" => userid,
         "username" => extract(
             text,

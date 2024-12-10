@@ -18,4 +18,4 @@ function writelogs(filename, num_files, lines_per_file)
     end
 end
 
-writelogs(ARGS[1], 10, 10000)
+writelogs(ARGS[1], 1, 10000)

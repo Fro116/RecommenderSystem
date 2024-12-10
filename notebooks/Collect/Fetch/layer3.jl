@@ -187,18 +187,19 @@ Oxygen.@post "/mal_user" function mal_user(r::HTTP.Request)::HTTP.Response
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
     end
-    ret = Dict{String,Any}("user" => user_data)
+    items = []
     for m in ["manga", "anime"]
         if user_data["$(m)_count"] == 0
-            ret[m] = nothing
+            items[m] = nothing
             continue
         end
         list = retry(() -> get_mal_list(m, username))
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
-        ret[m] = list
+        append!(items, list)
     end
+    ret = Dict("user" => user_data, "items" => items)
     HTTP.Response(200, encode(ret, :json)...)
 end
 
@@ -313,23 +314,23 @@ Oxygen.@post "/anilist_user" function anilist_user(r::HTTP.Request)::HTTP.Respon
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
     end
-    ret = Dict{String,Any}("user" => user_data)
     seconds_in_day = 86400 # allow one day of fudge
     if data["last_accessed_at"] > user_data["updatedAt"] + seconds_in_day
-        ret["last_access_valid"] = true
+        ret = Dict("user" => user_data, "items" => nothing)
         return HTTP.Response(200, encode(ret, :json)...)
     end
+    items = []
     for m in ["manga", "anime"]
         if user_data["$(m)Count"] == 0
-            ret[m] = nothing
             continue
         end
         list = retry(() -> get_anilist_list(m, userid))
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
-        ret[m] = list
+        append!(items, list)
     end
+    ret = Dict("user" => user_data, "items" => items)
     HTTP.Response(200, encode(ret, :json)...)
 end
 
@@ -442,21 +443,27 @@ Oxygen.@post "/kitsu_user" function kitsu_user(r::HTTP.Request)::HTTP.Response
     end
     ret = Dict{String,Any}("user" => user_data)
     seconds_in_day = 86400 # allow one day of fudge
-    if data["last_accessed_at"] > user_data["updatedAt"] + seconds_in_day
-        ret["last_access_valid"] = true
+    updated_at = try
+        Dates.datetime2unix(
+            Dates.DateTime(user_data["updatedAt"], "yyyy-mm-ddTHH:MM:SS.sssZ"),
+        )
+    catch
+        logerror("""kitsu_user could not parse time $(user_data["updatedAt"])""")
+        nothing
+    end
+    if !isnothing(updated_at) && data["last_accessed_at"] > updated_at + seconds_in_day
+        ret = Dict("user" => user_data, "items" => nothing)
         return HTTP.Response(200, encode(ret, :json)...)
     end
-    for m in ["manga", "anime"]
-        if user_data["$(m)_count"] == 0
-            ret[m] = nothing
-            continue
-        end
-        list = retry(() -> get_kitsu_list(m, userid))
+    items = []
+    if (user_data["manga_count"] + user_data["anime_count"]) > 0
+        list = retry(() -> get_kitsu_list(userid))
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
-        ret[m] = list
+        append!(items, list)
     end
+    ret = Dict("user" => user_data, "items" => items)
     HTTP.Response(200, encode(ret, :json)...)
 end
 
@@ -495,7 +502,7 @@ function get_kitsu_user(userid::Int)
     end
 end
 
-function get_kitsu_list(medium::String, userid::Int)
+function get_kitsu_list(userid::Int)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
@@ -519,7 +526,6 @@ function get_kitsu_list(medium::String, userid::Int)
                     "endpoint" => "list",
                     "auth" => auth,
                     "userid" => userid,
-                    "medium" => medium,
                     "offset" => offset,
                 ),
             )
@@ -639,18 +645,18 @@ Oxygen.@post "/animeplanet_user" function animeplanet_user(r::HTTP.Request)::HTT
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
     end
-    ret = Dict{String,Any}("user" => user_data)
+    items = []
     for m in ["manga", "anime"]
         if user_data["$(m)_count"] == 0
-            ret[m] = nothing
             continue
         end
         list = retry(() -> get_animeplanet_list(m, username))
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
-        ret[m] = list
+        append!(items, list)
     end
+    ret = Dict("user" => user_data, "items" => items)
     HTTP.Response(200, encode(ret, :json)...)
 end
 
@@ -745,7 +751,7 @@ function get_animeplanet_list(medium::String, username::String)
             end
             expand_pagelimit = false
             for x in data["entries"]
-                x["updated_at"] = get(feed, x["url"], nothing)
+                x["updated_at"] = get(feed, x["itemid"], nothing)
             end
             append!(entries, data["entries"])
             if !data["next"]
@@ -761,15 +767,15 @@ end
 Oxygen.@post "/animeplanet_media" function animeplanet_media(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     medium = data["medium"]
-    itemname = data["itemname"]
-    data = retry(() -> get_animeplanet_media(medium, itemname))
+    itemid = data["itemid"]
+    data = retry(() -> get_animeplanet_media(medium, itemid))
     if isa(data, Errors)
-        return HTTP.Response(Int(details), [])
+        return HTTP.Response(Int(data), [])
     end
     HTTP.Response(200, encode(data, :json)...)
 end
 
-function get_animeplanet_media(medium::String, itemname::String)
+function get_animeplanet_media(medium::String, itemid::String)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
@@ -787,7 +793,7 @@ function get_animeplanet_media(medium::String, itemname::String)
                 "sessionid" => sessionid,
                 "endpoint" => "media",
                 "medium" => medium,
-                "itemname" => itemname,
+                "itemid" => itemid,
             ),
         )
         if s.status == 401
