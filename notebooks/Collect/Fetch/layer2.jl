@@ -1719,7 +1719,7 @@ function animeplanet_get_list(
         if isempty(matches)
             return nothing
         end
-        2 * parse(Float64, only(matches))
+        parse(Float64, only(matches))
     end
 
     function get_progress(line)

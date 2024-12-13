@@ -52,7 +52,8 @@ CREATE TABLE mal_user_items (
     score BIGINT,
     repeat_col BOOLEAN,
     tags TEXT,
-    num_volumes_read BIGINT
+    num_volumes_read BIGINT,
+    db_junction_last_changed_at DOUBLE PRECISION
 );
 
 CREATE TABLE mal_media (
@@ -99,7 +100,8 @@ CREATE TABLE mal_media_relations (
     target_id BIGINT,
     target_medium TEXT,
     relation TEXT,
-    version TEXT
+    version TEXT,
+    db_junction_last_changed_at DOUBLE PRECISION
 );
 
 CREATE TABLE anilist_users (
@@ -151,8 +153,9 @@ CREATE TABLE anilist_user_items (
     completedAt TEXT,
     updatedAt BIGINT,
     listnames TEXT,
-    score BIGINT,
-    startedAt TEXT
+    score DOUBLE PRECISION,
+    startedAt TEXT,
+    db_junction_last_changed_at DOUBLE PRECISION
 );
 
 CREATE TABLE anilist_media (
@@ -207,10 +210,11 @@ CREATE TABLE anilist_media (
 CREATE TABLE anilist_media_relations (
     itemid BIGINT,
     medium TEXT,
-    target_media TEXT,
+    target_medium TEXT,
     target_id BIGINT,
     relation TEXT,
-    version TEXT
+    version TEXT,
+    db_junction_last_changed_at DOUBLE PRECISION
 );
 
 CREATE TABLE kitsu_users (
@@ -273,7 +277,8 @@ CREATE TABLE kitsu_user_items (
     startedAt TEXT,
     ratingTwenty BIGINT,
     volumesOwned BIGINT,
-    reconsumeCount BIGINT
+    reconsumeCount BIGINT,
+    db_junction_last_changed_at DOUBLE PRECISION
 );
 
 CREATE TABLE kitsu_media (
@@ -315,10 +320,11 @@ CREATE TABLE kitsu_media (
 CREATE TABLE kitsu_media_relations (
     itemid BIGINT,
     medium TEXT,
-    target_media TEXT,
+    target_medium TEXT,
     target_id BIGINT,
     relation TEXT,
-    version TEXT
+    version TEXT,
+    db_junction_last_changed_at DOUBLE PRECISION
 );
 
 CREATE TABLE animeplanet_userids (
@@ -356,14 +362,15 @@ CREATE TABLE animeplanet_users (
 CREATE TABLE animeplanet_user_items (
     medium TEXT,
     itemid TEXT,
-    score BIGINT,
+    score DOUBLE PRECISION,
     status BIGINT,
     progress BIGINT,
     username TEXT,
     title TEXT,
     updated_at BIGINT,
     version TEXT,
-    item_order BIGINT
+    item_order BIGINT,
+    db_junction_last_changed_at DOUBLE PRECISION
 );
 
 CREATE TABLE animeplanet_media (
@@ -392,8 +399,9 @@ CREATE TABLE animeplanet_media (
 CREATE TABLE animeplanet_media_relations (
     itemid TEXT,
     medium TEXT,
-    target_media TEXT,
+    target_medium TEXT,
     target_id TEXT,
     relation TEXT,
-    version TEXT
+    version TEXT,
+    db_junction_last_changed_at DOUBLE PRECISION
 );
