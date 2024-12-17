@@ -1,4 +1,5 @@
 import Dates
+import DataFrames
 import LibPQ
 import SHA
 import JSON3
@@ -18,43 +19,75 @@ function get_db_connection()
     end
 end
 
-function logerror(x::String)
+function logtag(tag::String, x::String)
     lock(STDOUT_LOCK) do
-        println("$(Dates.now()) [ERROR] $x")
+        println("$(Dates.now()) [$tag] $x")
     end
 end
+logerror(x::String) = logtag("ERROR", x)
 
-function loginfo(x::String)
-    lock(STDOUT_LOCK) do
-        println("$(Dates.now()) [INFO] $x")
-    end
-end
 
 const STDOUT_LOCK = ReentrantLock()
-const DB_CONNECTION = get_db_connection()
-const DB_CONNECTION_LOCK = ReentrantLock()
-const DB_PREPARED_STATEMENTS = Dict{String, LibPQ.Statement}()
 
-function with_db_connection(f)
-    lock(DB_CONNECTION_LOCK) do
-        try
-            LibPQ.execute(DB_CONNECTION, "BEGIN;")
-            x = f(DB_CONNECTION)
-            LibPQ.execute(DB_CONNECTION, "END;")
-            return x
-        catch e
-            logerror("with_db_connection connection error $e")
-            LibPQ.reset!(DB_CONNECTION; throw_error = false)
-            empty!(DB_PREPARED_STATEMENTS)
+struct Database
+    conn::LibPQ.Connection
+    lock::ReentrantLock
+    prepared_statements::Dict{String,LibPQ.Statement}
+end
+
+const DATABASES = Dict(
+    :update => Dict(
+        :databases => [Database(get_db_connection(), ReentrantLock(), Dict())],
+        :lock => ReentrantLock(),
+        :index => 1,
+    ),
+    :prioritize => Dict(
+        :databases => [Database(get_db_connection(), ReentrantLock(), Dict())],
+        :lock => ReentrantLock(),
+        :index => 1,
+    ),
+    :background => Dict(
+        :databases => [Database(get_db_connection(), ReentrantLock(), Dict())],
+        :lock => ReentrantLock(),
+        :index => 1,
+    ),
+)
+const DATABASE_LOCK = ReentrantLock();
+
+function with_db(f, conntype::Symbol)
+    db = let
+        dbs = DATABASES[conntype]
+        lock(dbs[:lock]) do
+            db = dbs[:databases][dbs[:index]]
+            dbs[:index] = (dbs[:index] % length(dbs[:databases])) + 1
+        end
+        db
+    end
+    lock(db.lock) do
+        while true
+            try
+                LibPQ.execute(db.conn, "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;")
+                x = f(db)
+                LibPQ.execute(db.conn, "END;")
+                return x
+            catch e
+                if e isa LibPQ.Errors.SerializationFailure
+                    continue
+                end
+                logerror("with_db connection error $e")
+                LibPQ.reset!(db.conn; throw_error = false)
+                empty!(db.prepared_statements)
+                return
+            end
         end
     end
 end
 
-function db_prepare(conn, query)
-    if query ∉ keys(DB_PREPARED_STATEMENTS)
-        DB_PREPARED_STATEMENTS[query] = LibPQ.prepare(conn, query)
+function db_prepare(db::Database, query::String)
+    if query ∉ keys(db.prepared_statements)
+        db.prepared_statements[query] = LibPQ.prepare(db.conn, query)
     end
-    return DB_PREPARED_STATEMENTS[query]
+    db.prepared_statements[query]
 end
 
 function canonical_hash(d::AbstractDict)
@@ -77,7 +110,7 @@ end
 normalize(d::AbstractVector) = [normalize(x) for x in d]
 
 function db_upsert(
-    conn::LibPQ.Connection,
+    db::Database,
     table::String,
     idcols::Vector{String},
     data::Dict,
@@ -92,23 +125,22 @@ function db_upsert(
     conflict_rules =
         merge(Dict(c => c * " = EXCLUDED." * c for c in cols if c ∉ idcols), conflict_rules)
     update_assignments = join(collect(values(conflict_rules)), ", ")
-    stmt = db_prepare(conn,
-        """
+    query = """
         INSERT INTO $table ($col_str) VALUES ($placeholders)
         ON CONFLICT ($idcol_str) DO UPDATE SET $update_assignments;
         """
-    )
-    LibPQ.execute(stmt, vals; binary_format=true)
+    stmt = db_prepare(db, query)
+    LibPQ.execute(stmt, vals; binary_format = true)
 end;
 
 function db_update_single_table(
     table::String,
     idcol::String,
     idval::Union{String,Int},
-    data::Dict,
+    data::Union{Dict,Nothing},
     success::Bool,
 )
-    with_db_connection() do conn
+    with_db(:update) do db
         curtime = time()
         if !success
             failure_data = Dict(
@@ -117,7 +149,7 @@ function db_update_single_table(
                 "db_consecutive_failures" => 1,
             )
             db_upsert(
-                conn,
+                db,
                 table,
                 [idcol],
                 failure_data,
@@ -130,16 +162,15 @@ function db_update_single_table(
         hash = canonical_hash(data)
         let
             col_str = join([idcol, "db_entry_hash"], ", ")
-            stmt = db_prepare(conn,
-                """
+            query = """
                 UPDATE $table
                 SET db_refreshed_at = \$1,
                 db_last_success_at = \$1,
                 db_consecutive_failures = 0
                 WHERE ($col_str) = (\$2, \$3);
                 """
-            )
-            refresh = LibPQ.execute(stmt, (curtime, idval, hash); binary_format=true)
+            stmt = db_prepare(db, query)
+            refresh = LibPQ.execute(stmt, (curtime, idval, hash); binary_format = true)
             if LibPQ.num_affected_rows(refresh) > 0
                 return
             end
@@ -151,7 +182,185 @@ function db_update_single_table(
             "db_last_success_at" => curtime,
             "db_consecutive_failures" => 0,
         )
-        db_upsert(conn, table, [idcol], merge(data, db_metadata))
+        db_upsert(db, table, [idcol], merge(data, db_metadata))
+    end
+end
+
+db_hash(idcol::String) = """('x' || substr(md5($idcol::text), 1, 16))::bit(64)::bigint"""
+db_hash(idcols::Vector{String}) = db_hash(idcols[end])
+
+function db_prioritize_single_table(
+    table::String,
+    idcol::String,
+    N::Int,
+    partition::Tuple{Int,Int},
+)
+    with_db(:prioritize) do db
+        partition_index, num_partitions = partition
+        @assert 0 <= partition_index < num_partitions
+        query = """
+            SELECT $idcol FROM $table
+            WHERE $(db_hash(idcol)) % \$1 = \$2
+            ORDER BY db_refreshed_at ASC LIMIT \$3;
+            """
+        stmt = db_prepare(db, query)
+        vals = tuple(num_partitions, partition_index, N)
+        oldest_items = DataFrames.DataFrame(LibPQ.execute(stmt, vals; binary_format = true))
+        query = """
+            SELECT $idcol FROM $table
+            WHERE db_refreshed_at IS NULL
+            AND $(db_hash(idcol)) % \$1 = \$2
+            ORDER BY RANDOM()
+            LIMIT \$3;
+            """
+        stmt = db_prepare(db, query)
+        vals = tuple(num_partitions, partition_index, N)
+        new_items = DataFrames.DataFrame(LibPQ.execute(stmt, vals; binary_format = true))
+        unique(vcat(oldest_items, new_items))
+    end
+end
+
+function db_expand_range(table::String, idcol::String, N::Int, partition::Tuple{Int,Int})
+    with_db(:prioritize) do db
+        partition_index, num_partitions = partition
+        @assert 0 <= partition_index < num_partitions
+        query = """
+            SELECT MAX($idcol) AS maxid FROM $table
+            WHERE db_consecutive_failures = 0
+            """
+        stmt = db_prepare(db, query)
+        df = DataFrames.DataFrame(LibPQ.execute(stmt))
+        maxid = coalesce(df.maxid..., 0)
+        query = """
+            SELECT g.$idcol
+            FROM generate_series(\$1::bigint, \$1 + \$2) g($idcol)
+            WHERE $(db_hash(idcol)) % \$3 = \$4
+            ORDER BY RANDOM()
+            LIMIT \$5;
+            """
+        stmt = db_prepare(db, query)
+        vals = tuple(maxid, 10000, num_partitions, partition_index, N)
+        DataFrames.DataFrame(LibPQ.execute(stmt, vals; binary_format = true))
+    end
+end
+
+function db_insert_missing(table::String, idcol::String, N::Int)
+    with_db(:background) do db
+        query = """
+            SELECT MAX($idcol) AS maxid FROM $table
+            WHERE db_consecutive_failures = 0
+            """
+        stmt = db_prepare(db, query)
+        df = DataFrames.DataFrame(LibPQ.execute(stmt))
+        maxid = coalesce(df.maxid..., 0)
+        query = """
+            SELECT $idcol
+            FROM generate_series(1, \$1) AS $idcol
+            EXCEPT SELECT $idcol FROM $table
+            LIMIT \$2;
+            """
+        stmt = db_prepare(db, query)
+        missing_ids =
+            DataFrames.DataFrame(LibPQ.execute(stmt, tuple(maxid, N); binary_format = true))[
+                :,
+                idcol,
+            ]
+        query = """
+            INSERT INTO $table ($idcol) VALUES (\$1)
+            ON CONFLICT DO NOTHING;
+            """
+        stmt = db_prepare(db, query)
+        for x in missing_ids
+            LibPQ.execute(stmt, tuple(x); binary_format = true)
+        end
+        length(missing_ids) == N
+    end
+end
+
+function db_infill_range(table::String, idcol::String, N::Int, partition::Tuple{Int,Int})
+    with_db(:prioritize) do db
+        partition_index, num_partitions = partition
+        @assert 0 <= partition_index < num_partitions
+
+    end
+end
+
+function db_monitor_single_table(table::String, idcol::String)
+    with_db(:background) do db
+        curtime = time()
+        day = 86400.0
+        entries = []
+        function run(name::String, query::String, params::Union{Tuple,Nothing})
+            stmt = db_prepare(db, query)
+            if !isnothing(params)
+                r = LibPQ.execute(stmt, params; binary_format = true)
+            else
+                r = LibPQ.execute(stmt)
+            end
+            df = DataFrames.DataFrame(r)
+            df[!, "name"] = [name]
+            push!(entries, df)
+        end
+        run(
+            "success_frac",
+            """
+            SELECT SUM(CASE WHEN db_consecutive_failures = 0 THEN 1 ELSE 0 END)::float / COUNT(*)
+            AS value FROM $table
+            """,
+            nothing,
+        )
+        run(
+            "daily_throughput",
+            """
+            SELECT COUNT(*) AS value FROM $table
+            WHERE \$1 - db_refreshed_at < \$2
+            """,
+            tuple(curtime, day),
+        )
+        run(
+            "oldest_days",
+            """
+            SELECT (\$1 - MIN(db_refreshed_at)) / \$2 AS value FROM $table
+            """,
+            tuple(curtime, 86400),
+        )
+        run(
+            "max_id",
+            """
+            SELECT MAX($idcol) AS value FROM $table
+            WHERE db_consecutive_failures = 0
+            """,
+            nothing,
+        )
+        run(
+            "count",
+            """
+            SELECT COUNT(*) AS value FROM $table
+            """,
+            nothing,
+        )
+        vcat(entries...)
+    end
+end
+
+function db_gc_single_table(table::String, idcol::String, N::Int)
+    with_db(:background) do db
+        curtime = time()
+        day = 86400.0
+        year = 365 * day
+        month = year / 12
+        query = """
+            WITH todelete AS (
+                SELECT $idcol FROM $table
+                WHERE db_consecutive_failures >= \$1
+                AND \$2 - db_last_success_at >= \$3
+                ORDER BY db_last_success_at ASC LIMIT \$4
+            )
+            DELETE FROM $table WHERE $idcol IN (SELECT $idcol FROM todelete);
+        """
+        stmt = db_prepare(db, query)
+        r = LibPQ.execute(stmt, tuple(3, curtime, month, N); binary_format = true)
+        LibPQ.num_affected_rows(r) == N
     end
 end
 
@@ -164,7 +373,7 @@ function db_update_junction_table(
     junction_data::Union{Vector,Nothing},
     success::Bool,
 )
-    with_db_connection() do conn
+    with_db(:update) do db
         curtime = time()
         if !success
             failure_data = Dict(
@@ -173,7 +382,7 @@ function db_update_junction_table(
                 "db_consecutive_failures" => 1,
             )
             db_upsert(
-                conn,
+                db,
                 primary_table,
                 idcols,
                 failure_data,
@@ -184,55 +393,16 @@ function db_update_junction_table(
             return
         end
         primary_hash = canonical_hash(primary_data)
-        if isnothing(junction_data)
-            let
-                col_list = [idcols..., "db_primary_hash"]
-                col_str = join(col_list, ", ")
-                placeholders = join(["\$" * string(i + 1) for i = 1:length(col_list)], ", ")
-                stmt = db_prepare(conn,
-                    """
-                    UPDATE $primary_table
-                    SET db_refreshed_at = \$1,
-                    db_last_success_at = \$1,
-                    db_consecutive_failures = 0
-                    WHERE ($col_str) = ($placeholders);
-                    """
-                )
-                refresh = LibPQ.execute(stmt, (curtime, idvals..., primary_hash); binary_format=true)
-                if LibPQ.num_affected_rows(refresh) > 0
-                    return
-                end
-            end
-            db_metadata = Dict(
-                "db_refreshed_at" => curtime,
-                "db_primary_last_changed_at" => curtime,
-                "db_primary_hash" => primary_hash,
-                "db_last_success_at" => curtime,
-                "db_consecutive_failures" => 0,
-            )
-            db_upsert(conn, primary_table, idcols, merge(primary_data, db_metadata))
-            return
-        end
         junction_hash = canonical_hash(junction_data)
         junction_data = normalize(junction_data)
-        let
-            col_list = [idcols..., "db_primary_hash", "db_junction_hash"]
-            col_str = join(col_list, ", ")
-            placeholders = join(["\$" * string(i + 1) for i = 1:length(col_list)], ", ")
-            stmt = db_prepare(conn,
-                """
-                UPDATE $primary_table
-                SET db_refreshed_at = \$1,
-                db_last_success_at = \$1,
-                db_consecutive_failures = 0
-                WHERE ($col_str) = ($placeholders);
-                """
-            )
-            refresh = LibPQ.execute(stmt, (curtime, idvals..., primary_hash, junction_hash); binary_format=true)
-            if LibPQ.num_affected_rows(refresh) > 0
-                return
-            end
-        end
+        col_str = join(idcols, ", ")
+        placeholders = join(["\$" * string(i) for i = 1:length(idcols)], ", ")
+        query = """
+            SELECT db_primary_hash, db_junction_hash FROM $primary_table
+            WHERE ($col_str) = ($placeholders);
+            """
+        stmt = db_prepare(db, query)
+        df = DataFrames.DataFrame(LibPQ.execute(stmt, (idvals...,); binary_format = true))
         db_metadata = Dict(
             "db_refreshed_at" => curtime,
             "db_primary_last_changed_at" => curtime,
@@ -242,19 +412,270 @@ function db_update_junction_table(
             "db_last_success_at" => curtime,
             "db_consecutive_failures" => 0,
         )
-        db_upsert(conn, primary_table, idcols, merge(primary_data, db_metadata))
-        if length(junction_data) > 0
-            junction_data = convert(Vector{Dict{String, Any}}, junction_data)
-            for x in junction_data
-                x["db_junction_last_changed_at"] = curtime
+        if DataFrames.nrow(df) > 0
+            if only(df.db_primary_hash) == primary_hash
+                delete!(db_metadata, "db_primary_last_changed_at")
             end
+            if only(df.db_junction_hash) == junction_hash
+                delete!(db_metadata, "db_junction_last_changed_at")
+            end
+        end
+        db_upsert(db, primary_table, idcols, merge(primary_data, db_metadata))
+        let
+            col_str = join(idcols, ", ")
+            placeholders = join(["\$" * string(i) for i = 1:length(idcols)], ", ")
+            query = "DELETE FROM $junction_table WHERE ($col_str) = ($placeholders);"
+            stmt = db_prepare(db, query)
+            LibPQ.execute(stmt, (idvals...,); binary_format = true)
+        end
+        if length(junction_data) > 0
             col_list = collect(keys(first(junction_data)))
             col_str = join(col_list, ", ")
             placeholders = join(["\$" * string(i) for i = 1:length(col_list)], ", ")
-            stmt = db_prepare(conn,"INSERT INTO $junction_table ($col_str) VALUES ($placeholders);")
+            query = "INSERT INTO $junction_table ($col_str) VALUES ($placeholders);"
+            stmt = db_prepare(db, query)
             for x in junction_data
-                LibPQ.execute(stmt, Tuple(x[k] for k in col_list); binary_format=true)
+                LibPQ.execute(stmt, Tuple(x[k] for k in col_list); binary_format = true)
             end
         end
+    end
+end
+
+function db_prioritize_junction_table(
+    primary_table::String,
+    idcols::Vector{String},
+    tscol::String,
+    N::Int,
+    partition::Tuple{Int,Int},
+)
+    with_db(:prioritize) do db
+        curtime = time()
+        partition_index, num_partitions = partition
+        @assert 0 <= partition_index < num_partitions
+        entries = []
+        function run(query::String, params::Tuple)
+            stmt = db_prepare(db, query)
+            r = LibPQ.execute(stmt, params; binary_format = true)
+            push!(entries, DataFrames.DataFrame(r))
+        end
+        run(
+            """
+            SELECT $(join(idcols, ", ")) FROM $primary_table
+            WHERE db_refreshed_at IS NULL
+            AND $(db_hash(idcols)) % \$1 = \$2
+            ORDER BY RANDOM() ASC LIMIT \$3;
+            """,
+            tuple(num_partitions, partition_index, N),
+        )
+        day = 86400.0
+        week = 7 * day
+        year = 365 * day
+        month = year / 12
+        quarter = year / 4
+        time_query = """
+            SELECT $(join(idcols, ", ")) FROM $primary_table
+            WHERE db_refreshed_at - $tscol < \$1
+            AND \$2 - db_refreshed_at > \$3
+            AND $(db_hash(idcols)) % \$4 = \$5
+            ORDER BY db_refreshed_at ASC LIMIT \$6;
+            """
+        run(time_query, tuple(week, curtime, day, num_partitions, partition_index, N))
+        run(time_query, tuple(month, curtime, week, num_partitions, partition_index, N))
+        run(time_query, tuple(quarter, curtime, month, num_partitions, partition_index, N))
+        run(time_query, tuple(year, curtime, quarter, num_partitions, partition_index, N))
+        run(
+            """
+            SELECT $(join(idcols, ", ")) FROM $primary_table
+            WHERE (db_consecutive_failures < \$1 OR \$2 - db_last_success_at < \$3)
+            AND $(db_hash(idcols)) % \$4 = \$5
+            ORDER BY db_refreshed_at ASC LIMIT \$6;
+            """,
+            tuple(3, curtime, month, num_partitions, partition_index, N),
+        )
+        run(
+            """
+            SELECT $(join(idcols, ", ")) FROM $primary_table
+            WHERE db_consecutive_failures >= \$1
+            AND \$2 - db_last_success_at >= \$3
+            AND \$2 - db_refreshed_at > \$4
+            AND $(db_hash(idcols)) % \$5 = \$6
+            ORDER BY db_refreshed_at ASC LIMIT \$7;
+            """,
+            tuple(3, curtime, month, quarter, num_partitions, partition_index, N),
+        )
+        unique(vcat(entries...))
+    end
+end
+
+function db_monitor_junction_table(primary_table::String, tscol::String)
+    with_db(:background) do db
+        curtime = time()
+        day = 86400.0
+        week = 7 * day
+        year = 365 * day
+        month = year / 12
+        quarter = year / 4
+        entries = []
+        function run(name::String, query::String, params::Union{Tuple,Nothing})
+            stmt = db_prepare(db, query)
+            if !isnothing(params)
+                r = LibPQ.execute(stmt, params; binary_format = true)
+            else
+                r = LibPQ.execute(stmt)
+            end
+            df = DataFrames.DataFrame(r)
+            df[!, "name"] = [name]
+            push!(entries, df)
+        end
+        run(
+            "success_frac",
+            """
+            SELECT SUM(CASE WHEN db_consecutive_failures = 0 THEN 1 ELSE 0 END)::float / COUNT(*)
+            AS value FROM $primary_table
+            """,
+            nothing,
+        )
+        run(
+            "daily_throughput",
+            """
+            SELECT COUNT(*) AS value FROM $primary_table
+            WHERE \$1 - db_refreshed_at < \$2
+            """,
+            tuple(curtime, day),
+        )
+        run(
+            "oldest_success",
+            """
+            SELECT (\$1 - MIN(db_refreshed_at)) / \$2 AS value FROM $primary_table
+            WHERE db_consecutive_failures = \$3;
+            """,
+            tuple(curtime, 86400, 0),
+        )
+        run(
+            "oldest_failure",
+            """
+            SELECT (\$1 - MIN(db_refreshed_at)) / \$2 AS value FROM $primary_table
+            WHERE db_consecutive_failures != \$3;
+            """,
+            tuple(curtime, 86400, 0),
+        )
+        run(
+            "new_items",
+            """
+            SELECT COUNT(*) AS value FROM $primary_table
+            WHERE db_refreshed_at IS NULL;
+            """,
+            nothing,
+        )
+        time_query = """
+            SELECT COUNT(*) AS value FROM $primary_table
+            WHERE db_refreshed_at - $tscol < \$1
+            AND \$2 - db_refreshed_at > \$3;
+            """
+        run("daily_refresh_items", time_query, tuple(week, curtime, day))
+        run("weekly_refresh_items", time_query, tuple(month, curtime, week))
+        run("monthly_refresh_items", time_query, tuple(quarter, curtime, month))
+        run("quarterly_refresh_items", time_query, tuple(year, curtime, quarter))
+        run(
+            "valid_items",
+            """
+            SELECT COUNT(*) AS value FROM $primary_table
+            WHERE db_consecutive_failures < \$1
+            OR \$2 - db_last_success_at < \$3;
+            """,
+            tuple(3, curtime, month),
+        )
+        run(
+            "invalid_items",
+            """
+            SELECT COUNT(*) AS value FROM $primary_table
+            WHERE db_consecutive_failures >= \$1
+            AND \$2 - db_last_success_at >= \$3;
+            """,
+            tuple(3, curtime, month),
+        )
+        vcat(entries...)
+    end
+end
+
+function db_insert_source(
+    primary_table::String,
+    source_table::String,
+    idcols::Vector{String},
+    N::Int,
+)
+    with_db(:background) do db
+        col_str = join(idcols, ", ")
+        query = """
+            INSERT INTO $primary_table ($col_str)
+            SELECT DISTINCT $col_str FROM $source_table
+            EXCEPT SELECT $col_str FROM $primary_table
+            LIMIT \$1;
+            """
+        stmt = db_prepare(db, query)
+        r = LibPQ.execute(stmt, (N,); binary_format = true)
+        LibPQ.num_affected_rows(r) == N
+    end
+end
+
+function db_gc_junction_table(
+    primary_table::String,
+    junction_table::String,
+    source_table::String,
+    idcol::String,
+    source_key::String,
+    N::Int,
+)
+    with_db(:background) do db
+        query = """
+            SELECT $idcol FROM $primary_table WHERE $source_key IS NOT NULL
+            EXCEPT SELECT $idcol FROM $source_table
+            LIMIT \$1;
+            """
+        stmt = db_prepare(db, query)
+        r = DataFrames.DataFrame(LibPQ.execute(stmt, (N,); binary_format = true))
+        for x in r[:, idcol]
+            for table in [primary_table, junction_table]
+                query = "DELETE FROM $table WHERE $idcol = \$1"
+                stmt = db_prepare(db, query)
+                LibPQ.execute(stmt, (x,); binary_format = true)
+            end
+        end
+        DataFrames.nrow(r) == N
+    end
+end
+
+function db_gc_junction_table(
+    primary_table::String,
+    junction_table::String,
+    idcols::Vector{String},
+    N::Int,
+)
+    with_db(:background) do db
+        curtime = time()
+        day = 86400.0
+        year = 365 * day
+        month = year / 12
+        col_str = join(idcols, ", ")
+        query = """
+            SELECT $col_str FROM $primary_table
+            WHERE db_consecutive_failures >= \$1
+            AND \$2 - db_last_success_at >= \$3
+            LIMIT \$4;
+            """
+        stmt = db_prepare(db, query)
+        df = DataFrames.DataFrame(
+            LibPQ.execute(stmt, tuple(3, curtime, month, N); binary_format = true),
+        )
+        for i = 1:DataFrames.nrow(df)
+            vals = [df[i, x] for x in idcols]
+            placeholders = join(["\$" * string(i) for i = 1:length(vals)], ", ")
+            for table in [primary_table, junction_table]
+                query = "DELETE FROM $table WHERE ($col_str) = ($placeholders);"
+                stmt = db_prepare(db, query)
+                LibPQ.execute(stmt, (vals...,); binary_format = true)
+            end
+        end
+        DataFrames.nrow(df) == N
     end
 end

@@ -8,6 +8,8 @@ import JSON3
 import Oxygen
 import UUIDs
 
+include("http.jl")
+
 const STDOUT_LOCK = ReentrantLock()
 
 function logerror(x::String)
@@ -20,24 +22,6 @@ struct Response
     status::Int
     body::Vector{UInt8}
     headers::Dict{String,String}
-end
-
-function encode(d::Dict, encoding::Symbol)
-    if encoding == :json
-        headers = Dict("Content-Type" => "application/json")
-        body = Vector{UInt8}(JSON3.write(d))
-    else
-        @assert false
-    end
-    headers, body
-end
-
-function decode(r::HTTP.Message)::Dict
-    if HTTP.headercontains(r, "Content-Type", "application/json")
-        return JSON3.read(String(r.body), Dict{String,Any})
-    else
-        @assert false
-    end
 end
 
 function decode(r::Response)::Dict
@@ -199,7 +183,8 @@ Oxygen.@post "/mal_user" function mal_user(r::HTTP.Request)::HTTP.Response
         end
         append!(items, list)
     end
-    ret = Dict("user" => user_data, "items" => items)
+    userid_data = Dict([x => user_data[x] for x in ["username", "userid", "version"]]...)
+    ret = Dict("user" => user_data, "items" => items, "userid" => userid_data)
     HTTP.Response(200, encode(ret, :json)...)
 end
 
@@ -313,11 +298,6 @@ Oxygen.@post "/anilist_user" function anilist_user(r::HTTP.Request)::HTTP.Respon
     user_data = retry(() -> get_anilist_user(userid))
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
-    end
-    seconds_in_day = 86400 # allow one day of fudge
-    if data["last_accessed_at"] > user_data["updatedAt"] + seconds_in_day
-        ret = Dict("user" => user_data, "items" => nothing)
-        return HTTP.Response(200, encode(ret, :json)...)
     end
     items = []
     for m in ["manga", "anime"]
@@ -450,10 +430,6 @@ Oxygen.@post "/kitsu_user" function kitsu_user(r::HTTP.Request)::HTTP.Response
     catch
         logerror("""kitsu_user could not parse time $(user_data["updatedAt"])""")
         nothing
-    end
-    if !isnothing(updated_at) && data["last_accessed_at"] > updated_at + seconds_in_day
-        ret = Dict("user" => user_data, "items" => nothing)
-        return HTTP.Response(200, encode(ret, :json)...)
     end
     items = []
     if (user_data["manga_count"] + user_data["anime_count"]) > 0
@@ -656,7 +632,8 @@ Oxygen.@post "/animeplanet_user" function animeplanet_user(r::HTTP.Request)::HTT
         end
         append!(items, list)
     end
-    ret = Dict("user" => user_data, "items" => items)
+    userid_data = Dict([x => user_data[x] for x in ["username", "userid", "version"]]...)
+    ret = Dict("user" => user_data, "items" => items, "userid" => userid_data)
     HTTP.Response(200, encode(ret, :json)...)
 end
 
@@ -808,4 +785,4 @@ function get_animeplanet_media(medium::String, itemid::String)
     end
 end
 
-Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, show_banner=false)
+Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, metrics=false, show_banner=false)

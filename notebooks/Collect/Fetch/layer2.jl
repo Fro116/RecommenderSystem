@@ -16,11 +16,19 @@ import Memoize: @memoize
 import Oxygen
 import UUIDs
 
+include("http.jl")
+
 const STDOUT_LOCK = ReentrantLock()
 
 function logerror(x::String)
     Threads.lock(STDOUT_LOCK) do
         println("$(Dates.now()) [ERROR] $x")
+    end
+end
+
+function logstatus(fn, r, url)
+    if r.status ∉ [404]
+        logerror("$fn received error code $(r.status) for $url")
     end
 end
 
@@ -75,7 +83,7 @@ function load_resources()::Vector{Resource}
             # bound token size
             push!(mal_resources[i]["proxyurls"], proxy)
         end
-        i = ((i + 1) % length(mal_tokens)) + 1
+        i = (i % length(mal_tokens)) + 1
     end
 
     # malweb (ip limit)
@@ -243,24 +251,6 @@ function put!(r::Resources, resource::Dict, version::Integer)
 end
 
 Threads.@spawn update_resources(RESOURCES, 100, 1000)
-
-function encode(d::Dict, encoding::Symbol)
-    if encoding == :json
-        headers = Dict("Content-Type" => "application/json")
-        body = Vector{UInt8}(JSON3.write(d))
-    else
-        @assert false
-    end
-    headers, body
-end
-
-function decode(r::HTTP.Message)::Dict
-    if HTTP.headercontains(r, "Content-Type", "application/json")
-        return JSON3.read(String(r.body), Dict{String,Any})
-    else
-        @assert false
-    end
-end
 
 Oxygen.@post "/resources" function resources_api(r::HTTP.Request)::HTTP.Response
     data = decode(r)
@@ -785,7 +775,9 @@ function malweb_get_media_relations(text::String, medium::String, itemid::Int)
             continue
         end
     end
-    logerror("malweb_get_media_relations $medium $itemid could not parse relations")
+    if related_entries_section
+        logerror("malweb_get_media_relations $medium $itemid could not parse relations")
+    end
     collect(records)
 end
 
@@ -1931,6 +1923,7 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
     ret = Dict(
         "version" => API_VERSION,
         "username" => username,
+        "userid" => parse(Int, extract(text, """<a href="/forum/members/$username.""", "\">forum</a>")),
         "about" => html_unescape(
             extract(text, """<section class="profBio userContent">""", "</section>"),
         ),
@@ -2024,4 +2017,4 @@ function animeplanet_get_feed(
     HTTP.Response(200, encode(ret, :json)...)
 end;
 
-Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, show_banner=false)
+Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, metrics=false, show_banner=false)

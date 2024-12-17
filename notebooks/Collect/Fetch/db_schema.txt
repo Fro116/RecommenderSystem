@@ -8,6 +8,7 @@ CREATE TABLE mal_userids (
     db_last_success_at DOUBLE PRECISION,
     db_consecutive_failures BIGINT
 );
+CREATE INDEX mal_userids_username_idx ON mal_userids (username);
 
 CREATE TABLE mal_users (
     username TEXT UNIQUE,
@@ -52,9 +53,10 @@ CREATE TABLE mal_user_items (
     score BIGINT,
     repeat_col BOOLEAN,
     tags TEXT,
-    num_volumes_read BIGINT,
-    db_junction_last_changed_at DOUBLE PRECISION
+    num_volumes_read BIGINT
 );
+CREATE INDEX mal_user_items_username_idx ON mal_user_items (username);
+CREATE INDEX mal_user_items_medium_itemid_idx ON mal_user_items (medium, itemid);
 
 CREATE TABLE mal_media (
     medium TEXT,
@@ -100,9 +102,9 @@ CREATE TABLE mal_media_relations (
     target_id BIGINT,
     target_medium TEXT,
     relation TEXT,
-    version TEXT,
-    db_junction_last_changed_at DOUBLE PRECISION
+    version TEXT
 );
+CREATE INDEX mal_media_relations_medium_itemid_idx ON mal_media_relations (medium, itemid);
 
 CREATE TABLE anilist_users (
     userid BIGINT UNIQUE,
@@ -154,9 +156,10 @@ CREATE TABLE anilist_user_items (
     updatedAt BIGINT,
     listnames TEXT,
     score DOUBLE PRECISION,
-    startedAt TEXT,
-    db_junction_last_changed_at DOUBLE PRECISION
+    startedAt TEXT
 );
+CREATE INDEX anilist_user_items_userid_idx ON anilist_user_items (userid);
+CREATE INDEX anilist_user_items_medium_itemid_idx ON anilist_user_items (medium, itemid);
 
 CREATE TABLE anilist_media (
     medium TEXT,
@@ -213,9 +216,9 @@ CREATE TABLE anilist_media_relations (
     target_medium TEXT,
     target_id BIGINT,
     relation TEXT,
-    version TEXT,
-    db_junction_last_changed_at DOUBLE PRECISION
+    version TEXT
 );
+CREATE INDEX anilist_media_relations_medium_itemid_idx ON anilist_media_relations (medium, itemid);
 
 CREATE TABLE kitsu_users (
     userid BIGINT UNIQUE,
@@ -277,9 +280,10 @@ CREATE TABLE kitsu_user_items (
     startedAt TEXT,
     ratingTwenty BIGINT,
     volumesOwned BIGINT,
-    reconsumeCount BIGINT,
-    db_junction_last_changed_at DOUBLE PRECISION
+    reconsumeCount BIGINT
 );
+CREATE INDEX kitsu_user_items_userid_idx ON kitsu_user_items (userid);
+CREATE INDEX kitsu_user_items_medium_itemid_idx ON kitsu_user_items (medium, itemid);
 
 CREATE TABLE kitsu_media (
     medium TEXT,
@@ -323,9 +327,9 @@ CREATE TABLE kitsu_media_relations (
     target_medium TEXT,
     target_id BIGINT,
     relation TEXT,
-    version TEXT,
-    db_junction_last_changed_at DOUBLE PRECISION
+    version TEXT
 );
+CREATE INDEX kitsu_media_relations_medium_itemid_idx ON kitsu_media_relations (medium, itemid);
 
 CREATE TABLE animeplanet_userids (
     userid BIGINT UNIQUE,
@@ -337,9 +341,11 @@ CREATE TABLE animeplanet_userids (
     db_last_success_at DOUBLE PRECISION,
     db_consecutive_failures BIGINT
 );
+CREATE INDEX animeplanet_userids_username_idx ON animeplanet_userids (username);
 
 CREATE TABLE animeplanet_users (
     username TEXT UNIQUE,
+    userid BIGINT,
     following BIGINT,
     age TEXT,
     location TEXT,
@@ -369,9 +375,10 @@ CREATE TABLE animeplanet_user_items (
     title TEXT,
     updated_at BIGINT,
     version TEXT,
-    item_order BIGINT,
-    db_junction_last_changed_at DOUBLE PRECISION
+    item_order BIGINT
 );
+CREATE INDEX animeplanet_user_items_username_idx ON animeplanet_user_items (username);
+CREATE INDEX animeplanet_user_items_medium_itemid_idx ON animeplanet_user_items (medium, itemid);
 
 CREATE TABLE animeplanet_media (
     medium TEXT,
@@ -402,6 +409,6 @@ CREATE TABLE animeplanet_media_relations (
     target_medium TEXT,
     target_id TEXT,
     relation TEXT,
-    version TEXT,
-    db_junction_last_changed_at DOUBLE PRECISION
+    version TEXT
 );
+CREATE INDEX animeplanet_media_relations_medium_itemid_idx ON animeplanet_media_relations (medium, itemid);
