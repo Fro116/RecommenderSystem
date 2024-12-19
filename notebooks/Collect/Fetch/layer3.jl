@@ -174,7 +174,6 @@ Oxygen.@post "/mal_user" function mal_user(r::HTTP.Request)::HTTP.Response
     items = []
     for m in ["manga", "anime"]
         if user_data["$(m)_count"] == 0
-            items[m] = nothing
             continue
         end
         list = retry(() -> get_mal_list(m, username))

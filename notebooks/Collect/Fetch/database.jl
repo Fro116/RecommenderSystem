@@ -154,7 +154,7 @@ function db_update_single_table(
                 [idcol],
                 failure_data,
                 Dict(
-                    "db_consecutive_failures" => "db_consecutive_failures = $table.db_consecutive_failures + 1",
+                    "db_consecutive_failures" => "db_consecutive_failures = COALESCE($table.db_consecutive_failures, 0) + 1",
                 ),
             )
             return
@@ -288,7 +288,8 @@ end
 function db_monitor_single_table(table::String, idcol::String)
     with_db(:background) do db
         curtime = time()
-        day = 86400.0
+        hour = 3600
+        day = 24 * hour
         entries = []
         function run(name::String, query::String, params::Union{Tuple,Nothing})
             stmt = db_prepare(db, query)
@@ -302,27 +303,28 @@ function db_monitor_single_table(table::String, idcol::String)
             push!(entries, df)
         end
         run(
-            "success_frac",
+            "hourly_success_frac",
             """
             SELECT SUM(CASE WHEN db_consecutive_failures = 0 THEN 1 ELSE 0 END)::float / COUNT(*)
             AS value FROM $table
+            WHERE \$1 - db_refreshed_at < \$2
             """,
-            nothing,
+            tuple(curtime, hour),
         )
         run(
-            "daily_throughput",
+            "hourly_throughput",
             """
             SELECT COUNT(*) AS value FROM $table
             WHERE \$1 - db_refreshed_at < \$2
             """,
-            tuple(curtime, day),
+            tuple(curtime, hour),
         )
         run(
             "oldest_days",
             """
             SELECT (\$1 - MIN(db_refreshed_at)) / \$2 AS value FROM $table
             """,
-            tuple(curtime, 86400),
+            tuple(curtime, day),
         )
         run(
             "max_id",
@@ -387,7 +389,7 @@ function db_update_junction_table(
                 idcols,
                 failure_data,
                 Dict(
-                    "db_consecutive_failures" => "db_consecutive_failures = $primary_table.db_consecutive_failures + 1",
+                    "db_consecutive_failures" => "db_consecutive_failures = COALESCE($primary_table.db_consecutive_failures, 0) + 1",
                 ),
             )
             return
@@ -413,10 +415,10 @@ function db_update_junction_table(
             "db_consecutive_failures" => 0,
         )
         if DataFrames.nrow(df) > 0
-            if only(df.db_primary_hash) == primary_hash
+            if coalesce(only(df.db_primary_hash), nothing) == primary_hash
                 delete!(db_metadata, "db_primary_last_changed_at")
             end
-            if only(df.db_junction_hash) == junction_hash
+            if coalesce(only(df.db_junction_hash), nothing) == junction_hash
                 delete!(db_metadata, "db_junction_last_changed_at")
             end
         end
@@ -510,7 +512,8 @@ end
 function db_monitor_junction_table(primary_table::String, tscol::String)
     with_db(:background) do db
         curtime = time()
-        day = 86400.0
+        hour = 3600
+        day = 24 * hour
         week = 7 * day
         year = 365 * day
         month = year / 12
@@ -528,20 +531,21 @@ function db_monitor_junction_table(primary_table::String, tscol::String)
             push!(entries, df)
         end
         run(
-            "success_frac",
+            "hourly_success_frac",
             """
             SELECT SUM(CASE WHEN db_consecutive_failures = 0 THEN 1 ELSE 0 END)::float / COUNT(*)
             AS value FROM $primary_table
+            WHERE \$1 - db_refreshed_at < \$2
             """,
-            nothing,
+            tuple(curtime, hour),
         )
         run(
-            "daily_throughput",
+            "hourly_throughput",
             """
             SELECT COUNT(*) AS value FROM $primary_table
             WHERE \$1 - db_refreshed_at < \$2
             """,
-            tuple(curtime, day),
+            tuple(curtime, hour),
         )
         run(
             "oldest_success",
@@ -549,7 +553,7 @@ function db_monitor_junction_table(primary_table::String, tscol::String)
             SELECT (\$1 - MIN(db_refreshed_at)) / \$2 AS value FROM $primary_table
             WHERE db_consecutive_failures = \$3;
             """,
-            tuple(curtime, 86400, 0),
+            tuple(curtime, day, 0),
         )
         run(
             "oldest_failure",
@@ -557,7 +561,7 @@ function db_monitor_junction_table(primary_table::String, tscol::String)
             SELECT (\$1 - MIN(db_refreshed_at)) / \$2 AS value FROM $primary_table
             WHERE db_consecutive_failures != \$3;
             """,
-            tuple(curtime, 86400, 0),
+            tuple(curtime, day, 0),
         )
         run(
             "new_items",

@@ -27,7 +27,7 @@ function logerror(x::String)
 end
 
 function logstatus(fn, r, url)
-    if r.status ∉ [404]
+    if r.status ∉ [403, 404]
         logerror("$fn received error code $(r.status) for $url")
     end
 end
@@ -323,15 +323,7 @@ function callproxy(
         args["proxyurl"] = proxyurl
     end
     r = HTTP.post(LAYER_1_URL, encode(args, :json)..., status_exception = false)
-    if r.status >= 400
-        return Response(r.status, "", Dict())
-    end
-    data = decode(r)
-    Response(
-        data["status_code"],
-        data["content"],
-        Dict(k => v for (k, v) in data["headers"]),
-    )
+    Response(r.status, String(r.body), Dict(k => v for (k, v) in r.headers))
 end
 
 function request(
@@ -785,9 +777,11 @@ function malweb_get_user(resource::Resource, username::String)
     url = "https://myanimelist.net/profile/$username"
     r = request(resource, "GET", url, Dict("impersonate" => true))
     if r.status >= 400
-        logstatus("malweb_get_media", r, url)
+        logstatus("malweb_get_user", r, url)
         return HTTP.Response(r)
     end
+
+    asint(x) = parse(Int, replace(x, "," => ""))
 
     function info_panel(field)
         html_unescape(
@@ -801,36 +795,35 @@ function malweb_get_user(resource::Resource, username::String)
     end
 
     function info_links(field)
-        parse(
-            Int,
+        asint(
             extract(
                 r.body,
                 """<span class="user-status-title di-ib fl-l fw-b">$field</span><span class="user-status-data di-ib fl-r fw-b">""",
                 "</span>";
-            ),
+            )
         )
     end
 
     function item_counts(field)
-        parse(
-            Int,
+        asint(
             extract(
                 r.body,
                 """/$field/.*?<span class="di-ib fl-l fn-grey2">Total Entries</span><span class="di-ib fl-r">""",
                 "</span>",
-            ),
+            )
         )
     end
 
     ret = Dict(
         "version" => API_VERSION,
         "username" => username,
-        "userid" =>
+        "userid" => asint(
             extract(
                 r.body,
                 """href="https://myanimelist.net/modules.php\\?go=report&amp;type=profile&amp;id=""",
                 "\"",
-            ) |> x -> parse(Int, x),
+            )
+        ),
         "last_online" => info_panel("Last Online"),
         "gender" => info_panel("Gender"),
         "birthday" => info_panel("Birthday"),
@@ -1893,11 +1886,13 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
     end
     json = JSON3.read(r.body)
     text = json.result.content
-    has_profile = occursin(
-        """<meta name="description" content="Meet $username on Anime-Planet.""",
-        text,
-    )
-    if !has_profile
+    try
+        page_username = extract(text, """<meta name="description" content="Meet """, " on Anime-Planet.")
+        if lowercase(page_username) != lowercase(username)
+            logerror("animeplanet_get_user mismatched usernames $username $page_username")
+            @assert false
+        end
+    catch
         return HTTP.Response(404, [])
     end
     if !json["result"]["success"]
@@ -1920,10 +1915,17 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
         capture = "([0-9,]+)",
         multiple = true,
     )
+    maybeint(x, default) = isempty(x) ? default : parse(Int, x)
+    function parse_item_count(x::Vector)
+        if isempty(x)
+            return 0
+        end
+        maybeint(replace(first(x), "," => ""), 0)
+    end
     ret = Dict(
         "version" => API_VERSION,
         "username" => username,
-        "userid" => parse(Int, extract(text, """<a href="/forum/members/$username.""", "\">forum</a>")),
+        "userid" => maybeint(extract(text, """<a href="/forum/members/.*\\.""", "\">forum</a>"), nothing),
         "about" => html_unescape(
             extract(text, """<section class="profBio userContent">""", "</section>"),
         ),
@@ -1933,10 +1935,8 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
         "location" => html_unescape(
             extract(text, """<i class="fa fa-home"></i>""", "<", optional = true),
         ),
-        "anime_count" =>
-            isempty(anime_counts) ? 0 : parse(Int, replace(first(anime_counts), "," => "")),
-        "manga_count" =>
-            isempty(manga_counts) ? 0 : parse(Int, replace(first(manga_counts), "," => "")),
+        "anime_count" => parse_item_count(anime_counts),
+        "manga_count" => parse_item_count(manga_counts),
         "last_online" => extract(
             text,
             """<h1 id="profileName" class="tooltip" title=\"""",
@@ -1972,8 +1972,8 @@ function animeplanet_get_username(resource::Resource, sessionid::String, userid:
         "userid" => userid,
         "username" => extract(
             text,
-            "https://www.anime-planet.com/forum/members/",
-            ".$userid",
+            "<title>",
+            " \\| Anime-Planet Forum</title>",
             capture = "([a-zA-Z0-9_]+?)",
         ),
     )

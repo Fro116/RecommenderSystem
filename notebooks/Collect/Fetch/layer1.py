@@ -1,10 +1,12 @@
 import asyncio
 import contextlib
 import json
+import logging
 import time
 
 from curl_cffi import requests
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import Response
 
 sessions = {}
 sessions_lock = asyncio.Lock()
@@ -68,10 +70,13 @@ async def proxy(request: Request):
         args["json"] = json.loads(data["json"])
     try:
         response = await session.request(**args)
+        headers = dict(response.headers)
+        headers.pop('content-encoding', None) # requests automatically decompresses
+        return Response(
+            status_code=response.status_code,
+            headers=headers,
+            content=response.content,
+        )
     except Exception as e:
-        return {"status_code": 500, "headers": dict(), "content": str(args) + "\n" + str(e)}
-    return {
-        "status_code": response.status_code,
-        "headers": dict(response.headers),
-        "content": response.content,
-    }
+        logging.error(f"Error during proxy request: {e} Args: {args}")
+        return Response(status_code=500)

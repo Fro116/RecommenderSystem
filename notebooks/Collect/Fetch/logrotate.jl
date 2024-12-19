@@ -3,6 +3,9 @@ function writelogs(filename, lines_per_file)
     mode = "w"
     while true
         line = readline()
+        if isempty(line)
+            continue
+        end
         open(filename, mode) do f
             write(f, line * "\n")
             flush(f)
