@@ -1,8 +1,8 @@
 import Dates
 import DataFrames
+import JSON3
 import LibPQ
 import SHA
-import JSON3
 
 function get_db_connection()
     conn_str = read("../../../environment/database/primary.txt", String)
@@ -26,8 +26,20 @@ function logtag(tag::String, x::String)
 end
 logerror(x::String) = logtag("ERROR", x)
 
-
 const STDOUT_LOCK = ReentrantLock()
+
+macro handle_errors(ex)
+    quote
+        try
+            $(esc(ex))
+        catch err
+            lock(STDOUT_LOCK) do
+                Base.showerror(stdout, err, catch_backtrace())
+                println()
+            end
+        end
+    end
+end
 
 struct Database
     conn::LibPQ.Connection
@@ -186,61 +198,38 @@ function db_update_single_table(
     end
 end
 
-db_hash(idcol::String) = """('x' || substr(md5($idcol::text), 1, 16))::bit(64)::bigint"""
-db_hash(idcols::Vector{String}) = db_hash(idcols[end])
-
 function db_prioritize_single_table(
     table::String,
     idcol::String,
     N::Int,
-    partition::Tuple{Int,Int},
 )
     with_db(:prioritize) do db
-        partition_index, num_partitions = partition
-        @assert 0 <= partition_index < num_partitions
         query = """
             SELECT $idcol FROM $table
-            WHERE $(db_hash(idcol)) % \$1 = \$2
-            ORDER BY db_refreshed_at ASC LIMIT \$3;
+            ORDER BY db_refreshed_at ASC LIMIT \$1;
             """
         stmt = db_prepare(db, query)
-        vals = tuple(num_partitions, partition_index, N)
-        oldest_items = DataFrames.DataFrame(LibPQ.execute(stmt, vals; binary_format = true))
+        oldest_items = DataFrames.DataFrame(LibPQ.execute(stmt, (N,); binary_format = true))
         query = """
             SELECT $idcol FROM $table
             WHERE db_refreshed_at IS NULL
-            AND $(db_hash(idcol)) % \$1 = \$2
-            ORDER BY RANDOM()
-            LIMIT \$3;
+            ORDER BY RANDOM() LIMIT \$1;
             """
         stmt = db_prepare(db, query)
-        vals = tuple(num_partitions, partition_index, N)
-        new_items = DataFrames.DataFrame(LibPQ.execute(stmt, vals; binary_format = true))
+        new_items = DataFrames.DataFrame(LibPQ.execute(stmt, (N,); binary_format = true))
         unique(vcat(oldest_items, new_items))
     end
 end
 
-function db_expand_range(table::String, idcol::String, N::Int, partition::Tuple{Int,Int})
+function db_get_maxid(table::String, idcol::String)
     with_db(:prioritize) do db
-        partition_index, num_partitions = partition
-        @assert 0 <= partition_index < num_partitions
         query = """
             SELECT MAX($idcol) AS maxid FROM $table
             WHERE db_consecutive_failures = 0
             """
         stmt = db_prepare(db, query)
         df = DataFrames.DataFrame(LibPQ.execute(stmt))
-        maxid = coalesce(df.maxid..., 0)
-        query = """
-            SELECT g.$idcol
-            FROM generate_series(\$1::bigint, \$1 + \$2) g($idcol)
-            WHERE $(db_hash(idcol)) % \$3 = \$4
-            ORDER BY RANDOM()
-            LIMIT \$5;
-            """
-        stmt = db_prepare(db, query)
-        vals = tuple(maxid, 10000, num_partitions, partition_index, N)
-        DataFrames.DataFrame(LibPQ.execute(stmt, vals; binary_format = true))
+        coalesce(df.maxid..., 0)
     end
 end
 
@@ -274,14 +263,6 @@ function db_insert_missing(table::String, idcol::String, N::Int)
             LibPQ.execute(stmt, tuple(x); binary_format = true)
         end
         length(missing_ids) == N
-    end
-end
-
-function db_infill_range(table::String, idcol::String, N::Int, partition::Tuple{Int,Int})
-    with_db(:prioritize) do db
-        partition_index, num_partitions = partition
-        @assert 0 <= partition_index < num_partitions
-
     end
 end
 
@@ -448,12 +429,9 @@ function db_prioritize_junction_table(
     idcols::Vector{String},
     tscol::String,
     N::Int,
-    partition::Tuple{Int,Int},
 )
     with_db(:prioritize) do db
         curtime = time()
-        partition_index, num_partitions = partition
-        @assert 0 <= partition_index < num_partitions
         entries = []
         function run(query::String, params::Tuple)
             stmt = db_prepare(db, query)
@@ -464,10 +442,9 @@ function db_prioritize_junction_table(
             """
             SELECT $(join(idcols, ", ")) FROM $primary_table
             WHERE db_refreshed_at IS NULL
-            AND $(db_hash(idcols)) % \$1 = \$2
-            ORDER BY RANDOM() ASC LIMIT \$3;
+            ORDER BY RANDOM() ASC LIMIT \$1;
             """,
-            tuple(num_partitions, partition_index, N),
+            (N,),
         )
         day = 86400.0
         week = 7 * day
@@ -478,21 +455,19 @@ function db_prioritize_junction_table(
             SELECT $(join(idcols, ", ")) FROM $primary_table
             WHERE db_refreshed_at - $tscol < \$1
             AND \$2 - db_refreshed_at > \$3
-            AND $(db_hash(idcols)) % \$4 = \$5
-            ORDER BY db_refreshed_at ASC LIMIT \$6;
+            ORDER BY db_refreshed_at ASC LIMIT \$4;
             """
-        run(time_query, tuple(week, curtime, day, num_partitions, partition_index, N))
-        run(time_query, tuple(month, curtime, week, num_partitions, partition_index, N))
-        run(time_query, tuple(quarter, curtime, month, num_partitions, partition_index, N))
-        run(time_query, tuple(year, curtime, quarter, num_partitions, partition_index, N))
+        run(time_query, tuple(week, curtime, day, N))
+        run(time_query, tuple(month, curtime, week, N))
+        run(time_query, tuple(quarter, curtime, month, N))
+        run(time_query, tuple(year, curtime, quarter, N))
         run(
             """
             SELECT $(join(idcols, ", ")) FROM $primary_table
             WHERE (db_consecutive_failures < \$1 OR \$2 - db_last_success_at < \$3)
-            AND $(db_hash(idcols)) % \$4 = \$5
-            ORDER BY db_refreshed_at ASC LIMIT \$6;
+            ORDER BY db_refreshed_at ASC LIMIT \$4;
             """,
-            tuple(3, curtime, month, num_partitions, partition_index, N),
+            tuple(3, curtime, month, N),
         )
         run(
             """
@@ -500,10 +475,9 @@ function db_prioritize_junction_table(
             WHERE db_consecutive_failures >= \$1
             AND \$2 - db_last_success_at >= \$3
             AND \$2 - db_refreshed_at > \$4
-            AND $(db_hash(idcols)) % \$5 = \$6
-            ORDER BY db_refreshed_at ASC LIMIT \$7;
+            ORDER BY db_refreshed_at ASC LIMIT \$5;
             """,
-            tuple(3, curtime, month, quarter, num_partitions, partition_index, N),
+            tuple(3, curtime, month, quarter, N),
         )
         unique(vcat(entries...))
     end

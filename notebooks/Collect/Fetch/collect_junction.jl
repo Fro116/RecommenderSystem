@@ -2,7 +2,21 @@ import Random
 include("database.jl")
 include("http.jl")
 
-function monitor(
+PRIORITY_VALS::Set = Set()
+PRIORITY_MAXID::Int = 0
+const PRIORITY_LOCK = ReentrantLock()
+
+function monitor(primary_table, ts_col, secs)
+    while true
+        curtime = time()
+        df = db_monitor_junction_table(primary_table, ts_col)
+        args = ["$name: $val" for (name, val) in zip(df.name, df.value)]
+        logtag("MONITOR", join(args, ", "))
+        sleep(max(secs - (time() - curtime), 0))
+    end
+end
+
+function garbage_collect(
     primary_table,
     junction_table,
     source_table,
@@ -13,17 +27,13 @@ function monitor(
 )
     while true
         curtime = time()
-        df = db_monitor_junction_table(primary_table, ts_col)
-        args = ["$name: $val," for (name, val) in zip(df.name, df.value)]
-        logtag("MONITOR", join(args, " ")[1:end-1])
         if idcols == ["userid"]
-            while db_insert_missing(primary_table, only(idcols), 1000)
+            while db_insert_missing(primary_table, only(idcols), 100)
             end
         end
         if !isnothing(source_table)
             flush(stdout)
-            while db_insert_source(primary_table, source_table, idcols, 1000)
-                flush(stdout)
+            while db_insert_source(primary_table, source_table, idcols, 100)
             end
             while db_gc_junction_table(
                 primary_table,
@@ -31,13 +41,43 @@ function monitor(
                 source_table,
                 only(idcols),
                 source_key,
-                1000,
+                100,
             )
             end
         end
-        while db_gc_junction_table(primary_table, junction_table, idcols, 1000)
+        while db_gc_junction_table(primary_table, junction_table, idcols, 100)
         end
-        sleep(max(secs - (time() - curtime), 0))
+        sleep_secs = secs - (time() - curtime)
+        if sleep_secs < 0
+            logtag("GARBAGE_COLLECT", "late by $sleep_secs seconds")
+        else
+            sleep(sleep_secs)
+        end
+    end
+end
+
+function prioritize(primary_table::String, idcols::Vector{String}, tscol::String, secs::Int, partitions::Int)
+    while true
+        curtime = time()
+        vals = db_prioritize_junction_table(primary_table, idcols, tscol, 100 * partitions)
+        if idcols == ["userid"]
+            maxid = db_get_maxid(primary_table, only(idcols))
+        end
+        lock(PRIORITY_LOCK) do
+            global PRIORITY_VALS
+            global PRIORITY_MAXID
+            idvals = vals
+            PRIORITY_VALS = Set([[idvals[i, x] for x in idcols] for i in 1:DataFrames.nrow(idvals)])
+            if idcols == ["userid"]
+                PRIORITY_MAXID = maxid
+            end
+        end
+        sleep_secs = secs - (time() - curtime)
+        if sleep_secs < 0
+            logtag("PRIORITIZE", "late by $sleep_secs seconds")
+        else
+            sleep(sleep_secs)
+        end
     end
 end
 
@@ -79,13 +119,15 @@ function save_entry(
     if success && !isnothing(source_key)
         source_data = data[source_key]
         source_idcol = source_key
-        db_update_single_table(
-            source_table,
-            source_idcol,
-            source_data[source_idcol],
-            source_data,
-            success,
-        )
+        if !isnothing(source_data[source_idcol])
+            db_update_single_table(
+                source_table,
+                source_idcol,
+                source_data[source_idcol],
+                source_data,
+                success,
+            )
+        end
     end
 end
 
@@ -99,42 +141,38 @@ function refresh(
     api::String,
     idcols::Vector{String},
     tscol::String,
-    partition::Tuple{Int,Int},
+    part::Int,
+    partitions::Int,
 )
+    @assert 0 <= part < partitions
+    idvals = Set()
+    save(idvals, success) = save_entry(
+        primary_table,
+        primary_key,
+        junction_table,
+        junction_key,
+        source_table,
+        source_key,
+        api,
+        idcols,
+        idvals,
+        success,
+    )
     while true
-        df = db_prioritize_junction_table(primary_table, idcols, tscol, 1000, partition)
-        for i = Random.shuffle(1:DataFrames.nrow(df))
-            idvals = [df[i, x] for x in idcols]
-            save_entry(
-                primary_table,
-                primary_key,
-                junction_table,
-                junction_key,
-                source_table,
-                source_key,
-                api,
-                idcols,
-                idvals,
-                true,
-            )
+        idvals, maxid = lock(PRIORITY_LOCK) do
+            Set(x for x in PRIORITY_VALS if (hash(x) % partitions) == part && x ∉ idvals), PRIORITY_MAXID
+        end
+        if isempty(idvals)
+            logtag("REFRESH", "$part waiting for prioritization")
+            sleep(10)
+            continue
+        end
+        logtag("REFRESH", "$part with $(length(idvals)) ids")
+        for x in Random.shuffle(collect(idvals))
+            save(x, true)
         end
         if idcols == ["userid"]
-            df = db_expand_range(primary_table, only(idcols), 1, partition)
-            for i = 1:DataFrames.nrow(df)
-                idvals = [df[i, x] for x in idcols]
-                save_entry(
-                    primary_table,
-                    primary_key,
-                    junction_table,
-                    junction_key,
-                    source_table,
-                    source_key,
-                    api,
-                    idcols,
-                    idvals,
-                    false,
-                )
-            end
+            save_entry([rand([x for x in maxid+1:maxid+10000 if (hash(x) % partitions) == part])], false)
         end
     end
 end
@@ -151,17 +189,19 @@ const API = ARGS[9]
 const PARTITIONS = parse(Int, ARGS[10])
 
 @sync begin
-    Threads.@spawn monitor(
+    Threads.@spawn @handle_errors monitor(PRIMARY_TABLE, TSCOL, 60)
+    Threads.@spawn @handle_errors prioritize(PRIMARY_TABLE, IDCOLS, TSCOL, 60, PARTITIONS)
+    Threads.@spawn @handle_errors garbage_collect(
         PRIMARY_TABLE,
         JUNCTION_TABLE,
         SOURCE_TABLE,
         IDCOLS,
         TSCOL,
         SOURCE_KEY,
-        3600,
+        600,
     )
     for i in 1:PARTITIONS
-        Threads.@spawn refresh(
+        Threads.@spawn @handle_errors refresh(
             PRIMARY_TABLE,
             PRIMARY_KEY,
             JUNCTION_TABLE,
@@ -171,7 +211,8 @@ const PARTITIONS = parse(Int, ARGS[10])
             API,
             IDCOLS,
             TSCOL,
-            (i-1, PARTITIONS),
+            i-1,
+            PARTITIONS,
         )
     end
 end
