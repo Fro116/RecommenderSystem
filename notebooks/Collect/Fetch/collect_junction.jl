@@ -12,7 +12,12 @@ function monitor(primary_table, ts_col, secs)
         df = db_monitor_junction_table(primary_table, ts_col)
         args = ["$name: $val" for (name, val) in zip(df.name, df.value)]
         logtag("MONITOR", join(args, ", "))
-        sleep(max(secs - (time() - curtime), 0))
+        sleep_secs = secs - (time() - curtime)
+        if sleep_secs < 0
+            logtag("MONITOR", "late by $sleep_secs seconds")
+        else
+            sleep(sleep_secs)
+        end
     end
 end
 
@@ -28,24 +33,13 @@ function garbage_collect(
     while true
         curtime = time()
         if idcols == ["userid"]
-            while db_insert_missing(primary_table, only(idcols), 100)
+            while db_insert_missing(primary_table, only(idcols), 1000)
             end
         end
         if !isnothing(source_table)
-            flush(stdout)
-            while db_insert_source(primary_table, source_table, idcols, 100)
-            end
-            while db_gc_junction_table(
-                primary_table,
-                junction_table,
-                source_table,
-                only(idcols),
-                source_key,
-                100,
-            )
-            end
+            db_sync_entries(primary_table, junction_table, source_table, idcols, source_key)
         end
-        while db_gc_junction_table(primary_table, junction_table, idcols, 100)
+        while db_gc_junction_table(primary_table, junction_table, idcols, 1000)
         end
         sleep_secs = secs - (time() - curtime)
         if sleep_secs < 0
@@ -59,7 +53,7 @@ end
 function prioritize(primary_table::String, idcols::Vector{String}, tscol::String, secs::Int, partitions::Int)
     while true
         curtime = time()
-        vals = db_prioritize_junction_table(primary_table, idcols, tscol, 100 * partitions)
+        vals = db_prioritize_junction_table(primary_table, idcols, tscol, 200 * partitions)
         if idcols == ["userid"]
             maxid = db_get_maxid(primary_table, only(idcols))
         end
@@ -172,7 +166,7 @@ function refresh(
             save(x, true)
         end
         if idcols == ["userid"]
-            save_entry([rand([x for x in maxid+1:maxid+10000 if (hash(x) % partitions) == part])], false)
+            save([rand([x for x in maxid+1:maxid+10000 if (hash(x) % partitions) == part])], false)
         end
     end
 end
@@ -198,7 +192,7 @@ const PARTITIONS = parse(Int, ARGS[10])
         IDCOLS,
         TSCOL,
         SOURCE_KEY,
-        600,
+        86400,
     )
     for i in 1:PARTITIONS
         Threads.@spawn @handle_errors refresh(

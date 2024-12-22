@@ -580,7 +580,7 @@ function mal_get_media(resource::Resource, medium::String, itemid::Int)
         "start_date" => optget(json, "start_date"),
         "end_date" => optget(json, "end_date"),
         "synopsis" => optget(json, "synopsis"),
-        "genres" => json["genres"],
+        "genres" =>  optget(json, "genres"),
         "created_at" => optget(json, "created_at"),
         "updated_at" => optget(json, "updated_at"),
         "media_type" => json["media_type"],
@@ -1176,6 +1176,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Int)
                 "medium" => x["mediaRecommendation"]["type"],
                 "itemid" => x["mediaRecommendation"]["id"],
             ) for x in get(data["recommendations"], "nodes", [])
+            if !isnothing(x["mediaRecommendation"])
         ],
         "isRecommendationBlocked" => optget(data, "isRecommendationBlocked"),
         "isReviewBlocked" => optget(data, "isReviewBlocked"),
@@ -1189,7 +1190,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Int)
             "itemid" => itemid,
             "medium" => medium,
             "target_id" => e["node"]["id"],
-            "target_media" => e["node"]["type"],
+            "target_medium" => e["node"]["type"],
         )
         push!(relations, d)
     end
@@ -1461,31 +1462,34 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
         "volumeCount" => optget(data, "volumeCount"),
         "youtubeVideoId" => optget(data, "youtubeVideoId"),
         "nsfw" => optget(data, "nsfw"),
-        "genres" => [
-            x["attributes"]["name"] for x in json["included"] if x["type"] == "genres"
-        ],
-        "malid" => extractid([
+        "genres" => nothing,
+        "malid" => nothing,
+        "anilistid" => nothing,
+    )
+    relations = []
+    if "included" in keys(json)
+        details["genres"] = [x["attributes"]["name"] for x in json["included"] if x["type"] == "genres"]
+        details["malid"] = extractid([
             x["attributes"]["externalId"] for
             x in json["included"] if x["type"] == "mappings" &&
             startswith(x["attributes"]["externalSite"], "myanimelist")
-        ]),
-        "anilistid" => extractid([
+        ])
+        details["anilistid"] = extractid([
             x["attributes"]["externalId"] for
             x in json["included"] if x["type"] == "mappings" &&
             startswith(x["attributes"]["externalSite"], "anilist")
-        ]),
-    )
-    relations = []
-    for x in filter(r -> r["type"] == "mediaRelationships", json["included"])
-        d = Dict(
-            "version" => API_VERSION,
-            "relation" => x["attributes"]["role"],
-            "itemid" => itemid,
-            "medium" => medium,
-            "target_id" => parse(Int, x["relationships"]["destination"]["data"]["id"]),
-            "target_media" => x["relationships"]["destination"]["data"]["type"],
-        )
-        push!(relations, d)
+        ])
+        for x in filter(r -> r["type"] == "mediaRelationships", json["included"])
+            d = Dict(
+                "version" => API_VERSION,
+                "relation" => x["attributes"]["role"],
+                "itemid" => itemid,
+                "medium" => medium,
+                "target_id" => parse(Int, x["relationships"]["destination"]["data"]["id"]),
+                "target_medium" => x["relationships"]["destination"]["data"]["type"],
+            )
+            push!(relations, d)
+        end
     end
     ret = Dict("details" => details, "relations" => relations)
     HTTP.Response(200, encode(ret, :json)...)
@@ -1510,7 +1514,7 @@ function kitsu_get_list(
     headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
     r = request(resource, "GET", url, headers)
     if r.status >= 400
-        logerror("kitsu_get_media", r, url)
+        logstatus("kitsu_get_list", r, url)
         return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
@@ -1561,7 +1565,6 @@ function kitsu_get_user(resource::Resource, auth::String, userid::Int)
     end
     json = JSON3.read(r.body)
     data = json["data"]["attributes"]
-    included = json["included"]
     ret = Dict(
         "version" => API_VERSION,
         "userid" => userid,
@@ -1592,13 +1595,20 @@ function kitsu_get_user(resource::Resource, auth::String, userid::Int)
         "coverImage" => data["coverImage"],
         "status" => data["status"],
         "subscribedToNewsletter" => data["subscribedToNewsletter"],
-        "manga_count" => only([
-            x for x in included if x["attributes"]["kind"] == "manga-amount-consumed"
-        ])["attributes"]["statsData"]["media"],
-        "anime_count" => only([
-            x for x in included if x["attributes"]["kind"] == "anime-amount-consumed"
-        ])["attributes"]["statsData"]["media"],
     )
+    if "included" in keys(json)
+        included = json["included"]
+        maybe_unpack(x) = length(x) == 0 ? 0 : only(x)
+        ret["manga_count"] = maybe_unpack([
+            x["attributes"]["statsData"]["media"] for x in included if x["attributes"]["kind"] == "manga-amount-consumed"
+        ])
+        ret["anime_count"] = maybe_unpack([
+            x["attributes"]["statsData"]["media"] for x in included if x["attributes"]["kind"] == "anime-amount-consumed"
+        ])
+    else
+        ret["manga_count"] = 0
+        ret["anime_count"] = 0
+    end
     HTTP.Response(200, encode(ret, :json)...)
 end
 
@@ -1867,7 +1877,7 @@ function animeplanet_get_media(
             "itemid" => itemid,
             "medium" => medium,
             "target_id" => m.captures[2],
-            "target_media" => m.captures[1],
+            "target_medium" => m.captures[1],
         ) for m in eachmatch(
             Regex("""<a href="/(manga|anime)/(.*?)\" class="RelatedEntry"""),
             text,
@@ -1953,7 +1963,7 @@ function animeplanet_get_username(resource::Resource, sessionid::String, userid:
     url = "https://www.anime-planet.com/forum/members/$userid"
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
     if r.status >= 400
-        logerror("animeplanet_get_username", r, url)
+        logstatus("animeplanet_get_username", r, url)
         return HTTP.Response(r)
     end
     json = JSON3.read(r.body)

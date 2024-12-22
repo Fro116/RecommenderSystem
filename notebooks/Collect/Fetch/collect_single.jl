@@ -12,16 +12,21 @@ function monitor(table::String, idcol::String, secs::Int)
         df = db_monitor_single_table(table, idcol)
         args = ["$name: $val" for (name, val) in zip(df.name, df.value)]
         logtag("MONITOR", join(args, ", "))
-        sleep(max(secs - (time() - curtime), 0))
+        sleep_secs = secs - (time() - curtime)
+        if sleep_secs < 0
+            logtag("MONITOR", "late by $sleep_secs seconds")
+        else
+            sleep(sleep_secs)
+        end
     end
 end
 
 function garbage_collect(table::String, idcol::String, secs::Int)
     while true
         curtime = time()
-        while db_insert_missing(table, idcol, 100)
+        while db_insert_missing(table, idcol, 1000)
         end
-        while db_gc_single_table(table, idcol, 100)
+        while db_gc_single_table(table, idcol, 1000)
         end
         sleep_secs = secs - (time() - curtime)
         if sleep_secs < 0
@@ -96,7 +101,7 @@ const PARTITIONS = parse(Int, ARGS[4])
 @sync begin
     Threads.@spawn @handle_errors monitor(TABLE, IDCOL, 60)
     Threads.@spawn @handle_errors prioritize(TABLE, IDCOL, 60, PARTITIONS)
-    Threads.@spawn @handle_errors garbage_collect(TABLE, IDCOL, 600)
+    Threads.@spawn @handle_errors garbage_collect(TABLE, IDCOL, 86400)
     for i in 1:PARTITIONS
         Threads.@spawn @handle_errors refresh(TABLE, API, IDCOL, i-1, PARTITIONS)
     end

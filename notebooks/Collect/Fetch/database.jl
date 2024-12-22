@@ -48,33 +48,14 @@ struct Database
 end
 
 const DATABASES = Dict(
-    :update => Dict(
-        :databases => [Database(get_db_connection(), ReentrantLock(), Dict())],
-        :lock => ReentrantLock(),
-        :index => 1,
-    ),
-    :prioritize => Dict(
-        :databases => [Database(get_db_connection(), ReentrantLock(), Dict())],
-        :lock => ReentrantLock(),
-        :index => 1,
-    ),
-    :background => Dict(
-        :databases => [Database(get_db_connection(), ReentrantLock(), Dict())],
-        :lock => ReentrantLock(),
-        :index => 1,
-    ),
+    :update => Database(get_db_connection(), ReentrantLock(), Dict()),
+    :prioritize => Database(get_db_connection(), ReentrantLock(), Dict()),
+    :monitor => Database(get_db_connection(), ReentrantLock(), Dict()),
+    :garbage_collect => Database(get_db_connection(), ReentrantLock(), Dict()),
 )
-const DATABASE_LOCK = ReentrantLock();
 
 function with_db(f, conntype::Symbol)
-    db = let
-        dbs = DATABASES[conntype]
-        lock(dbs[:lock]) do
-            db = dbs[:databases][dbs[:index]]
-            dbs[:index] = (dbs[:index] % length(dbs[:databases])) + 1
-        end
-        db
-    end
+    db = DATABASES[conntype]
     lock(db.lock) do
         while true
             try
@@ -234,7 +215,7 @@ function db_get_maxid(table::String, idcol::String)
 end
 
 function db_insert_missing(table::String, idcol::String, N::Int)
-    with_db(:background) do db
+    with_db(:garbage_collect) do db
         query = """
             SELECT MAX($idcol) AS maxid FROM $table
             WHERE db_consecutive_failures = 0
@@ -267,7 +248,7 @@ function db_insert_missing(table::String, idcol::String, N::Int)
 end
 
 function db_monitor_single_table(table::String, idcol::String)
-    with_db(:background) do db
+    with_db(:monitor) do db
         curtime = time()
         hour = 3600
         day = 24 * hour
@@ -327,7 +308,7 @@ function db_monitor_single_table(table::String, idcol::String)
 end
 
 function db_gc_single_table(table::String, idcol::String, N::Int)
-    with_db(:background) do db
+    with_db(:garbage_collect) do db
         curtime = time()
         day = 86400.0
         year = 365 * day
@@ -484,7 +465,7 @@ function db_prioritize_junction_table(
 end
 
 function db_monitor_junction_table(primary_table::String, tscol::String)
-    with_db(:background) do db
+    with_db(:monitor) do db
         curtime = time()
         hour = 3600
         day = 24 * hour
@@ -576,50 +557,52 @@ function db_monitor_junction_table(primary_table::String, tscol::String)
     end
 end
 
-function db_insert_source(
-    primary_table::String,
-    source_table::String,
-    idcols::Vector{String},
-    N::Int,
-)
-    with_db(:background) do db
-        col_str = join(idcols, ", ")
-        query = """
-            INSERT INTO $primary_table ($col_str)
-            SELECT DISTINCT $col_str FROM $source_table
-            EXCEPT SELECT $col_str FROM $primary_table
-            LIMIT \$1;
-            """
-        stmt = db_prepare(db, query)
-        r = LibPQ.execute(stmt, (N,); binary_format = true)
-        LibPQ.num_affected_rows(r) == N
-    end
-end
-
-function db_gc_junction_table(
+function db_sync_entries(
     primary_table::String,
     junction_table::String,
     source_table::String,
-    idcol::String,
-    source_key::String,
-    N::Int,
+    idcols::Vector{String},
+    source_key::Union{String,Nothing},
 )
-    with_db(:background) do db
-        query = """
-            SELECT $idcol FROM $primary_table WHERE $source_key IS NOT NULL
-            EXCEPT SELECT $idcol FROM $source_table
-            LIMIT \$1;
-            """
+    df = with_db(:garbage_collect) do db
+        col_str = join(idcols, ", ")
+        query = "SELECT DISTINCT $col_str FROM $source_table;"
         stmt = db_prepare(db, query)
-        r = DataFrames.DataFrame(LibPQ.execute(stmt, (N,); binary_format = true))
-        for x in r[:, idcol]
+        DataFrames.DataFrame(LibPQ.execute(stmt; binary_format = true))
+    end
+    source_vals = Set(Tuple(df[i, x] for x in idcols) for i in 1:DataFrames.nrow(df))
+    with_db(:garbage_collect) do db
+        col_str = join(idcols, ", ")
+        query = "SELECT DISTINCT $col_str FROM $primary_table;"
+        stmt = db_prepare(db, query)
+        df = DataFrames.DataFrame(LibPQ.execute(stmt; binary_format = true))
+        existing_vals = Set(Tuple(df[i, x] for x in idcols) for i in 1:DataFrames.nrow(df))
+        placeholders = join(["\$" * string(i) for i = 1:length(idcols)], ", ")
+        query = "INSERT INTO $primary_table ($col_str) VALUES ($placeholders) ON CONFLICT DO NOTHING;"
+        stmt = db_prepare(db, query)
+        for x in setdiff(source_vals, existing_vals)
+            LibPQ.execute(stmt, x; binary_format = true)
+        end
+    end
+    with_db(:garbage_collect) do db
+        col_str = join(idcols, ", ")
+        if isnothing(source_key)
+            source_key_filter = ""
+        else
+            source_key_filter = "WHERE $source_key IS NOT NULL"
+        end
+        query = "SELECT DISTINCT $col_str FROM $primary_table $source_key_filter;"
+        stmt = db_prepare(db, query)
+        df = DataFrames.DataFrame(LibPQ.execute(stmt; binary_format = true))
+        existing_vals = Set(Tuple(df[i, x] for x in idcols) for i in 1:DataFrames.nrow(df))
+        placeholders = join(["\$" * string(i) for i = 1:length(idcols)], ", ")
+        for x in setdiff(existing_vals, source_vals)
             for table in [primary_table, junction_table]
-                query = "DELETE FROM $table WHERE $idcol = \$1"
+                query = "DELETE FROM $table WHERE ($col_str) = ($placeholders);"
                 stmt = db_prepare(db, query)
-                LibPQ.execute(stmt, (x,); binary_format = true)
+                LibPQ.execute(stmt, x; binary_format = true)
             end
         end
-        DataFrames.nrow(r) == N
     end
 end
 
@@ -629,7 +612,7 @@ function db_gc_junction_table(
     idcols::Vector{String},
     N::Int,
 )
-    with_db(:background) do db
+    with_db(:garbage_collect) do db
         curtime = time()
         day = 86400.0
         year = 365 * day

@@ -380,7 +380,7 @@ Oxygen.@post "/anilist_media" function anilist_media(r::HTTP.Request)::HTTP.Resp
     itemid = data["itemid"]
     data = retry(() -> get_anilist_media(medium, itemid))
     if isa(data, Errors)
-        return HTTP.Response(Int(details), [])
+        return HTTP.Response(Int(data), [])
     end
     HTTP.Response(200, encode(data, :json)...)
 end
@@ -528,7 +528,7 @@ Oxygen.@post "/kitsu_media" function kitsu_media(r::HTTP.Request)::HTTP.Response
     itemid = data["itemid"]
     data = retry(() -> get_kitsu_media(medium, itemid))
     if isa(data, Errors)
-        return HTTP.Response(Int(details), [])
+        return HTTP.Response(Int(data), [])
     end
     HTTP.Response(200, encode(data, :json)...)
 end
