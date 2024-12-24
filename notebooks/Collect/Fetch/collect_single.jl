@@ -24,10 +24,12 @@ end
 function garbage_collect(table::String, idcol::String, secs::Int)
     while true
         curtime = time()
+        logtag("GARBAGE_COLLECT", "START")
         while db_insert_missing(table, idcol, 1000)
         end
         while db_gc_single_table(table, idcol, 1000)
         end
+        logtag("GARBAGE_COLLECT", "END")
         sleep_secs = secs - (time() - curtime)
         if sleep_secs < 0
             logtag("GARBAGE_COLLECT", "late by $sleep_secs seconds")

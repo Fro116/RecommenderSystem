@@ -1434,10 +1434,15 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
     json = JSON3.read(r.body)
     data = json["data"]["attributes"]
     function extractid(x)
-        if isempty(x)
+        try
+            if isempty(x)
+                return nothing
+            end
+            return parse(Int, first(x))
+        catch
+            logerror("kitsu_get_media could not parse Int $x")
             return nothing
         end
-        parse(Int, first(x))
     end
     details = Dict(
         "version" => API_VERSION,

@@ -314,14 +314,13 @@ function db_gc_single_table(table::String, idcol::String, N::Int)
         year = 365 * day
         month = year / 12
         query = """
-            WITH todelete AS (
+            DELETE FROM $table WHERE $idcol IN (
                 SELECT $idcol FROM $table
                 WHERE db_consecutive_failures >= \$1
                 AND \$2 - db_last_success_at >= \$3
                 ORDER BY db_last_success_at ASC LIMIT \$4
-            )
-            DELETE FROM $table WHERE $idcol IN (SELECT $idcol FROM todelete);
-        """
+            );
+            """
         stmt = db_prepare(db, query)
         r = LibPQ.execute(stmt, tuple(3, curtime, month, N); binary_format = true)
         LibPQ.num_affected_rows(r) == N
@@ -562,45 +561,80 @@ function db_sync_entries(
     junction_table::String,
     source_table::String,
     idcols::Vector{String},
-    source_key::Union{String,Nothing},
+    source_key::String,
+    N::Int,
 )
-    df = with_db(:garbage_collect) do db
-        col_str = join(idcols, ", ")
-        query = "SELECT DISTINCT $col_str FROM $source_table;"
-        stmt = db_prepare(db, query)
-        DataFrames.DataFrame(LibPQ.execute(stmt; binary_format = true))
-    end
-    source_vals = Set(Tuple(df[i, x] for x in idcols) for i in 1:DataFrames.nrow(df))
     with_db(:garbage_collect) do db
         col_str = join(idcols, ", ")
-        query = "SELECT DISTINCT $col_str FROM $primary_table;"
+        query = """
+            INSERT INTO $primary_table ($col_str)
+            SELECT $col_str FROM $source_table WHERE $col_str IS NOT NULL
+            EXCEPT SELECT $col_str FROM $primary_table
+            LIMIT \$1
+            ON CONFLICT DO NOTHING;
+            """
         stmt = db_prepare(db, query)
-        df = DataFrames.DataFrame(LibPQ.execute(stmt; binary_format = true))
-        existing_vals = Set(Tuple(df[i, x] for x in idcols) for i in 1:DataFrames.nrow(df))
-        placeholders = join(["\$" * string(i) for i = 1:length(idcols)], ", ")
-        query = "INSERT INTO $primary_table ($col_str) VALUES ($placeholders) ON CONFLICT DO NOTHING;"
-        stmt = db_prepare(db, query)
-        for x in setdiff(source_vals, existing_vals)
-            LibPQ.execute(stmt, x; binary_format = true)
+        r = LibPQ.execute(stmt, (N,); binary_format = true)
+        if LibPQ.num_affected_rows(r) == N
+            return true
         end
+        query = """
+            DELETE FROM $primary_table WHERE $col_str IN (
+                SELECT $col_str FROM $primary_table WHERE $source_key IS NOT NULL
+                EXCEPT SELECT $col_str FROM $source_table
+                LIMIT \$1
+            );
+            """
+        stmt = db_prepare(db, query)
+        r = LibPQ.execute(stmt, (N,); binary_format = true)
+        if LibPQ.num_affected_rows(r) == N
+            return true
+        end
+        false
     end
-    with_db(:garbage_collect) do db
+end
+
+function db_sync_entries(
+    primary_table::String,
+    junction_table::String,
+    source_table::String,
+    idcols::Vector{String},
+    N::Int,
+)
+    function get_vals(db, table)
         col_str = join(idcols, ", ")
-        if isnothing(source_key)
-            source_key_filter = ""
-        else
-            source_key_filter = "WHERE $source_key IS NOT NULL"
-        end
-        query = "SELECT DISTINCT $col_str FROM $primary_table $source_key_filter;"
+        query = "SELECT DISTINCT $col_str FROM $table;"
         stmt = db_prepare(db, query)
         df = DataFrames.DataFrame(LibPQ.execute(stmt; binary_format = true))
-        existing_vals = Set(Tuple(df[i, x] for x in idcols) for i in 1:DataFrames.nrow(df))
-        placeholders = join(["\$" * string(i) for i = 1:length(idcols)], ", ")
-        for x in setdiff(existing_vals, source_vals)
-            for table in [primary_table, junction_table]
-                query = "DELETE FROM $table WHERE ($col_str) = ($placeholders);"
-                stmt = db_prepare(db, query)
+        Set(Tuple(df[i, x] for x in idcols) for i in 1:DataFrames.nrow(df))
+    end
+    source_vals, primary_vals = with_db(:garbage_collect) do db
+        get_vals(db, source_table), get_vals(db, primary_table)
+    end
+    for batch in Iterators.partition(setdiff(source_vals, primary_vals), N)
+        with_db(:garbage_collect) do db
+            col_str = join(idcols, ", ")
+            placeholders = join(["\$" * string(i) for i = 1:length(idcols)], ", ")
+            query = """
+                INSERT INTO $primary_table ($col_str) VALUES ($placeholders)
+                ON CONFLICT DO NOTHING;
+                """
+            stmt = db_prepare(db, query)
+            for x in batch
                 LibPQ.execute(stmt, x; binary_format = true)
+            end
+        end
+    end
+    for batch in Iterators.partition(setdiff(primary_vals, source_vals), N)
+        with_db(:garbage_collect) do db
+            col_str = join(idcols, ", ")
+            placeholders = join(["\$" * string(i) for i = 1:length(idcols)], ", ")
+            for x in batch
+                for table in [primary_table, junction_table]
+                    query = "DELETE FROM $table WHERE ($col_str) = ($placeholders);"
+                    stmt = db_prepare(db, query)
+                    LibPQ.execute(stmt, x; binary_format = true)
+                end
             end
         end
     end

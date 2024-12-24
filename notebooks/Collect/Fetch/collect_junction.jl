@@ -32,15 +32,22 @@ function garbage_collect(
 )
     while true
         curtime = time()
+        logtag("GARBAGE_COLLECT", "START")
         if idcols == ["userid"]
             while db_insert_missing(primary_table, only(idcols), 1000)
             end
         end
         if !isnothing(source_table)
-            db_sync_entries(primary_table, junction_table, source_table, idcols, source_key)
+            if !isnothing(source_key)
+                while db_sync_entries(primary_table, junction_table, source_table, idcols, source_key, 1000)
+                end
+            else
+                db_sync_entries(primary_table, junction_table, source_table, idcols, 1000)
+            end
         end
         while db_gc_junction_table(primary_table, junction_table, idcols, 1000)
         end
+        logtag("GARBAGE_COLLECT", "END")
         sleep_secs = secs - (time() - curtime)
         if sleep_secs < 0
             logtag("GARBAGE_COLLECT", "late by $sleep_secs seconds")
