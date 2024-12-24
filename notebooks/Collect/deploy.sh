@@ -7,10 +7,10 @@ kill_bg_processes() {
 }
 
 trap kill_bg_processes INT
-logs="../../../data"
+logs="../../data"
 mkdir -p $logs && rm $logs/*
 (uvicorn layer1:app --host 0.0.0.0 --port 4001 --log-level warning |& julia logrotate.jl $logs/layer1.log) &
-(julia -t auto layer2.jl 4002 1 "http://localhost:4001/proxy" true 10 "../../../environment" |& julia logrotate.jl $logs/layer2.log) &
+(julia -t auto layer2.jl 4002 1 "http://localhost:4001/proxy" true 10 "../../environment" |& julia logrotate.jl $logs/layer2.log) &
 (julia -t auto layer3.jl 4003 "http://localhost:4002" 1000 |& julia logrotate.jl $logs/layer3.log) &
 
 (julia -t auto collect_single.jl mal_userids userid "http://localhost:4003/mal_username" 1 |& julia logrotate.jl $logs/mal_userids.log) &

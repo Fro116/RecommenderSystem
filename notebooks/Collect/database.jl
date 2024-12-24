@@ -4,8 +4,10 @@ import JSON3
 import LibPQ
 import SHA
 
+const DB_PATH = "../../environment/database"
+
 function get_db_connection()
-    conn_str = read("../../../environment/database/primary.txt", String)
+    conn_str = read("$DB_PATH/primary.txt", String)
     while true
         try
             x = LibPQ.Connection(conn_str)
