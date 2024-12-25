@@ -9,14 +9,7 @@ import Oxygen
 import UUIDs
 
 include("http.jl")
-
-const STDOUT_LOCK = ReentrantLock()
-
-function logerror(x::String)
-    Threads.lock(STDOUT_LOCK) do
-        println("$(Dates.now()) [ERROR] $x")
-    end
-end
+include("stdout.jl")
 
 struct Response
     status::Int
@@ -91,12 +84,16 @@ const SESSIONS = Dict{Any,Any}() # token -> (sessionid, access_time)
 const SESSIONS_LOCK = ReentrantLock()
 
 function get_session(token)
-    lock(SESSIONS_LOCK) do
+    auth = lock(SESSIONS_LOCK) do
         if token in keys(SESSIONS)
             sessionid, _ = SESSIONS[token]
             SESSIONS[token] = (sessionid, time())
             return sessionid
         end
+        nothing
+    end
+    if !isnothing(auth)
+        return auth
     end
     if token["resource"]["location"] == "kitsu"
         r = request("kitsu", Dict("token" => token, "endpoint" => "token"))
@@ -121,7 +118,7 @@ function get_session(token)
                 end
             end
         end
-        return sessionid
+        sessionid
     end
 end
 

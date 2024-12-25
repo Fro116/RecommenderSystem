@@ -4,6 +4,8 @@ import JSON3
 import LibPQ
 import SHA
 
+include("stdout.jl")
+
 const DB_PATH = "../../environment/database"
 
 function get_db_connection()
@@ -17,28 +19,6 @@ function get_db_connection()
             timeout = 1
             logerror("connection failed, retrying in $timeout seconds")
             sleep(timeout)
-        end
-    end
-end
-
-function logtag(tag::String, x::String)
-    lock(STDOUT_LOCK) do
-        println("$(Dates.now()) [$tag] $x")
-    end
-end
-logerror(x::String) = logtag("ERROR", x)
-
-const STDOUT_LOCK = ReentrantLock()
-
-macro handle_errors(ex)
-    quote
-        try
-            $(esc(ex))
-        catch err
-            lock(STDOUT_LOCK) do
-                Base.showerror(stdout, err, catch_backtrace())
-                println()
-            end
         end
     end
 end

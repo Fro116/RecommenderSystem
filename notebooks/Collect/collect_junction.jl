@@ -1,5 +1,6 @@
 import Random
 include("database.jl")
+include("hash.jl")
 include("http.jl")
 
 PRIORITY_VALS::Set = Set()
@@ -161,19 +162,18 @@ function refresh(
     )
     while true
         idvals, maxid = lock(PRIORITY_LOCK) do
-            Set(x for x in PRIORITY_VALS if (hash(x) % partitions) == part && x ∉ idvals), PRIORITY_MAXID
+            Set(x for x in PRIORITY_VALS if (shahash(x) % partitions) == part && x ∉ idvals), PRIORITY_MAXID
         end
         if isempty(idvals)
             logtag("REFRESH", "$part waiting for prioritization")
             sleep(10)
             continue
         end
-        logtag("REFRESH", "$part with $(length(idvals)) ids")
         for x in Random.shuffle(collect(idvals))
             save(x, true)
         end
         if idcols == ["userid"]
-            save([rand([x for x in maxid+1:maxid+10000 if (hash(x) % partitions) == part])], false)
+            save([rand([x for x in maxid+1:maxid+10000 if (shahash(x) % partitions) == part])], false)
         end
     end
 end

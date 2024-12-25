@@ -1,6 +1,6 @@
 const PORT = parse(Int, ARGS[1])
 const RATELIMIT_WINDOW = parse(Int, ARGS[2])
-const LAYER_1_URL = ARGS[3]
+const LAYER_1_URLS = split(ARGS[3], ",")
 const DEFAULT_IMPERSONATE = parse(Bool, ARGS[4])
 const DEFAULT_TIMEOUT = parse(Int, ARGS[5])
 const RESOURCE_PATH = ARGS[6]
@@ -16,15 +16,9 @@ import Memoize: @memoize
 import Oxygen
 import UUIDs
 
+include("hash.jl")
 include("http.jl")
-
-const STDOUT_LOCK = ReentrantLock()
-
-function logerror(x::String)
-    Threads.lock(STDOUT_LOCK) do
-        println("$(Dates.now()) [ERROR] $x")
-    end
-end
+include("stdout.jl")
 
 function logstatus(fn, r, url)
     if r.status ∉ [403, 404]
@@ -105,7 +99,7 @@ function load_resources()::Vector{Resource}
             "location" => "kitsu",
             "proxyurl" => x,
             "credentials" => kitsu_credentials,
-            "ratelimit" => 4,
+            "ratelimit" => 8,
         ) for x in proxies
     ]
 
@@ -322,7 +316,8 @@ function callproxy(
     if !isnothing(proxyurl)
         args["proxyurl"] = proxyurl
     end
-    r = HTTP.post(LAYER_1_URL, encode(args, :json)..., status_exception = false)
+    layer_1_url = LAYER_1_URLS[(shahash(sessionid) % length(LAYER_1_URLS)) + 1]
+    r = HTTP.post(layer_1_url, encode(args, :json)..., status_exception = false)
     Response(r.status, String(r.body), Dict(k => v for (k, v) in r.headers))
 end
 
@@ -354,7 +349,7 @@ function request(
             headers,
             body,
             proxyurl,
-            string(hash((resource, proxyurl, Dates.today()))),
+            string(shahash((resource, proxyurl, Dates.today()))),
         )
     elseif resource["location"] == "animeplanet"
         url = string(
@@ -375,7 +370,7 @@ function request(
             headers,
             body,
             nothing,
-            string(hash((resource, Dates.today()))),
+            string(shahash((resource, Dates.today()))),
         )
     else
         @assert false

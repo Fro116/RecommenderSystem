@@ -70,8 +70,9 @@ async def proxy(request: Request):
         args["json"] = json.loads(data["json"])
     try:
         response = await session.request(**args)
-        headers = dict(response.headers)
-        headers.pop('content-encoding', None) # requests automatically decompresses
+        # requests automatically decompresses
+        keys_to_remove = {'content-encoding', 'content-length'}
+        headers = {k: v for k, v in dict(response.headers).items() if k.lower() not in keys_to_remove}
         return Response(
             status_code=response.status_code,
             headers=headers,
