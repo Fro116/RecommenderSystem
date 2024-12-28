@@ -56,7 +56,6 @@ CREATE TABLE mal_user_items (
     num_volumes_read BIGINT
 );
 CREATE INDEX mal_user_items_username_idx ON mal_user_items (username);
-CREATE INDEX mal_user_items_medium_itemid_idx ON mal_user_items (medium, itemid);
 
 CREATE TABLE mal_media (
     medium TEXT,
@@ -159,7 +158,6 @@ CREATE TABLE anilist_user_items (
     startedAt TEXT
 );
 CREATE INDEX anilist_user_items_userid_idx ON anilist_user_items (userid);
-CREATE INDEX anilist_user_items_medium_itemid_idx ON anilist_user_items (medium, itemid);
 
 CREATE TABLE anilist_media (
     medium TEXT,
@@ -283,7 +281,6 @@ CREATE TABLE kitsu_user_items (
     reconsumeCount BIGINT
 );
 CREATE INDEX kitsu_user_items_userid_idx ON kitsu_user_items (userid);
-CREATE INDEX kitsu_user_items_medium_itemid_idx ON kitsu_user_items (medium, itemid);
 
 CREATE TABLE kitsu_media (
     medium TEXT,
@@ -378,7 +375,6 @@ CREATE TABLE animeplanet_user_items (
     item_order BIGINT
 );
 CREATE INDEX animeplanet_user_items_username_idx ON animeplanet_user_items (username);
-CREATE INDEX animeplanet_user_items_medium_itemid_idx ON animeplanet_user_items (medium, itemid);
 
 CREATE TABLE animeplanet_media (
     medium TEXT,

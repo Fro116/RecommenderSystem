@@ -7,56 +7,27 @@ PRIORITY_VALS::Set = Set()
 PRIORITY_MAXID::Int = 0
 const PRIORITY_LOCK = ReentrantLock()
 
-function monitor(table::String, idcol::String, secs::Int)
-    while true
-        curtime = time()
-        df = db_monitor_single_table(table, idcol)
-        args = ["$name: $val" for (name, val) in zip(df.name, df.value)]
-        logtag("MONITOR", join(args, ", "))
-        sleep_secs = secs - (time() - curtime)
-        if sleep_secs < 0
-            logtag("MONITOR", "late by $sleep_secs seconds")
-        else
-            sleep(sleep_secs)
-        end
+function monitor(table::String, idcol::String)
+    df = db_monitor_single_table(table, idcol)
+    args = ["$name: $val" for (name, val) in zip(df.name, df.value)]
+    logtag("MONITOR", join(args, ", "))
+end
+
+function prioritize(table::String, idcol::String, partitions::Int, N::Int)
+    vals = Set(db_prioritize_single_table(table, idcol, partitions * N)[:, idcol])
+    maxid = db_get_maxid(table, idcol)
+    lock(PRIORITY_LOCK) do
+        global PRIORITY_VALS
+        global PRIORITY_MAXID
+        PRIORITY_VALS = vals
+        PRIORITY_MAXID = maxid
     end
 end
 
-function garbage_collect(table::String, idcol::String, secs::Int)
-    while true
-        curtime = time()
-        logtag("GARBAGE_COLLECT", "START")
-        while db_insert_missing(table, idcol, 1000)
-        end
-        while db_gc_single_table(table, idcol, 1000)
-        end
-        logtag("GARBAGE_COLLECT", "END")
-        sleep_secs = secs - (time() - curtime)
-        if sleep_secs < 0
-            logtag("GARBAGE_COLLECT", "late by $sleep_secs seconds")
-        else
-            sleep(sleep_secs)
-        end
+function garbage_collect(table::String, idcol::String)
+    while db_insert_missing(table, idcol, 1000)
     end
-end
-
-function prioritize(table::String, idcol::String, secs::Int, partitions::Int)
-    while true
-        curtime = time()
-        vals = Set(db_prioritize_single_table(table, idcol, 100 * partitions)[:, idcol])
-        maxid = db_get_maxid(table, idcol)
-        lock(PRIORITY_LOCK) do
-            global PRIORITY_VALS
-            global PRIORITY_MAXID
-            PRIORITY_VALS = vals
-            PRIORITY_MAXID = maxid
-        end
-        sleep_secs = secs - (time() - curtime)
-        if sleep_secs < 0
-            logtag("PRIORITIZE", "late by $sleep_secs seconds")
-        else
-            sleep(sleep_secs)
-        end
+    while db_gc_single_table(table, idcol, 1000)
     end
 end
 
@@ -102,10 +73,10 @@ const API = ARGS[3]
 const PARTITIONS = parse(Int, ARGS[4])
 
 @sync begin
-    Threads.@spawn @handle_errors monitor(TABLE, IDCOL, 60)
-    Threads.@spawn @handle_errors prioritize(TABLE, IDCOL, 60, PARTITIONS)
-    Threads.@spawn @handle_errors garbage_collect(TABLE, IDCOL, 86400)
+    Threads.@spawn @handle_errors @periodic "MONITOR" 600 monitor(TABLE, IDCOL)
+    Threads.@spawn @handle_errors @periodic "PRIORITIZE" 600 prioritize(TABLE, IDCOL, PARTITIONS, 600)
+    Threads.@spawn @handle_errors @periodic "GARBAGE_COLLECT" 86400 garbage_collect(TABLE, IDCOL)
     for i in 1:PARTITIONS
-        Threads.@spawn @handle_errors refresh(TABLE, API, IDCOL, i-1, PARTITIONS)
+        Threads.@spawn @handle_errors @uniform_delay 600 refresh(TABLE, API, IDCOL, i-1, PARTITIONS)
     end
 end

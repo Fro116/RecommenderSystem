@@ -7,17 +7,24 @@ PRIORITY_VALS::Set = Set()
 PRIORITY_MAXID::Int = 0
 const PRIORITY_LOCK = ReentrantLock()
 
-function monitor(primary_table, ts_col, secs)
-    while true
-        curtime = time()
-        df = db_monitor_junction_table(primary_table, ts_col)
-        args = ["$name: $val" for (name, val) in zip(df.name, df.value)]
-        logtag("MONITOR", join(args, ", "))
-        sleep_secs = secs - (time() - curtime)
-        if sleep_secs < 0
-            logtag("MONITOR", "late by $sleep_secs seconds")
-        else
-            sleep(sleep_secs)
+function monitor(primary_table, ts_col)
+    df = db_monitor_junction_table(primary_table, ts_col)
+    args = ["$name: $val" for (name, val) in zip(df.name, df.value)]
+    logtag("MONITOR", join(args, ", "))
+end
+
+function prioritize(primary_table::String, idcols::Vector{String}, tscol::String, partitions::Int, N::Int)
+    vals = db_prioritize_junction_table(primary_table, idcols, tscol, partitions * N)
+    if idcols == ["userid"]
+        maxid = db_get_maxid(primary_table, only(idcols))
+    end
+    lock(PRIORITY_LOCK) do
+        global PRIORITY_VALS
+        global PRIORITY_MAXID
+        idvals = vals
+        PRIORITY_VALS = Set([[idvals[i, x] for x in idcols] for i in 1:DataFrames.nrow(idvals)])
+        if idcols == ["userid"]
+            PRIORITY_MAXID = maxid
         end
     end
 end
@@ -29,57 +36,20 @@ function garbage_collect(
     idcols,
     ts_col,
     source_key,
-    secs,
 )
-    while true
-        curtime = time()
-        logtag("GARBAGE_COLLECT", "START")
-        if idcols == ["userid"]
-            while db_insert_missing(primary_table, only(idcols), 1000)
-            end
-        end
-        if !isnothing(source_table)
-            if !isnothing(source_key)
-                while db_sync_entries(primary_table, junction_table, source_table, idcols, source_key, 1000)
-                end
-            else
-                db_sync_entries(primary_table, junction_table, source_table, idcols, 1000)
-            end
-        end
-        while db_gc_junction_table(primary_table, junction_table, idcols, 1000)
-        end
-        logtag("GARBAGE_COLLECT", "END")
-        sleep_secs = secs - (time() - curtime)
-        if sleep_secs < 0
-            logtag("GARBAGE_COLLECT", "late by $sleep_secs seconds")
-        else
-            sleep(sleep_secs)
+    if idcols == ["userid"]
+        while db_insert_missing(primary_table, only(idcols), 1000)
         end
     end
-end
-
-function prioritize(primary_table::String, idcols::Vector{String}, tscol::String, secs::Int, partitions::Int)
-    while true
-        curtime = time()
-        vals = db_prioritize_junction_table(primary_table, idcols, tscol, 200 * partitions)
-        if idcols == ["userid"]
-            maxid = db_get_maxid(primary_table, only(idcols))
-        end
-        lock(PRIORITY_LOCK) do
-            global PRIORITY_VALS
-            global PRIORITY_MAXID
-            idvals = vals
-            PRIORITY_VALS = Set([[idvals[i, x] for x in idcols] for i in 1:DataFrames.nrow(idvals)])
-            if idcols == ["userid"]
-                PRIORITY_MAXID = maxid
+    if !isnothing(source_table)
+        if !isnothing(source_key)
+            while db_sync_entries(primary_table, junction_table, source_table, idcols, source_key, 1000)
             end
-        end
-        sleep_secs = secs - (time() - curtime)
-        if sleep_secs < 0
-            logtag("PRIORITIZE", "late by $sleep_secs seconds")
         else
-            sleep(sleep_secs)
+            db_sync_entries(primary_table, junction_table, source_table, idcols, 1000)
         end
+    end
+    while db_gc_junction_table(primary_table, junction_table, idcols, 1000)
     end
 end
 
@@ -166,7 +136,7 @@ function refresh(
         end
         if isempty(idvals)
             logtag("REFRESH", "$part waiting for prioritization")
-            sleep(10)
+            sleep(60)
             continue
         end
         for x in Random.shuffle(collect(idvals))
@@ -190,19 +160,18 @@ const API = ARGS[9]
 const PARTITIONS = parse(Int, ARGS[10])
 
 @sync begin
-    Threads.@spawn @handle_errors monitor(PRIMARY_TABLE, TSCOL, 60)
-    Threads.@spawn @handle_errors prioritize(PRIMARY_TABLE, IDCOLS, TSCOL, 60, PARTITIONS)
-    Threads.@spawn @handle_errors garbage_collect(
+    Threads.@spawn @handle_errors @periodic "MONITOR" 600 monitor(PRIMARY_TABLE, TSCOL)
+    Threads.@spawn @handle_errors @periodic "PRIORITIZE" 600 prioritize(PRIMARY_TABLE, IDCOLS, TSCOL, PARTITIONS, 600)
+    Threads.@spawn @handle_errors @periodic "GARBAGE_COLLECT" 86400 garbage_collect(
         PRIMARY_TABLE,
         JUNCTION_TABLE,
         SOURCE_TABLE,
         IDCOLS,
         TSCOL,
         SOURCE_KEY,
-        86400,
     )
     for i in 1:PARTITIONS
-        Threads.@spawn @handle_errors refresh(
+        Threads.@spawn @handle_errors @uniform_delay 600 refresh(
             PRIMARY_TABLE,
             PRIMARY_KEY,
             JUNCTION_TABLE,
