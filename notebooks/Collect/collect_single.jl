@@ -72,6 +72,7 @@ const IDCOL = ARGS[2]
 const API = ARGS[3]
 const PARTITIONS = parse(Int, ARGS[4])
 
+prioritize(TABLE, IDCOL, PARTITIONS, 600)
 @sync begin
     Threads.@spawn @handle_errors @periodic "MONITOR" 600 monitor(TABLE, IDCOL)
     Threads.@spawn @handle_errors @periodic "PRIORITIZE" 600 prioritize(TABLE, IDCOL, PARTITIONS, 600)

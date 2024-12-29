@@ -159,6 +159,7 @@ const TSCOL = ARGS[8]
 const API = ARGS[9]
 const PARTITIONS = parse(Int, ARGS[10])
 
+prioritize(PRIMARY_TABLE, IDCOLS, TSCOL, PARTITIONS, 600)
 @sync begin
     Threads.@spawn @handle_errors @periodic "MONITOR" 600 monitor(PRIMARY_TABLE, TSCOL)
     Threads.@spawn @handle_errors @periodic "PRIORITIZE" 600 prioritize(PRIMARY_TABLE, IDCOLS, TSCOL, PARTITIONS, 600)
