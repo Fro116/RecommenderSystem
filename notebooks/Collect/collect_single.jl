@@ -74,10 +74,10 @@ const PARTITIONS = parse(Int, ARGS[4])
 
 prioritize(TABLE, IDCOL, PARTITIONS, 600)
 @sync begin
-    Threads.@spawn @handle_errors @periodic "MONITOR" 600 monitor(TABLE, IDCOL)
-    Threads.@spawn @handle_errors @periodic "PRIORITIZE" 600 prioritize(TABLE, IDCOL, PARTITIONS, 600)
-    Threads.@spawn @handle_errors @periodic "GARBAGE_COLLECT" 86400 garbage_collect(TABLE, IDCOL)
+    Threads.@spawn @periodic "MONITOR" 600 @handle_errors monitor(TABLE, IDCOL)
+    Threads.@spawn @periodic "PRIORITIZE" 600 @handle_errors prioritize(TABLE, IDCOL, PARTITIONS, 600)
+    Threads.@spawn @periodic "GARBAGE_COLLECT" 86400 @handle_errors garbage_collect(TABLE, IDCOL)
     for i in 1:PARTITIONS
-        Threads.@spawn @handle_errors @uniform_delay 600 refresh(TABLE, API, IDCOL, i-1, PARTITIONS)
+        Threads.@spawn @uniform_delay 600 @handle_errors refresh(TABLE, API, IDCOL, i-1, PARTITIONS)
     end
 end

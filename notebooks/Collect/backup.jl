@@ -22,22 +22,25 @@ function backup()
         "animeplanet_media",
         "animeplanet_media_relations",
     ]
-    path = read("$DB_PATH/storage.txt", String)
+    save_template = read("$DB_PATH/storage.txt", String)
     date = Dates.format(Dates.today(), "yyyymmdd")
     with_db(:garbage_collect) do db
         for table in tables
             logtag("BACKUP", table)
-            query = "COPY $table TO PROGRAM 'zstd | $path/$date/$table.zstd' WITH (FORMAT CSV, HEADER);"
+            save = replace(save_template, "{FILE}" => "$table.zstd")
+            query = "COPY $table TO PROGRAM 'zstd $save' WITH (FORMAT CSV, HEADER);"
             stmt = db_prepare(db, query)
             LibPQ.execute(stmt)
         end
     end
     logtag("BACKUP", "pg_dump")
     dump = read("$DB_PATH/dump.txt", String)
-    cmd = "$dump | $path/database.sql.zst"
+    save = replace(save_template, "{FILE}" => "database.sql.zst")
+    cmd = "$dump $save"
     run(`sh -c $cmd`)
-    cmd = "echo $date | $path/latest"
+    save = replace(save_template, "{FILE}" => "latest")
+    cmd = "echo $date $save"
     run(`sh -c $cmd`)
 end
 
-@periodic "BACKUP" 86400 backup()
+@periodic "BACKUP" 86400 @handle_errors backup()

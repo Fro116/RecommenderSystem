@@ -161,9 +161,9 @@ const PARTITIONS = parse(Int, ARGS[10])
 
 prioritize(PRIMARY_TABLE, IDCOLS, TSCOL, PARTITIONS, 600)
 @sync begin
-    Threads.@spawn @handle_errors @periodic "MONITOR" 600 monitor(PRIMARY_TABLE, TSCOL)
-    Threads.@spawn @handle_errors @periodic "PRIORITIZE" 600 prioritize(PRIMARY_TABLE, IDCOLS, TSCOL, PARTITIONS, 600)
-    Threads.@spawn @handle_errors @periodic "GARBAGE_COLLECT" 86400 garbage_collect(
+    Threads.@spawn @periodic "MONITOR" 600 @handle_errors monitor(PRIMARY_TABLE, TSCOL)
+    Threads.@spawn @periodic "PRIORITIZE" 600 @handle_errors prioritize(PRIMARY_TABLE, IDCOLS, TSCOL, PARTITIONS, 600)
+    Threads.@spawn @periodic "GARBAGE_COLLECT" 86400 @handle_errors garbage_collect(
         PRIMARY_TABLE,
         JUNCTION_TABLE,
         SOURCE_TABLE,
@@ -172,7 +172,7 @@ prioritize(PRIMARY_TABLE, IDCOLS, TSCOL, PARTITIONS, 600)
         SOURCE_KEY,
     )
     for i in 1:PARTITIONS
-        Threads.@spawn @handle_errors @uniform_delay 600 refresh(
+        Threads.@spawn @uniform_delay 600 @handle_errors refresh(
             PRIMARY_TABLE,
             PRIMARY_KEY,
             JUNCTION_TABLE,
