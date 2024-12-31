@@ -35,18 +35,8 @@ const Resource = Dict{String,Any}
 
 function load_resources()::Vector{Resource}
     credentials = Dict()
-
-    # proxies
-    proxies = []
-    path = "$RESOURCE_PATH/proxies/geolocations.txt"
-    if ispath(path)
-        geo_df = CSV.read(path, DataFrames.DataFrame)
-        valid_ips = Set(filter(x -> x["geo location"] == "us", geo_df).ip)
-    else
-        valid_ips = nothing
-    end
-    path = "$RESOURCE_PATH/proxies/proxies.txt"
-    if ispath(path)
+    function get_proxies(path)
+        proxies = []
         proxy_df = CSV.read(
             path,
             DataFrames.DataFrame,
@@ -56,37 +46,36 @@ function load_resources()::Vector{Resource}
         for (host, port, username, password) in
             zip(proxy_df.host, proxy_df.port, proxy_df.username, proxy_df.password)
             ip = split(username, "-")[end]
-            if !isnothing(valid_ips) && ip ∉ valid_ips
-                continue
-            end
             push!(proxies, "http://$username:$password@$host:$port")
         end
+        sort(proxies)
     end
-    proxies = sort(proxies)
+    shared = get_proxies("$RESOURCE_PATH/proxies/shared.txt")
+    dedicated = get_proxies("$RESOURCE_PATH/proxies/dedicated.txt")
 
     # mal (ip and token limit)
     mal_tokens =
         [only(readlines(x)) for x in Glob.glob("$RESOURCE_PATH/mal/authentication/*.txt")]
     mal_resources = [
-        Dict("location" => "mal", "token" => x, "proxyurls" => [], "ratelimit" => 8) for
+        Dict("location" => "mal", "token" => x, "proxytype" => "url", "proxyurls" => [], "ratelimit" => 8) for
         x in mal_tokens
     ]
     i = 1
-    for proxy in proxies
+    for proxy in shared
         if length(mal_resources[i]["proxyurls"]) < 10
-            # bound token size
             push!(mal_resources[i]["proxyurls"], proxy)
         end
-        i = (i % length(mal_tokens)) + 1
+        i = (i % length(mal_resources)) + 1
     end
+    mal_resources = [x for x in mal_resources if !isempty(x["proxyurls"])]
 
     # malweb (ip limit)
     malweb_resources =
-        [Dict("location" => "malweb", "proxyurl" => x, "ratelimit" => 4) for x in proxies]
+        [Dict("location" => "malweb", "proxytype" => "url", "proxyurl" => x, "ratelimit" => 4) for x in shared]
 
     # anilist (ip limit)
     anilist_resources =
-        [Dict("location" => "anilist", "proxyurl" => x, "ratelimit" => 4) for x in proxies]
+        [Dict("location" => "anilist", "proxytype" => "url", "proxyurl" => x, "ratelimit" => 4) for x in shared]
 
     # kitsu (ip limit)
     kitsu_credentials = []
@@ -97,24 +86,30 @@ function load_resources()::Vector{Resource}
     kitsu_resources = [
         Dict(
             "location" => "kitsu",
+            "proxytype" => "url",
             "proxyurl" => x,
             "credentials" => kitsu_credentials,
             "ratelimit" => 8,
-        ) for x in proxies
+        ) for x in shared
     ]
 
     # animeplanet (credit limit)
-    animeplanet_token = only(readlines("$RESOURCE_PATH/scrapfly/key.txt"))
-    animeplanet_concurrency =
-        parse(Int, only(readlines("$RESOURCE_PATH/scrapfly/concurrency.txt")))
-    animeplanet_resources = [
-        Dict(
-            "location" => "animeplanet",
-            "token" => animeplanet_token,
-            "uid" => uid,
-            "ratelimit" => 8,
-        ) for uid = 1:animeplanet_concurrency
-    ]
+    animeplanet_resources =
+        [Dict("location" => "animeplanet", "proxytype" => "url", "proxyurl" => x, "ratelimit" => 8) for x in dedicated]
+    animeplanet_token, animeplanet_concurrency = readlines("$RESOURCE_PATH/proxies/scrapfly.txt")
+    animeplanet_concurrency = parse(Int, animeplanet_concurrency)
+    for uid = 1:animeplanet_concurrency
+        push!(
+            animeplanet_resources,
+            Dict(
+                "location" => "animeplanet",
+                "proxytype" => "scrapfly",
+                "token" => animeplanet_token,
+                "uid" => uid,
+                "ratelimit" => 8,
+            )
+        )
+    end
 
     resources = vcat(
         mal_resources,
@@ -337,21 +332,18 @@ function request(
             ResourceMetadata(m.version, time(), m.request_times)
     end
     ratelimit!(metadata, resource["ratelimit"])
-    if resource["location"] in ["mal", "malweb", "anilist", "kitsu"]
+    if resource["proxytype"] == "url"
         if "proxyurls" in keys(resource)
             proxyurl = rand(resource["proxyurls"])
         else
             proxyurl = resource["proxyurl"]
         end
-        return callproxy(
-            method,
-            url,
-            headers,
-            body,
-            proxyurl,
-            string(shahash((resource, proxyurl, Dates.today()))),
-        )
-    elseif resource["location"] == "animeplanet"
+        sessionid = string(shahash((resource, proxyurl, Dates.today())))
+        if "sessionid" in keys(headers)
+            sessionid = pop!(headers, "sessionid")
+        end
+        return callproxy(method, url, headers, body, proxyurl, sessionid)
+    elseif resource["proxytype"] == "scrapfly"
         url = string(
             HTTP.URI(
                 "https://api.scrapfly.io/scrape";
@@ -1661,6 +1653,34 @@ Oxygen.@post "/animeplanet" function animeplanet_api(r::HTTP.Request)::HTTP.Resp
     end
 end
 
+function parse_animeplanet_response(resource::Resource, r::Response, found::Function)
+    if resource["proxytype"] == "url"
+        text = r.body
+        if occursin("<title>Just a moment...</title>", text)
+            return HTTP.Response(401, [])
+        end
+        if !found(text)
+            return HTTP.Response(404, [])
+        end
+        return text
+    elseif resource["proxytype"] == "scrapfly"
+        if r.status >= 400
+            return HTTP.Response(r)
+        end
+        json = JSON3.read(r.body)
+        text = json.result.content
+        if !found(text)
+            return HTTP.Response(404, [])
+        end
+        if !json["result"]["success"]
+            return HTTP.Response(401, [])
+        end
+        return text
+    else
+        @assert false
+    end
+end
+
 function animeplanet_get_list(
     resource::Resource,
     sessionid::String,
@@ -1680,20 +1700,10 @@ function animeplanet_get_list(
         HTTP.URI("https://www.anime-planet.com/users/$username/$medium"; query = params),
     )
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-    if r.status >= 400
-        logstatus("animeplanet_get_list", r, url)
-        return HTTP.Response(r)
-    end
-    json = JSON3.read(r.body)
-    text = json.result.content
-    if occursin("<title>Search Results for $username", text)
-        return HTTP.Response(404, [])
-    end
-    if !json["result"]["success"]
-        logerror(
-            """animeplanet_get_list proxyerror $(json["result"]["status_code"]) $url""",
-        )
-        return HTTP.Response(401, [])
+    text = parse_animeplanet_response(resource, r, x -> !occursin("<title>Search Results for $username", x))
+    if text isa HTTP.Response
+        logstatus("animeplanet_get_list", text, url)
+        return text
     end
     if occursin("has chosen to make their content private.", text)
         return HTTP.Response(403, [])
@@ -1768,20 +1778,10 @@ function animeplanet_get_media(
 )
     url = "https://www.anime-planet.com/$medium/$itemid"
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-    if r.status >= 400
-        logstatus("animeplanet_get_media", r, url)
-        return HTTP.Response(r)
-    end
-    json = JSON3.read(r.body)
-    text = json.result.content
-    if occursin("<h1>You searched for $itemid</h1>", text)
-        return HTTP.Response(404, [])
-    end
-    if !json["result"]["success"]
-        logerror(
-            """animeplanet_get_media proxyerror $(json["result"]["status_code"]) $url""",
-        )
-        return HTTP.Response(401, [])
+    text = parse_animeplanet_response(resource, r, x -> !occursin("<h1>You searched for $itemid</h1>", x))
+    if text isa HTTP.Response
+        logstatus("animeplanet_get_media", text, url)
+        return text
     end
 
     function get_media_season(text)
@@ -1890,26 +1890,22 @@ end
 function animeplanet_get_user(resource::Resource, sessionid::String, username::String)
     url = "https://www.anime-planet.com/users/$username"
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-    if r.status >= 400
-        logstatus("animeplanet_get_user", r, url)
-        return HTTP.Response(r)
-    end
-    json = JSON3.read(r.body)
-    text = json.result.content
-    try
-        page_username = extract(text, """<meta name="description" content="Meet """, " on Anime-Planet.")
-        if lowercase(page_username) != lowercase(username)
-            logerror("animeplanet_get_user mismatched usernames $username $page_username")
-            @assert false
+    function found(text::AbstractString)
+        try
+            page_username = extract(text, """<meta name="description" content="Meet """, " on Anime-Planet.")
+            if lowercase(page_username) != lowercase(username)
+                logerror("animeplanet_get_user mismatched usernames $username $page_username")
+                @assert false
+            end
+        catch
+            return false
         end
-    catch
-        return HTTP.Response(404, [])
+        true
     end
-    if !json["result"]["success"]
-        logerror(
-            """animeplanet_get_user proxyerror $(json["result"]["status_code"]) $url""",
-        )
-        return HTTP.Response(401, [])
+    text = parse_animeplanet_response(resource, r, found)
+    if text isa HTTP.Response
+        logstatus("animeplanet_get_user", r, url)
+        return text
     end
     anime_counts = extract(
         text,
@@ -1959,63 +1955,21 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
     HTTP.Response(200, encode(ret, :json)...)
 end
 
-function animeplanet_get_username(resource::Resource, sessionid::String, userid::Int)
-    url = "https://www.anime-planet.com/forum/members/$userid"
-    r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-    if r.status >= 400
-        logstatus("animeplanet_get_username", r, url)
-        return HTTP.Response(r)
-    end
-    json = JSON3.read(r.body)
-    text = json.result.content
-    if occursin("The requested user could not be found.", text)
-        return HTTP.Response(404, [])
-    end
-    if !json["result"]["success"]
-        logerror(
-            """animeplanet_get_username proxyerror $(json["result"]["status_code"]) $url""",
-        )
-        return HTTP.Response(401, [])
-    end
-    ret = Dict(
-        "version" => API_VERSION,
-        "userid" => userid,
-        "username" => extract(
-            text,
-            "<title>",
-            " \\| Anime-Planet Forum</title>",
-            capture = "([a-zA-Z0-9_]+?)",
-        ),
-    )
-    HTTP.Response(200, encode(ret, :json)...)
-end
-
 function animeplanet_get_feed(
     resource::Resource,
     sessionid::String,
     medium::String,
     username::String,
 )
-
     params = Dict("type" => medium)
     url = string(
         HTTP.URI("https://www.anime-planet.com/users/$username/feed", query = params),
     )
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-    if r.status >= 400
-        logstatus("animeplanet_get_feed", r, url)
-        return HTTP.Response(r)
-    end
-    json = JSON3.read(r.body)
-    text = json.result.content
-    if occursin("<h1>You searched for $username</h1>", text)
-        return HTTP.Response(404, [])
-    end
-    if !json["result"]["success"]
-        logerror(
-            """animeplanet_get_feed proxyerror $(json["result"]["status_code"]) $url""",
-        )
-        return HTTP.Response(401, [])
+    text = parse_animeplanet_response(resource, r, x -> !occursin("<h1>You searched for $username</h1>", x))
+    if text isa HTTP.Response
+        logstatus("animeplanet_get_media", text, url)
+        return text
     end
     feed_entries = [x for x in split(text, "\n") if occursin("data-timestamp", x)]
     ret = Dict{String,Int}()
@@ -2025,6 +1979,32 @@ function animeplanet_get_feed(
         ret[title] = updated_at
     end
     HTTP.Response(200, encode(ret, :json)...)
-end;
+end
+
+function animeplanet_get_username(resource::Resource, sessionid::String, userid::Int)
+    url = "https://www.anime-planet.com/forum/members/$userid"
+    r = request(resource, "GET", url, Dict("sessionid" => sessionid))
+    text = parse_animeplanet_response(resource, r, x -> !occursin("The requested user could not be found.", x))
+    if text isa HTTP.Response
+        logstatus("animeplanet_get_username", text, url)
+        return text
+    end
+    username = extract(
+        text,
+        "<title>",
+        " \\| Anime-Planet Forum</title>",
+        capture = "([a-zA-Z0-9_]+?)",
+        optional=true,
+    )
+    if isnothing(username)
+        return HTTP.Response(404, [])
+    end
+    ret = Dict(
+        "version" => API_VERSION,
+        "userid" => userid,
+        "username" => username,
+    )
+    HTTP.Response(200, encode(ret, :json)...)
+end
 
 Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, metrics=false, show_banner=false)

@@ -27,7 +27,7 @@ function backup()
     with_db(:garbage_collect) do db
         for table in tables
             logtag("BACKUP", table)
-            save = replace(save_template, "{FILE}" => "$table.zstd")
+            save = replace(save_template, "{FILE}" => "$date/$table.zstd")
             query = "COPY $table TO PROGRAM 'zstd $save' WITH (FORMAT CSV, HEADER);"
             stmt = db_prepare(db, query)
             LibPQ.execute(stmt)
