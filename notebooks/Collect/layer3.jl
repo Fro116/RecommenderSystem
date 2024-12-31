@@ -8,8 +8,8 @@ import JSON3
 import Oxygen
 import UUIDs
 
-include("http.jl")
-include("stdout.jl")
+include("../julia_utils/http.jl")
+include("../julia_utils/stdout.jl")
 
 struct Response
     status::Int

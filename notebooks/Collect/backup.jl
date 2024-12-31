@@ -1,5 +1,5 @@
-include("database.jl")
-include("http.jl")
+include("../julia_utils/database.jl")
+include("../julia_utils/http.jl")
 
 function backup()
     tables = [
@@ -39,7 +39,7 @@ function backup()
     cmd = "$dump $save"
     run(`sh -c $cmd`)
     save = replace(save_template, "{FILE}" => "latest")
-    cmd = "echo $date $save"
+    cmd = "echo -n $date $save"
     run(`sh -c $cmd`)
 end
 

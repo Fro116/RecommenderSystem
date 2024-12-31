@@ -16,9 +16,9 @@ import Memoize: @memoize
 import Oxygen
 import UUIDs
 
-include("hash.jl")
-include("http.jl")
-include("stdout.jl")
+include("../julia_utils/hash.jl")
+include("../julia_utils/http.jl")
+include("../julia_utils/stdout.jl")
 
 function logstatus(fn, r, url)
     if r.status ∉ [403, 404]
@@ -106,7 +106,7 @@ function load_resources()::Vector{Resource}
                 "proxytype" => "scrapfly",
                 "token" => animeplanet_token,
                 "uid" => uid,
-                "ratelimit" => 8,
+                "ratelimit" => 0,
             )
         )
     end

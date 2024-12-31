@@ -1,3 +1,5 @@
+import Dates
+
 const STDOUT_LOCK = ReentrantLock()
 
 function logtag(tag::AbstractString, x::AbstractString)

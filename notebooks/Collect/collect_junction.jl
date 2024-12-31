@@ -1,7 +1,7 @@
 import Random
 include("database.jl")
-include("hash.jl")
-include("http.jl")
+include("../julia_utils/hash.jl")
+include("../julia_utils/http.jl")
 
 PRIORITY_VALS::Set = Set()
 PRIORITY_MAXID::Int = 0
