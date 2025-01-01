@@ -3,7 +3,6 @@ import DataFrames
 import JSON3
 import SHA
 
-include("../julia_utils/stdout.jl")
 include("../julia_utils/database.jl")
 
 function canonical_hash(d::AbstractDict)
