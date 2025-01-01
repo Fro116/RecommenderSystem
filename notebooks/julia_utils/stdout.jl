@@ -41,6 +41,22 @@ macro periodic(tag::AbstractString, secs::Real, expr)
     end
 end
 
+macro scheduled(tag::AbstractString, time_str::AbstractString, expr)
+    quote
+        while true
+            now = Dates.now()
+            target_time = Dates.DateTime(Dates.format(now, "yyyy-mm-dd") * "T" * $(esc(time_str)), "yyyy-mm-ddTHH:MM:SS")
+            if target_time < now
+                target_time += Dates.Day(1)
+            end
+            sleep(target_time - now)
+            logtag($(esc(tag)), "START")
+            $(esc(expr))
+            logtag($(esc(tag)), "END")
+        end
+    end
+end
+
 macro uniform_delay(secs::Real, expr)
     quote
         sleep($(esc(secs)) * rand())

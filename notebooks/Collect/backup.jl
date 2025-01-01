@@ -33,14 +33,14 @@ function backup()
             LibPQ.execute(stmt)
         end
     end
+    save = replace(save_template, "{FILE}" => "latest")
+    cmd = "echo -n $date $save"
+    run(`sh -c $cmd`)
     logtag("BACKUP", "pg_dump")
     dump = read("$DB_PATH/dump.txt", String)
     save = replace(save_template, "{FILE}" => "database.sql.zst")
     cmd = "$dump $save"
     run(`sh -c $cmd`)
-    save = replace(save_template, "{FILE}" => "latest")
-    cmd = "echo -n $date $save"
-    run(`sh -c $cmd`)
 end
 
-@periodic "BACKUP" 86400 @handle_errors backup()
+@scheduled "BACKUP" "04:00" @handle_errors backup()
