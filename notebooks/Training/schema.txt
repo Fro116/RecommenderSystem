@@ -1,0 +1,8 @@
+CREATE TABLE users (
+    source TEXT,
+    username TEXT,
+    userid BIGINT,
+    manga_count INT,
+    anime_count INT
+);
+CREATE INDEX users_source_username_idx ON users (source, lower(username));
