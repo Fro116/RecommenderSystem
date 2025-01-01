@@ -2,9 +2,6 @@ const PORT = parse(Int, ARGS[1])
 const LAYER_2_URL = ARGS[2]
 const TOKEN_TIMEOUT = parse(Int, ARGS[3])
 
-import Dates
-import HTTP
-import JSON3
 import Oxygen
 import UUIDs
 
@@ -25,7 +22,8 @@ function decode(r::Response)::Dict
     end
 end
 
-function request(query::String, params::Dict{String,Any})
+function request(url::String, query::String, params::Dict)
+    url = "$url/$query"
     for delay in ExponentialBackOff(;
         n = 10,
         first_delay = 1,
@@ -33,11 +31,7 @@ function request(query::String, params::Dict{String,Any})
         factor = 2.0,
         jitter = 0.1,
     )
-        r = HTTP.post(
-            "$LAYER_2_URL/$query",
-            encode(params, :json)...,
-            status_exception = false,
-        )
+        r = HTTP.post(url, encode(params, :json)..., status_exception = false)
         if r.status < 400 || r.status in [400, 401, 403, 404]
             # 400, 401 -> auth error
             # 403 -> list is private
@@ -50,34 +44,39 @@ function request(query::String, params::Dict{String,Any})
                 retry_timeout = min(parse(Int, retry_after), 1000)
                 delay = max(delay, retry_timeout)
             catch
-                logerror("invalid Retry-After $retry_after for $query $params")
+                logerror("invalid Retry-After $retry_after for $url $params")
             end
         end
-        logerror("retrying $query $params after $delay seconds")
+        logerror("retrying $url $params after $delay seconds")
         sleep(delay)
     end
-    logerror("could not retrieve $query $params")
+    logerror("could not retrieve $url $params")
     Response(500, [], Dict())
 end
+
+request(query::String, params::Dict) = request(LAYER_2_URL, query, params)
 
 @enum Errors begin
     INVALID_SESSION = 401
     NOT_FOUND = 404
-    TOKEN_UNAVAIABLE = 503
+    TOKEN_UNAVAILABLE = 503
 end
 
-function retry(f::Function; count = 10)
-    retryable = Errors[INVALID_SESSION, TOKEN_UNAVAIABLE]
-    x = f()
-    for _ = 1:count-1
-        if x ∉ retryable
-            return x
+macro retry(f, retries=3)
+    quote
+        begin
+            local x = $(esc(f))
+            for _ in 1:$(esc(retries))-1
+                if x ∉ [INVALID_SESSION, TOKEN_UNAVAILABLE]
+                    break
+                end
+                logerror("retrying function after error $x")
+                sleep(1)
+                x = $(esc(f))
+            end
+            x
         end
-        logerror("retrying function after error $x")
-        sleep(1)
-        x = f()
     end
-    x
 end
 
 const SESSIONS = Dict{Any,Any}() # token -> (sessionid, access_time)
@@ -98,7 +97,7 @@ function get_session(token)
     if token["resource"]["location"] == "kitsu"
         r = request("kitsu", Dict("token" => token, "endpoint" => "token"))
         if r.status >= 400
-            return TOKEN_UNAVAIABLE::Errors
+            return TOKEN_UNAVAILABLE::Errors
         end
         data = decode(r)
         sessionid = data["token"]
@@ -128,10 +127,28 @@ function invalidate_session(token::Dict)
     end
 end
 
+function fetch_user_parallel(user_data, items)
+    ret = Dict()
+    user_data = fetch(user_data)
+    if user_data isa Errors
+        return HTTP.Response(Int(user_data), [])
+    end
+    ret["user"] = user_data
+    ret["items"] = []
+    for t in items
+        x = fetch(t)
+        if x isa Errors
+            return HTTP.Response(Int(x), [])
+        end
+        append!(ret["items"], x)
+    end
+    HTTP.Response(200, encode(ret, :json)...)
+end
+
 Oxygen.@post "/mal_username" function mal_username(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     userid = data["userid"]
-    data = retry(() -> get_malweb_username(userid))
+    data = @retry get_malweb_username(userid)
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
@@ -144,7 +161,7 @@ function get_malweb_username(userid::Int)
         Dict("method" => "take", "location" => "malweb", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -164,7 +181,7 @@ end
 Oxygen.@post "/mal_user" function mal_user(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     username = data["username"]
-    user_data = retry(() -> get_malweb_user(username))
+    user_data = @retry get_malweb_user(username)
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
     end
@@ -173,7 +190,7 @@ Oxygen.@post "/mal_user" function mal_user(r::HTTP.Request)::HTTP.Response
         if user_data["$(m)_count"] == 0
             continue
         end
-        list = retry(() -> get_mal_list(m, username))
+        list = @retry get_mal_list(m, username)
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
@@ -184,13 +201,25 @@ Oxygen.@post "/mal_user" function mal_user(r::HTTP.Request)::HTTP.Response
     HTTP.Response(200, encode(ret, :json)...)
 end
 
+Oxygen.@post "/mal_user_parallel" function mal_user_parallel(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    username = data["username"]
+    user_data = Threads.@spawn @retry get_malweb_user(username)
+    items = []
+    for m in ["manga", "anime"]
+        list = Threads.@spawn @retry get_mal_list(m, username)
+        push!(items, list)
+    end
+    fetch_user_parallel(user_data, items)
+end
+
 function get_malweb_user(username::String)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "malweb", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -213,7 +242,7 @@ function get_mal_list(medium::String, username::String)
         Dict("method" => "take", "location" => "mal", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -249,11 +278,11 @@ Oxygen.@post "/mal_media" function mal_media(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     medium = data["medium"]
     itemid = data["itemid"]
-    details = retry(() -> get_mal_media("mal", medium, itemid))
+    details = @retry get_mal_media("mal", medium, itemid)
     if isa(details, Errors)
         return HTTP.Response(Int(details), [])
     end
-    relations = retry(() -> get_mal_media("malweb", medium, itemid))
+    relations = @retry get_mal_media("malweb", medium, itemid)
     if isa(relations, Errors)
         return HTTP.Response(Int(relations), [])
     end
@@ -266,7 +295,7 @@ function get_mal_media(location::String, medium::String, itemid::Int)
         Dict("method" => "take", "location" => location, "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -291,7 +320,7 @@ end
 Oxygen.@post "/anilist_user" function anilist_user(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     userid = data["userid"]
-    user_data = retry(() -> get_anilist_user(userid))
+    user_data = @retry get_anilist_user(userid)
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
     end
@@ -300,7 +329,7 @@ Oxygen.@post "/anilist_user" function anilist_user(r::HTTP.Request)::HTTP.Respon
         if user_data["$(m)Count"] == 0
             continue
         end
-        list = retry(() -> get_anilist_list(m, userid))
+        list = @retry get_anilist_list(m, userid)
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
@@ -310,13 +339,25 @@ Oxygen.@post "/anilist_user" function anilist_user(r::HTTP.Request)::HTTP.Respon
     HTTP.Response(200, encode(ret, :json)...)
 end
 
+Oxygen.@post "/anilist_user_parallel" function anilist_user_parallel(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    userid = data["userid"]
+    user_data = Threads.@spawn @retry get_anilist_user(userid)
+    items = []
+    for m in ["manga", "anime"]
+        list = Threads.@spawn @retry get_anilist_list(m, userid)
+        push!(items, list)
+    end
+    fetch_user_parallel(user_data, items)
+end
+
 function get_anilist_user(userid::Int)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -339,7 +380,7 @@ function get_anilist_list(medium::String, userid::Int)
         Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -375,7 +416,7 @@ Oxygen.@post "/anilist_media" function anilist_media(r::HTTP.Request)::HTTP.Resp
     data = decode(r)
     medium = data["medium"]
     itemid = data["itemid"]
-    data = retry(() -> get_anilist_media(medium, itemid))
+    data = @retry get_anilist_media(medium, itemid)
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
@@ -388,7 +429,7 @@ function get_anilist_media(medium::String, itemid::Int)
         Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -413,23 +454,13 @@ end
 Oxygen.@post "/kitsu_user" function kitsu_user(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     userid = data["userid"]
-    user_data = retry(() -> get_kitsu_user(userid))
+    user_data = @retry get_kitsu_user(userid)
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
     end
-    ret = Dict{String,Any}("user" => user_data)
-    seconds_in_day = 86400 # allow one day of fudge
-    updated_at = try
-        Dates.datetime2unix(
-            Dates.DateTime(user_data["updatedAt"], "yyyy-mm-ddTHH:MM:SS.sssZ"),
-        )
-    catch
-        logerror("""kitsu_user could not parse time $(user_data["updatedAt"])""")
-        nothing
-    end
     items = []
     if (user_data["manga_count"] + user_data["anime_count"]) > 0
-        list = retry(() -> get_kitsu_list(userid))
+        list = @retry get_kitsu_list(userid)
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
@@ -439,13 +470,21 @@ Oxygen.@post "/kitsu_user" function kitsu_user(r::HTTP.Request)::HTTP.Response
     HTTP.Response(200, encode(ret, :json)...)
 end
 
+Oxygen.@post "/kitsu_user_parallel" function kitsu_user_parallel(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    userid = data["userid"]
+    user_data = Threads.@spawn @retry get_kitsu_user(userid)
+    items = [Threads.@spawn @retry get_kitsu_list(userid)]
+    fetch_user_parallel(user_data, items)
+end
+
 function get_kitsu_user(userid::Int)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -480,7 +519,7 @@ function get_kitsu_list(userid::Int)
         Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -523,7 +562,7 @@ Oxygen.@post "/kitsu_media" function kitsu_media(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     medium = data["medium"]
     itemid = data["itemid"]
-    data = retry(() -> get_kitsu_media(medium, itemid))
+    data = @retry get_kitsu_media(medium, itemid)
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
@@ -536,7 +575,7 @@ function get_kitsu_media(medium::String, itemid::Int)
         Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -571,7 +610,7 @@ Oxygen.@post "/animeplanet_username" function animeplanet_username(
 )::HTTP.Response
     data = decode(r)
     userid = data["userid"]
-    data = retry(() -> get_animeplanet_username(userid))
+    data = @retry get_animeplanet_username(userid)
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
@@ -584,7 +623,7 @@ function get_animeplanet_username(userid::Int)
         Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -613,7 +652,7 @@ end
 Oxygen.@post "/animeplanet_user" function animeplanet_user(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     username = data["username"]
-    user_data = retry(() -> get_animeplanet_user(username))
+    user_data = @retry get_animeplanet_user(username)
     if isa(user_data, Errors)
         return HTTP.Response(Int(user_data), [])
     end
@@ -622,7 +661,7 @@ Oxygen.@post "/animeplanet_user" function animeplanet_user(r::HTTP.Request)::HTT
         if user_data["$(m)_count"] == 0
             continue
         end
-        list = retry(() -> get_animeplanet_list(m, username))
+        list = @retry get_animeplanet_list(m, username, parallel=false)
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
@@ -633,13 +672,24 @@ Oxygen.@post "/animeplanet_user" function animeplanet_user(r::HTTP.Request)::HTT
     HTTP.Response(200, encode(ret, :json)...)
 end
 
+Oxygen.@post "/animeplanet_user_parallel" function animeplanet_user_parallel(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    username = data["username"]
+    user_data = Threads.@spawn @retry get_animeplanet_user(username)
+    items = []
+    for m in ["manga", "anime"]
+        push!(items, Threads.@spawn @retry get_animeplanet_list(m, username, parallel=true))
+    end
+    fetch_user_parallel(user_data, items)
+end
+
 function get_animeplanet_user(username::String)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
@@ -665,36 +715,74 @@ function get_animeplanet_user(username::String)
     end
 end
 
-function get_animeplanet_list(medium::String, username::String)
+function get_animeplanet_list(medium::String, username::String; parallel::Bool)
+    if parallel
+        feed_task = Threads.@spawn @handle_errors get_animeplanet_feed(medium, username)
+        entries_task = Threads.@spawn @handle_errors get_animeplanet_entries(medium, username)
+        feed = fetch(feed_task)
+        entries = fetch(entries_task)
+    else
+        feed = get_animeplanet_feed(medium, username)
+        if feed isa Errors
+            return feed
+        end
+        entries = get_animeplanet_entries(medium, username)
+    end
+    for x in [feed, entries]
+        if x isa Errors
+            return x
+        end
+    end
+    for x in entries
+        x["updated_at"] = get(feed, x["itemid"], nothing)
+    end
+    entries
+end
+
+function get_animeplanet_feed(medium::String, username::String)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try
         sessionid = get_session(token)
-        feed = let
-            s = request(
-                "animeplanet",
-                Dict(
-                    "token" => token,
-                    "sessionid" => sessionid,
-                    "endpoint" => "feed",
-                    "username" => username,
-                    "medium" => medium,
-                ),
-            )
-            if s.status == 401
-                invalidate_session(token)
-                return INVALID_SESSION::Errors
-            elseif s.status >= 400
-                return NOT_FOUND::Errors
-            end
-            decode(s)
+        s = request(
+            "animeplanet",
+            Dict(
+                "token" => token,
+                "sessionid" => sessionid,
+                "endpoint" => "feed",
+                "username" => username,
+                "medium" => medium,
+            ),
+        )
+        if s.status == 401
+            invalidate_session(token)
+            return INVALID_SESSION::Errors
+        elseif s.status >= 400
+            return NOT_FOUND::Errors
         end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+function get_animeplanet_entries(medium::String, username::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAILABLE::Errors
+    end
+    token = decode(r)
+    try
+        sessionid = get_session(token)
         entries = []
         page = 1
         expand_pagelimit = false
@@ -723,9 +811,6 @@ function get_animeplanet_list(medium::String, username::String)
                 continue
             end
             expand_pagelimit = false
-            for x in data["entries"]
-                x["updated_at"] = get(feed, x["itemid"], nothing)
-            end
             append!(entries, data["entries"])
             if !data["next"]
                 return entries
@@ -741,7 +826,7 @@ Oxygen.@post "/animeplanet_media" function animeplanet_media(r::HTTP.Request)::H
     data = decode(r)
     medium = data["medium"]
     itemid = data["itemid"]
-    data = retry(() -> get_animeplanet_media(medium, itemid))
+    data = @retry get_animeplanet_media(medium, itemid)
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
@@ -754,7 +839,7 @@ function get_animeplanet_media(medium::String, itemid::String)
         Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
     )
     if r.status >= 400
-        return TOKEN_UNAVAIABLE::Errors
+        return TOKEN_UNAVAILABLE::Errors
     end
     token = decode(r)
     try

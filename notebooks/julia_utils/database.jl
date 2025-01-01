@@ -4,19 +4,25 @@ include("stdout.jl")
 
 const DB_PATH = "../../environment/database"
 
-function get_db_connection()
+function get_db_connection(max_retries::Real)
     conn_str = read("$DB_PATH/primary.txt", String)
-    while true
+    retries = 0
+    while retries <= max_retries
+        retries += 1
         try
             x = LibPQ.Connection(conn_str)
             @assert LibPQ.status(x) == LibPQ.libpq_c.CONNECTION_OK
             return x
         catch
-            timeout = 1
-            logerror("connection failed, retrying in $timeout seconds")
-            sleep(timeout)
+            if retries <= max_retries
+                timeout = 1
+                logerror("connection failed, retrying in $timeout seconds")
+                sleep(timeout)
+            end
         end
     end
+    logerror("connection failed")
+    :connection_failed
 end
 
 struct Database
@@ -28,15 +34,24 @@ end
 const DATABASES = Dict()
 const DATABASE_LOCK = ReentrantLock()
 
-function with_db(f, conntype::Symbol)
+function with_db(f, conntype::Symbol, max_retries::Real=Inf)
     db = lock(DATABASE_LOCK) do
         if conntype ∉ keys(DATABASES)
-            DATABASES[conntype] = Database(get_db_connection(), ReentrantLock(), Dict())
+            conn = get_db_connection(max_retries)
+            if conn == :connection_failed
+                return conn
+            end
+            DATABASES[conntype] = Database(conn, ReentrantLock(), Dict())
         end
         DATABASES[conntype]
     end
+    if db == :connection_failed
+        return db
+    end
     lock(db.lock) do
-        while true
+        retries = 0
+        while retries <= max_retries
+            retries += 1
             try
                 LibPQ.execute(db.conn, "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;")
                 x = f(db)
@@ -49,9 +64,11 @@ function with_db(f, conntype::Symbol)
                 logerror("with_db connection error $e")
                 LibPQ.reset!(db.conn; throw_error = false)
                 empty!(db.prepared_statements)
-                return
+                return :transaction_failed
             end
         end
+        logerror("with_db max_retries exceeded")
+        :transaction_failed
     end
 end
 

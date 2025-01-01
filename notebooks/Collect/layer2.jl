@@ -259,8 +259,8 @@ end
 
 function ratelimit!(x::ResourceMetadata, ratelimit::Real)
     window = RATELIMIT_WINDOW
-    if !isempty(x.request_times)
-        startindex = max(1, length(x.request_times) - window + 1)
+    if length(x.request_times) >= window
+        startindex = length(x.request_times) - window + 1
         times = x.request_times[startindex:end]
         wait_until = first(times) + length(times) * ratelimit
         delta = wait_until - time()
@@ -293,13 +293,16 @@ function callproxy(
     proxyurl::Union{String,Nothing},
     sessionid::String,
 )
-    args = Dict{String,Any}("method" => method, "url" => url, "sessionid" => sessionid)
+    args = Dict{String,Any}(
+        "method" => method,
+        "url" => url,
+        "sessionid" => sessionid,
+        "timeout" => DEFAULT_TIMEOUT
+    )
     if get(headers, "impersonate", DEFAULT_IMPERSONATE)
         args["impersonate"] = "chrome"
         delete!(headers, "impersonate")
     end
-    args["timeout"] = get(headers, "timeout", DEFAULT_TIMEOUT)
-    delete!(headers, "timeout")
     if !isnothing(body)
         @assert headers["Content-Type"] == "application/json"
         delete!(headers, "Content-Type")
@@ -1497,6 +1500,7 @@ function kitsu_get_list(
     params = Dict(
         "filter[user_id]" => userid,
         "include" => "media",
+        "fields[media]" => "id",
         "page[limit]" => 500,
     )
     if offset > 0

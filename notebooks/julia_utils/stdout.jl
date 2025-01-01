@@ -1,6 +1,6 @@
 import Dates
 
-const STDOUT_LOCK = ReentrantLock()
+STDOUT_LOCK::ReentrantLock = ReentrantLock()
 
 function logtag(tag::AbstractString, x::AbstractString)
     lock(STDOUT_LOCK) do
@@ -61,5 +61,20 @@ macro uniform_delay(secs::Real, expr)
     quote
         sleep($(esc(secs)) * rand())
         $(esc(expr))
+    end
+end
+
+macro timeout(s::Real, f)
+    quote
+        c = Channel(2)
+        Threads.@spawn begin
+            sleep($(esc(s)))
+            put!(c, :timeout)
+        end
+        Threads.@spawn begin
+            result = $(esc(f))
+            put!(c, result)
+        end
+        take!(c)
     end
 end
