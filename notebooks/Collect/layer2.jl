@@ -53,11 +53,10 @@ function load_resources()::Vector{Resource}
     shared = get_proxies("$RESOURCE_PATH/proxies/shared.txt")
     dedicated = get_proxies("$RESOURCE_PATH/proxies/dedicated.txt")
 
-    # mal (ip and token limit)
     mal_tokens =
         [only(readlines(x)) for x in Glob.glob("$RESOURCE_PATH/mal/authentication/*.txt")]
     mal_resources = [
-        Dict("location" => "mal", "token" => x, "proxytype" => "url", "proxyurls" => [], "ratelimit" => 8) for
+        Dict("location" => "mal", "token" => x, "proxyurls" => [], "ratelimit" => 8) for
         x in mal_tokens
     ]
     i = 1
@@ -69,15 +68,12 @@ function load_resources()::Vector{Resource}
     end
     mal_resources = [x for x in mal_resources if !isempty(x["proxyurls"])]
 
-    # malweb (ip limit)
     malweb_resources =
-        [Dict("location" => "malweb", "proxytype" => "url", "proxyurl" => x, "ratelimit" => 4) for x in shared]
+        [Dict("location" => "malweb", "proxyurl" => x, "ratelimit" => 4) for x in shared]
 
-    # anilist (ip limit)
     anilist_resources =
-        [Dict("location" => "anilist", "proxytype" => "url", "proxyurl" => x, "ratelimit" => 4) for x in shared]
+        [Dict("location" => "anilist", "proxyurl" => x, "ratelimit" => 4) for x in shared]
 
-    # kitsu (ip limit)
     kitsu_credentials = []
     for x in Glob.glob("$RESOURCE_PATH/kitsu/authentication/*.txt")
         (username, password) = readlines(x)
@@ -86,30 +82,14 @@ function load_resources()::Vector{Resource}
     kitsu_resources = [
         Dict(
             "location" => "kitsu",
-            "proxytype" => "url",
             "proxyurl" => x,
             "credentials" => kitsu_credentials,
             "ratelimit" => 8,
         ) for x in shared
     ]
 
-    # animeplanet (credit limit)
     animeplanet_resources =
-        [Dict("location" => "animeplanet", "proxytype" => "url", "proxyurl" => x, "ratelimit" => 8) for x in dedicated]
-    animeplanet_token, animeplanet_concurrency = readlines("$RESOURCE_PATH/proxies/scrapfly.txt")
-    animeplanet_concurrency = parse(Int, animeplanet_concurrency)
-    for uid = 1:animeplanet_concurrency
-        push!(
-            animeplanet_resources,
-            Dict(
-                "location" => "animeplanet",
-                "proxytype" => "scrapfly",
-                "token" => animeplanet_token,
-                "uid" => uid,
-                "ratelimit" => 0,
-            )
-        )
-    end
+        [Dict("location" => "animeplanet", "proxyurl" => x, "ratelimit" => 8) for x in dedicated]
 
     resources = vcat(
         mal_resources,
@@ -335,41 +315,16 @@ function request(
             ResourceMetadata(m.version, time(), m.request_times)
     end
     ratelimit!(metadata, resource["ratelimit"])
-    if resource["proxytype"] == "url"
-        if "proxyurls" in keys(resource)
-            proxyurl = rand(resource["proxyurls"])
-        else
-            proxyurl = resource["proxyurl"]
-        end
-        sessionid = string(shahash((resource, proxyurl, Dates.today())))
-        if "sessionid" in keys(headers)
-            sessionid = pop!(headers, "sessionid")
-        end
-        return callproxy(method, url, headers, body, proxyurl, sessionid)
-    elseif resource["proxytype"] == "scrapfly"
-        url = string(
-            HTTP.URI(
-                "https://api.scrapfly.io/scrape";
-                query = Dict(
-                    "session" => pop!(headers, "sessionid"),
-                    "key" => resource["token"],
-                    "proxy_pool" => "public_datacenter_pool",
-                    "url" => url,
-                    "country" => "us",
-                ),
-            ),
-        )
-        return callproxy(
-            method,
-            url,
-            headers,
-            body,
-            nothing,
-            string(shahash((resource, Dates.today()))),
-        )
+    if "proxyurls" in keys(resource)
+        proxyurl = rand(resource["proxyurls"])
     else
-        @assert false
+        proxyurl = resource["proxyurl"]
     end
+    sessionid = string(shahash((resource, proxyurl, Dates.today())))
+    if "sessionid" in keys(headers)
+        sessionid = pop!(headers, "sessionid")
+    end
+    callproxy(method, url, headers, body, proxyurl, sessionid)
 end
 
 @memoize function html_entity_map()
@@ -1790,31 +1745,14 @@ Oxygen.@post "/animeplanet" function animeplanet_api(r::HTTP.Request)::HTTP.Resp
 end
 
 function parse_animeplanet_response(resource::Resource, r::Response, found::Function)
-    if resource["proxytype"] == "url"
-        text = r.body
-        if occursin("<title>Just a moment...</title>", text)
-            return HTTP.Response(401, [])
-        end
-        if !found(text)
-            return HTTP.Response(404, [])
-        end
-        return text
-    elseif resource["proxytype"] == "scrapfly"
-        if r.status >= 400
-            return HTTP.Response(r)
-        end
-        json = JSON3.read(r.body)
-        text = json.result.content
-        if !found(text)
-            return HTTP.Response(404, [])
-        end
-        if !json["result"]["success"]
-            return HTTP.Response(401, [])
-        end
-        return text
-    else
-        @assert false
+    text = r.body
+    if occursin("<title>Just a moment...</title>", text)
+        return HTTP.Response(401, [])
     end
+    if !found(text)
+        return HTTP.Response(404, [])
+    end
+    text
 end
 
 function animeplanet_get_list(
