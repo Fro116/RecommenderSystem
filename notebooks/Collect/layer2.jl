@@ -441,6 +441,8 @@ Oxygen.@post "/mal" function mal_api(r::HTTP.Request)::HTTP.Response
     try
         if endpoint == "list"
             return mal_get_list(resource, data["username"], data["medium"], data["offset"])
+        elseif endpoint == "fingerprint"
+            return mal_get_fingerprint(resource, data["username"], data["medium"])
         elseif endpoint == "media"
             return mal_get_media(resource, data["medium"], data["itemid"])
         else
@@ -517,6 +519,40 @@ function mal_get_list(resource::Resource, username::String, medium::String, offs
     if "next" in keys(json["paging"])
         ret["next"] = json["paging"]["next"]
     end
+    HTTP.Response(200, encode(ret, :json)...)
+end
+
+function mal_get_fingerprint(resource::Resource, username::String, medium::String)
+    params = Dict("limit" => 1, "fields" => "list_status{updated_at}", "nsfw" => true, "sort" => "list_updated_at")
+    url = string(
+        HTTP.URI(
+            "https://api.myanimelist.net/v2/users/$username/$(medium)list";
+            query = params,
+        ),
+    )
+    entries = []
+    headers = Dict("X-MAL-CLIENT-ID" => resource["token"])
+    r = request(resource, "GET", url, headers)
+    if r.status >= 400
+        logstatus("mal_get_fingerprint", r, url)
+        return HTTP.Response(r)
+    end
+    json = JSON3.read(r.body)
+    if "data" ∉ keys(json)
+        logerror("mal_get_fingerprint received empty json $(keys(json)) for $url")
+        return HTTP.Response(500, [])
+    end
+    for x in json["data"]
+        ls = x["list_status"]
+        d = Dict(
+            "version" => API_VERSION,
+            "medium" => medium,
+            "itemid" => x["node"]["id"],
+            "updated_at" => optget(ls, "updated_at"),
+        )
+        push!(entries, d)
+    end
+    ret = Dict("entries" => entries)
     HTTP.Response(200, encode(ret, :json)...)
 end
 
@@ -843,6 +879,8 @@ Oxygen.@post "/anilist" function anilist_api(r::HTTP.Request)::HTTP.Response
     try
         if endpoint == "list"
             return anilist_get_list(resource, data["userid"], data["medium"], data["chunk"])
+        elseif endpoint == "fingerprint"
+            return anilist_get_fingerprint(resource, data["userid"], data["medium"])
         elseif endpoint == "media"
             return anilist_get_media(resource, data["medium"], data["itemid"])
         elseif endpoint == "userid"
@@ -950,6 +988,58 @@ function anilist_get_list(resource::Resource, userid::Int, medium::String, chunk
         "entries" => collect(values(entries)),
         "chunk" => chunk,
         "next" => has_next_chunk,
+    )
+    HTTP.Response(200, encode(ret, :json)...)
+end
+
+function anilist_get_fingerprint(resource::Resource, userid::Int, medium::String)
+    url = "https://graphql.anilist.co"
+    query = """
+    query (\$userID: Int, \$MEDIA: MediaType, \$chunk: Int, \$perChunk: Int, \$sort: [MediaListSort]) {
+        MediaListCollection (userId: \$userID, type: \$MEDIA, chunk: \$chunk, perChunk: \$perChunk, sort: \$sort) {
+            lists {
+                entries {
+                    mediaId
+                    updatedAt
+                }
+            }
+        }
+    }
+    """
+    variables = Dict(
+        "userID" => userid,
+        "MEDIA" => uppercase(medium),
+        "chunk" => 1,
+        "perChunk" => 1,
+        "sort" => "UPDATED_TIME_DESC",
+    )
+    r = request(
+        resource,
+        "POST",
+        url,
+        encode(Dict("query" => query, "variables" => variables), :json)...,
+    )
+    if r.status >= 400
+        logstatus("anilist_get_fingerprint", r, url)
+        return HTTP.Response(r)
+    end
+    json = JSON3.read(r.body)
+    entries = Dict()
+    for x in json["data"]["MediaListCollection"]["lists"]
+        for entry in x["entries"]
+            key = entry["mediaId"]
+            if key ∉ keys(entries)
+                entries[key] = Dict(
+                    "version" => API_VERSION,
+                    "medium" => medium,
+                    "itemid" => entry["mediaId"],
+                    "updatedAt" => entry["updatedAt"],
+                )
+            end
+        end
+    end
+    ret = Dict(
+        "entries" => collect(values(entries)),
     )
     HTTP.Response(200, encode(ret, :json)...)
 end
@@ -1346,6 +1436,8 @@ Oxygen.@post "/kitsu" function kitsu_api(r::HTTP.Request)::HTTP.Response
     try
         if endpoint == "list"
             return kitsu_get_list(resource, data["auth"], data["userid"], data["offset"])
+        elseif endpoint == "fingerprint"
+            return kitsu_get_fingerprint(resource, data["auth"], data["userid"])
         elseif endpoint == "media"
             return kitsu_get_media(resource, data["auth"], data["medium"], data["itemid"])
         elseif endpoint == "userid"
@@ -1550,6 +1642,39 @@ function kitsu_get_list(
     HTTP.Response(200, encode(ret, :json)...)
 end
 
+function kitsu_get_fingerprint(
+    resource::Resource,
+    auth::String,
+    userid::Int,
+)
+    url = "https://kitsu.io/api/edge/library-entries"
+    params = Dict(
+        "filter[user_id]" => userid,
+        "page[limit]" => 1,
+        "sort" => "-updatedAt",
+        "fields[library-entries]" => "updatedAt",
+    )
+    url = string(HTTP.URI("https://kitsu.app/api/edge/library-entries"; query = params))
+    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
+    r = request(resource, "GET", url, headers)
+    if r.status >= 400
+        logstatus("kitsu_get_fingerprint", r, url)
+        return HTTP.Response(r)
+    end
+    json = JSON3.read(r.body)
+    entries = []
+    for x in json["data"]
+        d = Dict(
+            "version" => API_VERSION,
+            "updatedAt" => optget(x["attributes"], "updatedAt"),
+        )
+        push!(entries, d)
+    end
+    ret = Dict("entries" => entries)
+    HTTP.Response(200, encode(ret, :json)...)
+end
+
+
 function kitsu_get_user(resource::Resource, auth::String, userid::Int)
     params = Dict("include" => "stats")
     url = string(HTTP.URI("https://kitsu.app/api/edge/users/$userid"; query = params))
@@ -1627,6 +1752,13 @@ Oxygen.@post "/animeplanet" function animeplanet_api(r::HTTP.Request)::HTTP.Resp
                 data["username"],
                 data["page"],
                 data["expand_pagelimit"],
+            )
+        elseif endpoint == "fingerprint"
+            return animeplanet_get_fingerprint(
+                resource,
+                sessionid,
+                data["medium"],
+                data["username"],
             )
         elseif endpoint == "media"
             return animeplanet_get_media(
@@ -1771,6 +1903,49 @@ function animeplanet_get_list(
         prevline = line
     end
     ret = Dict("entries" => entries, "next" => next_page)
+    HTTP.Response(200, encode(ret, :json)...)
+end
+
+function animeplanet_get_fingerprint(
+    resource::Resource,
+    sessionid::String,
+    medium::String,
+    username::String,
+)
+    params = Dict{String,Any}("sort" => "user_updated", "order" => "desc")
+    url = string(
+        HTTP.URI("https://www.anime-planet.com/users/$username/$medium"; query = params),
+    )
+    r = request(resource, "GET", url, Dict("sessionid" => sessionid))
+    text = parse_animeplanet_response(resource, r, x -> !occursin("<title>Search Results for $username", x))
+    if text isa HTTP.Response
+        logstatus("animeplanet_get_fingerprint", text, url)
+        return text
+    end
+    if occursin("has chosen to make their content private.", text)
+        return HTTP.Response(403, [])
+    end
+    entries = []
+    prevline = nothing
+    for line in split(text, "\n")
+        if occursin("<h3 class='cardName' >", line)
+            d = Dict(
+                "version" => API_VERSION,
+                "medium" => medium,
+                "itemid" => extract(prevline, """href="/$medium/""", '"'),
+            )
+            push!(entries, d)
+            break
+        end
+        prevline = line
+    end
+    if occursin("</b> $medium on this list</p>", text)
+        count = parse(Int, extract(text, "<b>", "</b> $medium on this list</p>"))
+    else
+        count = 0
+    end
+    push!(entries, Dict("version" => API_VERSION, "$(medium)_count" => count))
+    ret = Dict("entries" => entries)
     HTTP.Response(200, encode(ret, :json)...)
 end
 

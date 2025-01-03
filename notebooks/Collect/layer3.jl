@@ -274,6 +274,49 @@ function get_mal_list(medium::String, username::String)
     end
 end
 
+Oxygen.@post "/mal_fingerprint" function mal_fingerprint(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    username = data["username"]
+    tasks = [Threads.@spawn @retry get_mal_fingerprint(m, username) for m in ["manga", "anime"]]
+    ret = []
+    for task in tasks
+        t = fetch(task)
+        if t isa Errors
+            return HTTP.Response(Int(t), [])
+        end
+        append!(ret, t["entries"])
+    end
+    HTTP.Response(200, encode(Dict("fingerprint" => ret), :json)...)
+end
+
+function get_mal_fingerprint(medium::String, username::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "mal", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAILABLE::Errors
+    end
+    token = decode(r)
+    try
+        s = request(
+            "mal",
+            Dict(
+                "token" => token,
+                "endpoint" => "fingerprint",
+                "username" => username,
+                "medium" => medium,
+            ),
+        )
+        if s.status >= 400
+            return NOT_FOUND::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
 Oxygen.@post "/mal_media" function mal_media(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     medium = data["medium"]
@@ -407,6 +450,49 @@ function get_anilist_list(medium::String, userid::Int)
             end
             chunk += 1
         end
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/anilist_fingerprint" function anilist_fingerprint(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    userid = data["userid"]
+    tasks = [Threads.@spawn @retry get_anilist_fingerprint(m, userid) for m in ["manga", "anime"]]
+    ret = []
+    for task in tasks
+        t = fetch(task)
+        if t isa Errors
+            return HTTP.Response(Int(t), [])
+        end
+        append!(ret, t["entries"])
+    end
+    HTTP.Response(200, encode(Dict("fingerprint" => ret), :json)...)
+end
+
+function get_anilist_fingerprint(medium::String, userid::Int)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAILABLE::Errors
+    end
+    token = decode(r)
+    try
+        s = request(
+            "anilist",
+            Dict(
+                "token" => token,
+                "endpoint" => "fingerprint",
+                "userid" => userid,
+                "medium" => medium,
+            ),
+        )
+        if s.status >= 400
+            return NOT_FOUND::Errors
+        end
+        return decode(s)
     finally
         request("resources", Dict("method" => "put", "token" => token))
     end
@@ -553,6 +639,56 @@ function get_kitsu_list(userid::Int)
             end
             offset += data["limit"]
         end
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/kitsu_fingerprint" function kitsu_fingerprint(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    userid = data["userid"]
+    tasks = [Threads.@spawn @retry get_kitsu_fingerprint(userid)]
+    ret = []
+    for task in tasks
+        t = fetch(task)
+        if t isa Errors
+            return HTTP.Response(Int(t), [])
+        end
+        append!(ret, t["entries"])
+    end
+    HTTP.Response(200, encode(Dict("fingerprint" => ret), :json)...)
+end
+
+function get_kitsu_fingerprint(userid::Int)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAILABLE::Errors
+    end
+    token = decode(r)
+    try
+        auth = get_session(token)
+        if isa(auth, Errors)
+            return auth
+        end
+        s = request(
+            "kitsu",
+            Dict(
+                "token" => token,
+                "endpoint" => "fingerprint",
+                "auth" => auth,
+                "userid" => userid,
+            ),
+        )
+        if s.status in [400, 401]
+            invalidate_session(token)
+            return INVALID_SESSION::Errors
+        elseif s.status >= 400
+            return NOT_FOUND::Errors
+        end
+        return decode(s)
     finally
         request("resources", Dict("method" => "put", "token" => token))
     end
@@ -817,6 +953,54 @@ function get_animeplanet_entries(medium::String, username::String)
             end
             page += 1
         end
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/animeplanet_fingerprint" function animeplanet_fingerprint(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    username = data["username"]
+    tasks = [Threads.@spawn @retry get_animeplanet_fingerprint(m, username) for m in ["manga", "anime"]]
+    ret = []
+    for task in tasks
+        t = fetch(task)
+        if t isa Errors
+            return HTTP.Response(Int(t), [])
+        end
+        append!(ret, t["entries"])
+    end
+    HTTP.Response(200, encode(Dict("fingerprint" => ret), :json)...)
+end
+
+function get_animeplanet_fingerprint(medium::String, username::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAILABLE::Errors
+    end
+    token = decode(r)
+    try
+        sessionid = get_session(token)
+        s = request(
+            "animeplanet",
+            Dict(
+                "token" => token,
+                "sessionid" => sessionid,
+                "endpoint" => "fingerprint",
+                "username" => username,
+                "medium" => medium,
+            ),
+        )
+        if s.status == 401
+            invalidate_session(token)
+            return INVALID_SESSION::Errors
+        elseif s.status >= 400
+            return NOT_FOUND::Errors
+        end
+        return decode(s)
     finally
         request("resources", Dict("method" => "put", "token" => token))
     end
