@@ -8,20 +8,6 @@ import UUIDs
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
 
-struct Response
-    status::Int
-    body::Vector{UInt8}
-    headers::Dict{String,String}
-end
-
-function decode(r::Response)::Dict
-    if r.headers["Content-Type"] == "application/json"
-        return JSON3.read(String(r.body), Dict{String,Any})
-    else
-        @assert false
-    end
-end
-
 function request(url::String, query::String, params::Dict)
     url = "$url/$query"
     for delay in ExponentialBackOff(;
@@ -31,12 +17,12 @@ function request(url::String, query::String, params::Dict)
         factor = 2.0,
         jitter = 0.1,
     )
-        r = HTTP.post(url, encode(params, :json)..., status_exception = false)
+        r = HTTP.post(url, encode(params, :msgpack)..., status_exception = false)
         if r.status < 400 || r.status in [400, 401, 403, 404]
             # 400, 401 -> auth error
             # 403 -> list is private
             # 404 -> invalid user
-            return Response(r.status, r.body, Dict(k => v for (k, v) in r.headers))
+            return r
         end
         if HTTP.hasheader(r.headers, "Retry-After")
             try
@@ -51,7 +37,7 @@ function request(url::String, query::String, params::Dict)
         sleep(delay)
     end
     logerror("could not retrieve $url $params")
-    Response(500, [], Dict())
+    HTTP.Response(500, [])
 end
 
 request(query::String, params::Dict) = request(LAYER_2_URL, query, params)
@@ -142,7 +128,7 @@ function fetch_user_parallel(user_data, items)
         end
         append!(ret["items"], x)
     end
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 Oxygen.@post "/mal_username" function mal_username(r::HTTP.Request)::HTTP.Response
@@ -152,10 +138,10 @@ Oxygen.@post "/mal_username" function mal_username(r::HTTP.Request)::HTTP.Respon
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
-    HTTP.Response(200, encode(data, :json)...)
+    HTTP.Response(200, encode(data, :msgpack)...)
 end
 
-function get_malweb_username(userid::Int)
+function get_malweb_username(userid::Integer)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "malweb", "timeout" => TOKEN_TIMEOUT),
@@ -198,7 +184,7 @@ Oxygen.@post "/mal_user" function mal_user(r::HTTP.Request)::HTTP.Response
     end
     userid_data = Dict([x => user_data[x] for x in ["username", "userid", "version"]]...)
     ret = Dict("user" => user_data, "items" => items, "userid" => userid_data)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 Oxygen.@post "/mal_user_parallel" function mal_user_parallel(r::HTTP.Request)::HTTP.Response
@@ -286,7 +272,7 @@ Oxygen.@post "/mal_fingerprint" function mal_fingerprint(r::HTTP.Request)::HTTP.
         end
         append!(ret, t["entries"])
     end
-    HTTP.Response(200, encode(Dict("fingerprint" => ret), :json)...)
+    HTTP.Response(200, encode(Dict("fingerprint" => ret), :msgpack)...)
 end
 
 function get_mal_fingerprint(medium::String, username::String)
@@ -329,10 +315,10 @@ Oxygen.@post "/mal_media" function mal_media(r::HTTP.Request)::HTTP.Response
     if isa(relations, Errors)
         return HTTP.Response(Int(relations), [])
     end
-    HTTP.Response(200, encode(merge(details, relations), :json)...)
+    HTTP.Response(200, encode(merge(details, relations), :msgpack)...)
 end
 
-function get_mal_media(location::String, medium::String, itemid::Int)
+function get_mal_media(location::String, medium::String, itemid::Integer)
     r = request(
         "resources",
         Dict("method" => "take", "location" => location, "timeout" => TOKEN_TIMEOUT),
@@ -379,7 +365,7 @@ Oxygen.@post "/anilist_user" function anilist_user(r::HTTP.Request)::HTTP.Respon
         append!(items, list)
     end
     ret = Dict("user" => user_data, "items" => items)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 Oxygen.@post "/anilist_user_parallel" function anilist_user_parallel(r::HTTP.Request)::HTTP.Response
@@ -394,7 +380,7 @@ Oxygen.@post "/anilist_user_parallel" function anilist_user_parallel(r::HTTP.Req
     fetch_user_parallel(user_data, items)
 end
 
-function get_anilist_user(userid::Int)
+function get_anilist_user(userid::Integer)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
@@ -417,7 +403,7 @@ function get_anilist_user(userid::Int)
     end
 end
 
-function get_anilist_list(medium::String, userid::Int)
+function get_anilist_list(medium::String, userid::Integer)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
@@ -467,10 +453,10 @@ Oxygen.@post "/anilist_fingerprint" function anilist_fingerprint(r::HTTP.Request
         end
         append!(ret, t["entries"])
     end
-    HTTP.Response(200, encode(Dict("fingerprint" => ret), :json)...)
+    HTTP.Response(200, encode(Dict("fingerprint" => ret), :msgpack)...)
 end
 
-function get_anilist_fingerprint(medium::String, userid::Int)
+function get_anilist_fingerprint(medium::String, userid::Integer)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
@@ -506,10 +492,10 @@ Oxygen.@post "/anilist_media" function anilist_media(r::HTTP.Request)::HTTP.Resp
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
-    HTTP.Response(200, encode(data, :json)...)
+    HTTP.Response(200, encode(data, :msgpack)...)
 end
 
-function get_anilist_media(medium::String, itemid::Int)
+function get_anilist_media(medium::String, itemid::Integer)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
@@ -544,7 +530,7 @@ Oxygen.@post "/anilist_userid" function anilist_userid(r::HTTP.Request)::HTTP.Re
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
-    HTTP.Response(200, encode(data, :json)...)
+    HTTP.Response(200, encode(data, :msgpack)...)
 end
 
 Oxygen.@post "/kitsu_user" function kitsu_user(r::HTTP.Request)::HTTP.Response
@@ -563,7 +549,7 @@ Oxygen.@post "/kitsu_user" function kitsu_user(r::HTTP.Request)::HTTP.Response
         append!(items, list)
     end
     ret = Dict("user" => user_data, "items" => items)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 Oxygen.@post "/kitsu_user_parallel" function kitsu_user_parallel(r::HTTP.Request)::HTTP.Response
@@ -574,7 +560,7 @@ Oxygen.@post "/kitsu_user_parallel" function kitsu_user_parallel(r::HTTP.Request
     fetch_user_parallel(user_data, items)
 end
 
-function get_kitsu_user(userid::Int)
+function get_kitsu_user(userid::Integer)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
@@ -609,7 +595,7 @@ function get_kitsu_user(userid::Int)
     end
 end
 
-function get_kitsu_list(userid::Int)
+function get_kitsu_list(userid::Integer)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
@@ -666,10 +652,10 @@ Oxygen.@post "/kitsu_fingerprint" function kitsu_fingerprint(r::HTTP.Request)::H
         end
         append!(ret, t["entries"])
     end
-    HTTP.Response(200, encode(Dict("fingerprint" => ret), :json)...)
+    HTTP.Response(200, encode(Dict("fingerprint" => ret), :msgpack)...)
 end
 
-function get_kitsu_fingerprint(userid::Int)
+function get_kitsu_fingerprint(userid::Integer)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
@@ -712,10 +698,10 @@ Oxygen.@post "/kitsu_media" function kitsu_media(r::HTTP.Request)::HTTP.Response
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
-    HTTP.Response(200, encode(data, :json)...)
+    HTTP.Response(200, encode(data, :msgpack)...)
 end
 
-function get_kitsu_media(medium::String, itemid::Int)
+function get_kitsu_media(medium::String, itemid::Integer)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
@@ -758,7 +744,7 @@ Oxygen.@post "/kitsu_userid" function kitsu_userid(r::HTTP.Request)::HTTP.Respon
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
-    HTTP.Response(200, encode(data, :json)...)
+    HTTP.Response(200, encode(data, :msgpack)...)
 end
 
 Oxygen.@post "/animeplanet_username" function animeplanet_username(
@@ -770,10 +756,10 @@ Oxygen.@post "/animeplanet_username" function animeplanet_username(
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
-    HTTP.Response(200, encode(data, :json)...)
+    HTTP.Response(200, encode(data, :msgpack)...)
 end
 
-function get_animeplanet_username(userid::Int)
+function get_animeplanet_username(userid::Integer)
     r = request(
         "resources",
         Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
@@ -825,7 +811,7 @@ Oxygen.@post "/animeplanet_user" function animeplanet_user(r::HTTP.Request)::HTT
     end
     userid_data = Dict([x => user_data[x] for x in ["username", "userid", "version"]]...)
     ret = Dict("user" => user_data, "items" => items, "userid" => userid_data)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 Oxygen.@post "/animeplanet_user_parallel" function animeplanet_user_parallel(r::HTTP.Request)::HTTP.Response
@@ -990,7 +976,7 @@ Oxygen.@post "/animeplanet_fingerprint" function animeplanet_fingerprint(r::HTTP
         end
         append!(ret, t["entries"])
     end
-    HTTP.Response(200, encode(Dict("fingerprint" => ret), :json)...)
+    HTTP.Response(200, encode(Dict("fingerprint" => ret), :msgpack)...)
 end
 
 function get_animeplanet_fingerprint(medium::String, username::String)
@@ -1034,7 +1020,7 @@ Oxygen.@post "/animeplanet_media" function animeplanet_media(r::HTTP.Request)::H
     if isa(data, Errors)
         return HTTP.Response(Int(data), [])
     end
-    HTTP.Response(200, encode(data, :json)...)
+    HTTP.Response(200, encode(data, :msgpack)...)
 end
 
 function get_animeplanet_media(medium::String, itemid::String)

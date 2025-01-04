@@ -31,7 +31,7 @@ function get_partition()
     (0, 1)
 end
 
-const Resource = Dict{String,Any}
+const Resource = Dict
 
 function load_resources()::Vector{Resource}
     credentials = Dict()
@@ -228,7 +228,7 @@ Oxygen.@post "/resources" function resources_api(r::HTTP.Request)::HTTP.Response
         if isnothing(token)
             return HTTP.Response(404, [])
         end
-        return HTTP.Response(200, encode(token, :json)...)
+        return HTTP.Response(200, encode(token, :msgpack)...)
     elseif data["method"] == "put"
         put!(RESOURCES, data["token"]["resource"], data["token"]["version"])
         return HTTP.Response(200, [])
@@ -255,7 +255,7 @@ function ratelimit!(x::ResourceMetadata, ratelimit::Real)
 end
 
 struct Response
-    status::Int
+    status::Integer
     body::String
     headers::Dict{String,String}
 end
@@ -411,7 +411,7 @@ Oxygen.@post "/mal" function mal_api(r::HTTP.Request)::HTTP.Response
     end
 end
 
-function mal_get_list(resource::Resource, username::String, medium::String, offset::Int)
+function mal_get_list(resource::Resource, username::String, medium::String, offset::Integer)
     if medium == "anime"
         progress_col = "num_episodes_watched"
         repeat_col = "is_rewatching"
@@ -474,7 +474,7 @@ function mal_get_list(resource::Resource, username::String, medium::String, offs
     if "next" in keys(json["paging"])
         ret["next"] = json["paging"]["next"]
     end
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function mal_get_fingerprint(resource::Resource, username::String, medium::String)
@@ -508,10 +508,10 @@ function mal_get_fingerprint(resource::Resource, username::String, medium::Strin
         push!(entries, d)
     end
     ret = Dict("entries" => entries)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function mal_get_media(resource::Resource, medium::String, itemid::Int)
+function mal_get_media(resource::Resource, medium::String, itemid::Integer)
     fields = Dict(
         "common" => [
             "id",
@@ -592,7 +592,7 @@ function mal_get_media(resource::Resource, medium::String, itemid::Int)
     )
     # the mal API does not return manga relations for anime entries and vice versa        
     ret = Dict("details" => details)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 Oxygen.@post "/malweb" function malweb_api(r::HTTP.Request)::HTTP.Response
@@ -622,7 +622,7 @@ Oxygen.@post "/malweb" function malweb_api(r::HTTP.Request)::HTTP.Response
     end
 end
 
-function malweb_get_username(resource::Resource, userid::Int)
+function malweb_get_username(resource::Resource, userid::Integer)
     url = "https://myanimelist.net/comments.php?id=$userid"
     r = request(resource, "GET", url, Dict("impersonate" => true))
     if r.status >= 400
@@ -632,12 +632,12 @@ function malweb_get_username(resource::Resource, userid::Int)
     for m in eachmatch(r"/profile/([^\"/%]+)\"", r.body)
         username = only(m.captures)
         ret = Dict("version" => API_VERSION, "userid" => userid, "username" => username)
-        return HTTP.Response(200, encode(ret, :json)...)
+        return HTTP.Response(200, encode(ret, :msgpack)...)
     end
     HTTP.Response(404, [])
 end
 
-function malweb_get_media(resource::Resource, medium::String, itemid::Int)
+function malweb_get_media(resource::Resource, medium::String, itemid::Integer)
     url = "https://myanimelist.net/$medium/$itemid"
     r = request(resource, "GET", url, Dict("impersonate" => true))
     if r.status >= 400
@@ -646,10 +646,10 @@ function malweb_get_media(resource::Resource, medium::String, itemid::Int)
     end
     relations = malweb_get_media_relations(r.body, medium, itemid)
     ret = Dict("relations" => relations)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function malweb_get_media_relations(text::String, medium::String, itemid::Int)
+function malweb_get_media_relations(text::String, medium::String, itemid::Integer)
     relation_types = Set([
         "Sequel",
         "Prequel",
@@ -819,7 +819,7 @@ function malweb_get_user(resource::Resource, username::String)
         "manga_count" => item_counts("mangalist"),
         "anime_count" => item_counts("animelist"),
     )
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 Oxygen.@post "/anilist" function anilist_api(r::HTTP.Request)::HTTP.Response
@@ -853,7 +853,7 @@ Oxygen.@post "/anilist" function anilist_api(r::HTTP.Request)::HTTP.Response
     end
 end
 
-function anilist_get_list(resource::Resource, userid::Int, medium::String, chunk::Int)
+function anilist_get_list(resource::Resource, userid::Integer, medium::String, chunk::Integer)
     url = "https://graphql.anilist.co"
     query = """
     query (\$userID: Int, \$MEDIA: MediaType, \$chunk: Int, \$perChunk: Int) {
@@ -944,10 +944,10 @@ function anilist_get_list(resource::Resource, userid::Int, medium::String, chunk
         "chunk" => chunk,
         "next" => has_next_chunk,
     )
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function anilist_get_fingerprint(resource::Resource, userid::Int, medium::String)
+function anilist_get_fingerprint(resource::Resource, userid::Integer, medium::String)
     url = "https://graphql.anilist.co"
     query = """
     query (\$userID: Int, \$MEDIA: MediaType, \$chunk: Int, \$perChunk: Int, \$sort: [MediaListSort]) {
@@ -996,7 +996,7 @@ function anilist_get_fingerprint(resource::Resource, userid::Int, medium::String
     ret = Dict(
         "entries" => collect(values(entries)),
     )
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function anilist_get_userid(resource::Resource, username::String)
@@ -1018,10 +1018,10 @@ function anilist_get_userid(resource::Resource, username::String)
         "username" => username,
         "userid" => JSON3.read(r.body)["data"]["User"]["id"],
     )
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function anilist_get_media(resource::Resource, medium::String, itemid::Int)
+function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
     url = "https://graphql.anilist.co"
     query = """
     query (\$id: Int, \$MEDIA: MediaType)
@@ -1230,10 +1230,10 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Int)
         push!(relations, d)
     end
     ret = Dict("details" => details, "relations" => relations)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function anilist_get_user(resource::Resource, userid::Int)
+function anilist_get_user(resource::Resource, userid::Integer)
     url = "https://graphql.anilist.co"
     query = """
     query (\$id: Int)
@@ -1376,7 +1376,7 @@ function anilist_get_user(resource::Resource, userid::Int)
         "updatedAt" => data["updatedAt"],
         "previousNames" => data["previousNames"],
     )
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 Oxygen.@post "/kitsu" function kitsu_api(r::HTTP.Request)::HTTP.Response
@@ -1418,7 +1418,7 @@ function kitsu_get_token(resource::Resource)
     password = credentials["password"]
     url = "https://kitsu.app/api/oauth/token"
     body = Dict("grant_type" => "password", "username" => username, "password" => password)
-    headers, content = encode(body, :json)
+    headers, content = encode(body, :msgpack)
     headers = Dict{String,Any}(headers)
     headers["impersonate"] = true
     r = request(resource, "POST", url, headers, content)
@@ -1431,7 +1431,7 @@ function kitsu_get_token(resource::Resource)
     expires_in = data["expires_in"]
     expiry_time = time() + expires_in
     ret = Dict("token" => token, "expiry_time" => expiry_time)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function kitsu_get_userid(resource::Resource, auth::String, username::String, key::String)
@@ -1452,10 +1452,10 @@ function kitsu_get_userid(resource::Resource, auth::String, username::String, ke
         return HTTP.Response(404, [])
     end
     ret = Dict("version" => API_VERSION, "userid" => parse(Int, only(data)["id"]))
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function kitsu_get_media(resource::Resource, auth::String, medium::String, itemid::Int)
+function kitsu_get_media(resource::Resource, auth::String, medium::String, itemid::Integer)
     params = Dict(
         "include" => "genres,mappings,mediaRelationships.destination",
         "fields[genres]" => "name",
@@ -1534,14 +1534,14 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
         end
     end
     ret = Dict("details" => details, "relations" => relations)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function kitsu_get_list(
     resource::Resource,
     auth::String,
-    userid::Int,
-    offset::Int,
+    userid::Integer,
+    offset::Integer,
 )
     url = "https://kitsu.io/api/edge/library-entries"
     params = Dict(
@@ -1594,13 +1594,13 @@ function kitsu_get_list(
         ret["next"] = json["links"]["next"]
     end
     ret["limit"] = params["page[limit]"]
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function kitsu_get_fingerprint(
     resource::Resource,
     auth::String,
-    userid::Int,
+    userid::Integer,
 )
     url = "https://kitsu.io/api/edge/library-entries"
     params = Dict(
@@ -1626,11 +1626,11 @@ function kitsu_get_fingerprint(
         push!(entries, d)
     end
     ret = Dict("entries" => entries)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 
-function kitsu_get_user(resource::Resource, auth::String, userid::Int)
+function kitsu_get_user(resource::Resource, auth::String, userid::Integer)
     params = Dict("include" => "stats")
     url = string(HTTP.URI("https://kitsu.app/api/edge/users/$userid"; query = params))
     headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
@@ -1685,7 +1685,7 @@ function kitsu_get_user(resource::Resource, auth::String, userid::Int)
         ret["manga_count"] = 0
         ret["anime_count"] = 0
     end
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 Oxygen.@post "/animeplanet" function animeplanet_api(r::HTTP.Request)::HTTP.Response
@@ -1760,7 +1760,7 @@ function animeplanet_get_list(
     sessionid::String,
     medium::String,
     username::String,
-    page::Int,
+    page::Integer,
     expand_pagelimit::Bool,
 )
     params = Dict{String,Any}("sort" => "user_updated", "order" => "desc")
@@ -1790,7 +1790,7 @@ function animeplanet_get_list(
     next_page = page + 1 in page_numbers
     if default_pagelimit && next_page
         ret = Dict("extend_pagelimit" => true)
-        return HTTP.Response(200, encode(ret, :json)...)
+        return HTTP.Response(200, encode(ret, :msgpack)...)
     end
 
     function get_score(line)
@@ -1841,7 +1841,7 @@ function animeplanet_get_list(
         prevline = line
     end
     ret = Dict("entries" => entries, "next" => next_page)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function animeplanet_get_fingerprint(
@@ -1884,7 +1884,7 @@ function animeplanet_get_fingerprint(
     end
     push!(entries, Dict("version" => API_VERSION, "$(medium)_count" => count))
     ret = Dict("entries" => entries)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function animeplanet_get_media(
@@ -2001,7 +2001,7 @@ function animeplanet_get_media(
         )
     ]
     ret = Dict("details" => details, "relations" => relations)
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function animeplanet_get_user(resource::Resource, sessionid::String, username::String)
@@ -2069,7 +2069,7 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
         "followers" => parse(Int, extract(text, """followers">""", " Followers<")),
         "following" => parse(Int, extract(text, """following">""", " Following<")),
     )
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function animeplanet_get_feed(
@@ -2095,10 +2095,10 @@ function animeplanet_get_feed(
         updated_at = parse(Int, extract(x, "data-timestamp=\"", "\">"))
         ret[title] = updated_at
     end
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function animeplanet_get_username(resource::Resource, sessionid::String, userid::Int)
+function animeplanet_get_username(resource::Resource, sessionid::String, userid::Integer)
     url = "https://www.anime-planet.com/forum/members/$userid"
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
     text = parse_animeplanet_response(resource, r, x -> !occursin("The requested user could not be found.", x))
@@ -2121,7 +2121,7 @@ function animeplanet_get_username(resource::Resource, sessionid::String, userid:
         "userid" => userid,
         "username" => username,
     )
-    HTTP.Response(200, encode(ret, :json)...)
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, metrics=false, show_banner=false)
