@@ -1,8 +1,19 @@
-CREATE TABLE users (
+CREATE TABLE collect_users (
     source TEXT,
     username TEXT,
     userid BIGINT,
-    manga_count INT,
-    anime_count INT
+    fingerprint TEXT,
+    data BYTEA,
+    db_refreshed_at DOUBLE PRECISION
 );
-CREATE INDEX users_source_username_idx ON users (source, lower(username));
+CREATE INDEX collect_users_source_username_idx ON collect_users (source, lower(username));
+
+CREATE TABLE inference_users (
+    source TEXT,
+    username TEXT,
+    userid BIGINT,
+    fingerprint TEXT,
+    data BYTEA,
+    db_refreshed_at DOUBLE PRECISION
+);
+CREATE INDEX inference_users_source_username_idx ON inference_users (source, lower(username));
