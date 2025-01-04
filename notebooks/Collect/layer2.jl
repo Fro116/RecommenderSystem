@@ -1418,7 +1418,7 @@ function kitsu_get_token(resource::Resource)
     password = credentials["password"]
     url = "https://kitsu.app/api/oauth/token"
     body = Dict("grant_type" => "password", "username" => username, "password" => password)
-    headers, content = encode(body, :msgpack)
+    headers, content = encode(body, :json)
     headers = Dict{String,Any}(headers)
     headers["impersonate"] = true
     r = request(resource, "POST", url, headers, content)

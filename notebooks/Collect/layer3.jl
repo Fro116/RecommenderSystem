@@ -113,7 +113,7 @@ function invalidate_session(token::Dict)
     end
 end
 
-function fetch_user_parallel(user_data, items)
+function fetch_user_parallel(source, user_data, items)
     ret = Dict()
     user_data = fetch(user_data)
     if user_data isa Errors
@@ -127,6 +127,14 @@ function fetch_user_parallel(user_data, items)
             return HTTP.Response(Int(x), [])
         end
         append!(ret["items"], x)
+    end
+    if source in ["mal", "anilist", "animeplanet"]
+        ret["usermap"] = Dict([x => user_data[x] for x in ["username", "userid", "version"]]...)
+    elseif source in ["kitsu"]
+        ret["usermap"] = Dict([x => user_data[x] for x in ["userid", "version"]]...)
+        ret["usermap"]["username"] = user_data["name"]
+    else
+        @assert false
     end
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
@@ -196,7 +204,7 @@ Oxygen.@post "/mal_user_parallel" function mal_user_parallel(r::HTTP.Request)::H
         list = Threads.@spawn @retry get_mal_list(m, username)
         push!(items, list)
     end
-    fetch_user_parallel(user_data, items)
+    fetch_user_parallel("mal", user_data, items)
 end
 
 function get_malweb_user(username::String)
@@ -377,7 +385,7 @@ Oxygen.@post "/anilist_user_parallel" function anilist_user_parallel(r::HTTP.Req
         list = Threads.@spawn @retry get_anilist_list(m, userid)
         push!(items, list)
     end
-    fetch_user_parallel(user_data, items)
+    fetch_user_parallel("anilist", user_data, items)
 end
 
 function get_anilist_user(userid::Integer)
@@ -557,7 +565,7 @@ Oxygen.@post "/kitsu_user_parallel" function kitsu_user_parallel(r::HTTP.Request
     userid = data["userid"]
     user_data = Threads.@spawn @retry get_kitsu_user(userid)
     items = [Threads.@spawn @retry get_kitsu_list(userid)]
-    fetch_user_parallel(user_data, items)
+    fetch_user_parallel("kitsu", user_data, items)
 end
 
 function get_kitsu_user(userid::Integer)
@@ -822,7 +830,7 @@ Oxygen.@post "/animeplanet_user_parallel" function animeplanet_user_parallel(r::
     for m in ["manga", "anime"]
         push!(items, Threads.@spawn @retry get_animeplanet_list(m, username, parallel=true))
     end
-    fetch_user_parallel(user_data, items)
+    fetch_user_parallel("animeplanet", user_data, items)
 end
 
 function get_animeplanet_user(username::String)
