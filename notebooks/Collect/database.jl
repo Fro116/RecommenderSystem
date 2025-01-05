@@ -4,6 +4,8 @@ import JSON3
 import SHA
 
 include("../julia_utils/database.jl")
+include("../julia_utils/scheduling.jl")
+include("../julia_utils/stdout.jl")
 
 function canonical_hash(d::AbstractDict)
     canon(x::AbstractDict) = Dict(k => canon(x[k]) for k in sort(collect(keys(x))))

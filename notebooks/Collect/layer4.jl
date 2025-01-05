@@ -3,6 +3,8 @@ import DataFrames
 import Oxygen
 include("../julia_utils/http.jl")
 include("../julia_utils/database.jl")
+include("../julia_utils/stdout.jl")
+include("../julia_utils/multithreading.jl")
 
 const PORT = parse(Int, ARGS[1])
 const LAYER_3_URL = ARGS[2]
@@ -139,7 +141,7 @@ function compile(port::Integer)
             encode(Dict("source" => source, "username" => username), :msgpack)...,
             status_exception = false,
         )
-        if !HTTP.iserror(r_fingerprint) && !HTTP.iserror(r_read)
+        if !HTTP.iserror(r_fetch) && !HTTP.iserror(r_fingerprint)
             list = decode(r_fetch)
             fingerprint = decode(r_fingerprint)
             data = merge(

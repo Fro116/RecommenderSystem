@@ -1,7 +1,5 @@
 import LibPQ
 
-include("stdout.jl")
-
 const DB_PATH = "../../environment/database"
 
 function get_db_connection(max_retries::Real)

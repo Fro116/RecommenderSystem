@@ -7,6 +7,7 @@ import UUIDs
 
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
+include("../julia_utils/multithreading.jl")
 
 function request(url::String, query::String, params::Dict)
     url = "$url/$query"
@@ -129,10 +130,12 @@ function fetch_user_parallel(source, user_data, items)
         append!(ret["items"], x)
     end
     if source in ["mal", "anilist", "animeplanet"]
-        ret["usermap"] = Dict([x => user_data[x] for x in ["username", "userid", "version"]]...)
+        ret["usermap"] = Dict([x => user_data[x] for x in ["username", "userid"]]...)
     elseif source in ["kitsu"]
-        ret["usermap"] = Dict([x => user_data[x] for x in ["userid", "version"]]...)
-        ret["usermap"]["username"] = user_data["name"]
+        ret["usermap"] = Dict(
+            "username" => user_data["name"],
+            "userid" => user_data["userid"],
+        )
     else
         @assert false
     end
@@ -280,7 +283,7 @@ Oxygen.@post "/mal_fingerprint" function mal_fingerprint(r::HTTP.Request)::HTTP.
         end
         append!(ret, t["entries"])
     end
-    HTTP.Response(200, encode(Dict("fingerprint" => ret), :msgpack)...)
+    HTTP.Response(200, encode(Dict("fingerprint" => JSON3.write(ret)), :msgpack)...)
 end
 
 function get_mal_fingerprint(medium::String, username::String)
@@ -461,7 +464,7 @@ Oxygen.@post "/anilist_fingerprint" function anilist_fingerprint(r::HTTP.Request
         end
         append!(ret, t["entries"])
     end
-    HTTP.Response(200, encode(Dict("fingerprint" => ret), :msgpack)...)
+    HTTP.Response(200, encode(Dict("fingerprint" => JSON3.write(ret)), :msgpack)...)
 end
 
 function get_anilist_fingerprint(medium::String, userid::Integer)
@@ -660,7 +663,7 @@ Oxygen.@post "/kitsu_fingerprint" function kitsu_fingerprint(r::HTTP.Request)::H
         end
         append!(ret, t["entries"])
     end
-    HTTP.Response(200, encode(Dict("fingerprint" => ret), :msgpack)...)
+    HTTP.Response(200, encode(Dict("fingerprint" => JSON3.write(ret)), :msgpack)...)
 end
 
 function get_kitsu_fingerprint(userid::Integer)
@@ -984,7 +987,7 @@ Oxygen.@post "/animeplanet_fingerprint" function animeplanet_fingerprint(r::HTTP
         end
         append!(ret, t["entries"])
     end
-    HTTP.Response(200, encode(Dict("fingerprint" => ret), :msgpack)...)
+    HTTP.Response(200, encode(Dict("fingerprint" => JSON3.write(ret)), :msgpack)...)
 end
 
 function get_animeplanet_fingerprint(medium::String, username::String)

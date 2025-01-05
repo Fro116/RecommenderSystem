@@ -1,5 +1,4 @@
 import Logging
-include("stdout.jl")
 
 Logging.disable_logging(Logging.Info)
 READY::Bool = false

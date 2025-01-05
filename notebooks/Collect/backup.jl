@@ -1,5 +1,7 @@
 include("../julia_utils/database.jl")
 include("../julia_utils/http.jl")
+include("../julia_utils/scheduling.jl")
+include("../julia_utils/stdout.jl")
 
 function backup()
     tables = [

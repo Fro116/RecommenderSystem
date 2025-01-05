@@ -1,0 +1,44 @@
+import ProgressMeter
+
+macro handle_errors(ex)
+    quote
+        try
+            $(esc(ex))
+        catch err
+            lock(STDOUT_LOCK) do
+                Base.showerror(stdout, err, catch_backtrace())
+                println()
+            end
+        end
+    end
+end
+
+function collect(c::Channel)
+    ret = []
+    p = ProgressMeter.ProgressUnknown()
+    while true
+        try
+            push!(ret, take!(c))
+            ProgressMeter.next!(p)
+        catch
+            break
+        end
+    end
+    ProgressMeter.finish!(p)
+    ret
+end
+
+macro timeout(s::Real, f)
+    quote
+        c = Channel(2)
+        Threads.@spawn begin
+            sleep($(esc(s)))
+            put!(c, :timeout)
+        end
+        Threads.@spawn begin
+            result = $(esc(f))
+            put!(c, result)
+        end
+        take!(c)
+    end
+end
