@@ -1,5 +1,3 @@
-import ProgressMeter
-
 macro handle_errors(ex)
     quote
         try
@@ -15,16 +13,13 @@ end
 
 function collect(c::Channel)
     ret = []
-    p = ProgressMeter.ProgressUnknown()
     while true
         try
             push!(ret, take!(c))
-            ProgressMeter.next!(p)
         catch
             break
         end
     end
-    ProgressMeter.finish!(p)
     ret
 end
 

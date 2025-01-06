@@ -30,7 +30,7 @@ function backup()
         for table in tables
             logtag("BACKUP", table)
             save = replace(save_template, "{FILE}" => "$date/$table.zstd")
-            query = "COPY $table TO PROGRAM 'zstd $save' WITH (FORMAT CSV, HEADER);"
+            query = "COPY $table TO PROGRAM 'zstd $save' WITH (FORMAT CSV, HEADER, FORCE_QUOTE *);"
             stmt = db_prepare(db, query)
             LibPQ.execute(stmt)
         end

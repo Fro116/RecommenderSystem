@@ -1,6 +1,7 @@
 import Pkg
 
 dependencies = [
+    ("CodecZstd", "0.8.6"),
     ("CSV", "0.10.15"),
     ("DataFrames", "1.7.0"),
     ("Glob", "1.3.1"),
@@ -15,6 +16,7 @@ dependencies = [
     ("LibPQ", "1.18.0"),
     ("MLUtils", "0.4.4"),
     ("Memoize", "0.4.4"),
+    ("MsgPack", "1.2.1"),
     ("NBInclude", "2.4.0"),
     ("NNlib", "0.9.26"),
     ("Optim", "1.10.0"),
