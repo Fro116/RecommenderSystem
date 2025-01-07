@@ -31,7 +31,7 @@ Oxygen.@post "/read" function read_user(r::HTTP.Request)::HTTP.Response
         if df isa Symbol || DataFrames.nrow(df) == 0
             continue
         end
-        if isnothing(user) || df["db_refreshed_at"] > user["db_refreshed_at"]
+        if isnothing(user) || df[:, "db_refreshed_at"] > user[:, "db_refreshed_at"]
             user = df
         end
     end
