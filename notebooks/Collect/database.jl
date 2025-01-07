@@ -4,8 +4,6 @@ import JSON3
 import SHA
 
 include("../julia_utils/database.jl")
-include("../julia_utils/scheduling.jl")
-include("../julia_utils/stdout.jl")
 
 function canonical_hash(d::AbstractDict)
     canon(x::AbstractDict) = Dict(k => canon(x[k]) for k in sort(collect(keys(x))))
@@ -53,7 +51,7 @@ end;
 function db_update_single_table(
     table::String,
     idcol::String,
-    idval::Union{String,Int},
+    idval::Union{String,Integer},
     data::Union{Dict,Nothing},
     success::Bool,
 )

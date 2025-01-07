@@ -18,6 +18,7 @@ import UUIDs
 
 include("../julia_utils/hash.jl")
 include("../julia_utils/http.jl")
+include("../julia_utils/multithreading.jl")
 include("../julia_utils/stdout.jl")
 
 function logstatus(fn, r, url)
@@ -219,7 +220,7 @@ function put!(r::Resources, resource::Dict, version::Integer)
     end
 end
 
-Threads.@spawn update_resources(RESOURCES, 100, 1000)
+Threads.@spawn @handle_errors update_resources(RESOURCES, 100, 1000)
 
 Oxygen.@post "/resources" function resources_api(r::HTTP.Request)::HTTP.Response
     data = decode(r)
@@ -1561,9 +1562,9 @@ function kitsu_get_list(
         return HTTP.Response(r)
     end
     json = JSON3.read(r.body)
-    kitsu_rating(x::Nothing) = nothing
-    kitsu_rating(x::String) = parse(Float64, x)
-    kitsu_rating(x::Real) = convert(Float64, x)
+    kitsu_rating(T, x::Nothing) = nothing
+    kitsu_rating(T, x::String) = parse(T, x)
+    kitsu_rating(T, x::Real) = convert(T, x)
     entries = []
     for x in json["data"]
         d = Dict(
@@ -1584,8 +1585,8 @@ function kitsu_get_list(
             "finishedAt" => optget(x["attributes"], "finishedAt"),
             "progressedAt" => optget(x["attributes"], "progressedAt"),
             "reactionSkipped" => x["attributes"]["reactionSkipped"],
-            "ratingTwenty" => kitsu_rating(optget(x["attributes"], "ratingTwenty")),
-            "rating" => kitsu_rating(optget(x["attributes"], "rating")),
+            "ratingTwenty" => kitsu_rating(Int, optget(x["attributes"], "ratingTwenty")),
+            "rating" => kitsu_rating(Float64, optget(x["attributes"], "rating")),
         )
         push!(entries, d)
     end

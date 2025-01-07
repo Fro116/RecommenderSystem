@@ -11,7 +11,7 @@ macro handle_errors(ex)
     end
 end
 
-function collect(c::Channel)
+function collect_(c::Channel)
     ret = []
     while true
         try
