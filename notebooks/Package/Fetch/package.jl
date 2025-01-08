@@ -43,14 +43,22 @@ function layer4(basedir::String)
     copy("environment", app)
 end
 
-cd(joinpath(@__DIR__, "../../.."))
+function build(basedir::String, name::String, tag::String)
+    run(`docker build -t $name $basedir`)
+    repo = read("environment/docker/repo.txt", String)
+    run(`docker tag $name $repo/$name:$tag`)
+    run(`docker push $repo/$name:$tag`)
+end
+
+cd("../../..")
 basedir = "data/inference/fetch"
 if ispath(basedir)
     rm(basedir; recursive = true)
 end
 
-cp("notebooks/Inference/Fetch/app", basedir, force = true)
+cp("notebooks/Package/Fetch/app", basedir, force = true)
 layer1(basedir)
 layer2(basedir)
 layer3(basedir)
 layer4(basedir)
+build(basedir, "fetch", "test")

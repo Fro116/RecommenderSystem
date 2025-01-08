@@ -28,9 +28,16 @@ Threads.@spawn @handle_errors begin
     wait_until_ready(PORT)
     logtag("STARTUP", "COMPILING")
     compile(PORT)
-    global READY
     logtag("STARTUP", "END")
+    global READY
     READY = true
+end
+
+Oxygen.@get "/shutdown" function shutdown(req::HTTP.Request)
+    while !READY
+        sleep(1)
+    end
+    Oxygen.terminate()
 end
 
 Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, metrics=false, show_banner=false)

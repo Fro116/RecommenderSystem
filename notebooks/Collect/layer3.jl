@@ -1,6 +1,9 @@
+module layer3
+
 const PORT = parse(Int, ARGS[1])
 const LAYER_2_URL = ARGS[2]
 const TOKEN_TIMEOUT = parse(Int, ARGS[3])
+const RETRIES = parse(Int, ARGS[4])
 
 import Oxygen
 import UUIDs
@@ -11,13 +14,7 @@ include("../julia_utils/multithreading.jl")
 
 function request(url::String, query::String, params::Dict)
     url = "$url/$query"
-    for delay in ExponentialBackOff(;
-        n = 10,
-        first_delay = 1,
-        max_delay = 1000,
-        factor = 2.0,
-        jitter = 0.1,
-    )
+    for delay in ExponentialBackOff(;n = RETRIES+1)
         r = HTTP.post(url, encode(params, :msgpack)..., status_exception = false)
         if r.status < 400 || r.status in [400, 401, 403, 404]
             # 400, 401 -> auth error
@@ -1100,4 +1097,7 @@ function get_userid(source::String, username::String)
     end
 end
 
-Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, metrics=false, show_banner=false)
+function compile(::Integer) end
+include("../julia_utils/start_oxygen.jl")
+
+end

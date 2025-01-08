@@ -2,6 +2,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
+import signal
 import time
 
 from curl_cffi import requests
@@ -41,6 +43,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+@app.get("/shutdown")
+async def shutdown_endpoint():
+    os.kill(os.getpid(), signal.SIGTERM)
+    return Response(status_code=200)
 
 async def get_session(sessionid, proxyurl):
     if proxyurl is not None:

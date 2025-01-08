@@ -11,6 +11,7 @@ dependencies = [
     ("Memoize", "0.4.4"),  
     ("MsgPack", "1.2.1"),
     ("Oxygen", "1.5.15"),
+    ("PackageCompiler", "2.2.0"),
 ]
 
 for (d, v) in dependencies

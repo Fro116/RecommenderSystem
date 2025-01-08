@@ -1,3 +1,5 @@
+module layer4
+
 import CSV
 import DataFrames
 import Oxygen
@@ -122,43 +124,47 @@ end
 
 function compile(port::Integer)
     profiles = CSV.read(TEST_CASES, DataFrames.DataFrame, stringtype = String)
-    for (source, username, userid) in zip(profiles.source, profiles.username, profiles.userid)
-        logtag("STARTUP", "/read")
-        r_read = HTTP.post(
-            "http://localhost:$PORT/read",
-            encode(Dict("source" => source, "username" => username), :msgpack)...,
-            status_exception = false,
-        )
-        logtag("STARTUP", "/fingerprint")
-        r_fingerprint = HTTP.post(
-            "http://localhost:$PORT/fingerprint",
-            encode(Dict("source" => source, "username" => username, "userid" => userid), :msgpack)...,
-            status_exception = false,
-        )
-        logtag("STARTUP", "/fetch")
-        r_fetch = HTTP.post(
-            "http://localhost:$PORT/fetch",
-            encode(Dict("source" => source, "username" => username), :msgpack)...,
-            status_exception = false,
-        )
-        if !HTTP.iserror(r_fetch) && !HTTP.iserror(r_fingerprint)
-            list = decode(r_fetch)
-            fingerprint = decode(r_fingerprint)
-            data = merge(
-                list["usermap"],
-                fingerprint,
-                Dict(
-                    "source" => source,
-                    "data" => CodecZstd.transcode(
-                        CodecZstd.ZstdCompressor,
-                        Vector{UInt8}(MsgPack.pack(list)),
-                    ),
-                ),
+    @sync for (source, username, userid) in zip(profiles.source, profiles.username, profiles.userid)
+        Threads.@spawn begin
+            logtag("STARTUP", "/read")
+            r_read = HTTP.post(
+                "http://localhost:$PORT/read",
+                encode(Dict("source" => source, "username" => username), :msgpack)...,
+                status_exception = false,
             )
-            logtag("STARTUP", "/write")
-            HTTP.post("http://localhost:$PORT/write", encode(data, :msgpack)..., status_exception = false)
+            logtag("STARTUP", "/fingerprint")
+            r_fingerprint = HTTP.post(
+                "http://localhost:$PORT/fingerprint",
+                encode(Dict("source" => source, "username" => username, "userid" => userid), :msgpack)...,
+                status_exception = false,
+            )
+            logtag("STARTUP", "/fetch")
+            r_fetch = HTTP.post(
+                "http://localhost:$PORT/fetch",
+                encode(Dict("source" => source, "username" => username), :msgpack)...,
+                status_exception = false,
+            )
+            if !HTTP.iserror(r_fetch) && !HTTP.iserror(r_fingerprint)
+                list = decode(r_fetch)
+                fingerprint = decode(r_fingerprint)
+                data = merge(
+                    list["usermap"],
+                    fingerprint,
+                    Dict(
+                        "source" => source,
+                        "data" => CodecZstd.transcode(
+                            CodecZstd.ZstdCompressor,
+                            Vector{UInt8}(MsgPack.pack(list)),
+                        ),
+                    ),
+                )
+                logtag("STARTUP", "/write")
+                HTTP.post("http://localhost:$PORT/write", encode(data, :msgpack)..., status_exception = false)
+            end
         end
     end
 end
 
 include("../julia_utils/start_oxygen.jl")
+
+end

@@ -1,3 +1,5 @@
+module layer2
+
 const PORT = parse(Int, ARGS[1])
 const RATELIMIT_WINDOW = parse(Int, ARGS[2])
 const LAYER_1_URLS = split(ARGS[3], ",")
@@ -14,6 +16,7 @@ import HTTP
 import JSON3
 import Memoize: @memoize
 import Oxygen
+import Random
 import UUIDs
 
 include("../julia_utils/hash.jl")
@@ -25,11 +28,6 @@ function logstatus(fn, r, url)
     if r.status ∉ [403, 404]
         logerror("$fn received error code $(r.status) for $url")
     end
-end
-
-function get_partition()
-    # set this to (machine index, num machines) if running in a cluster
-    (0, 1)
 end
 
 const Resource = Dict
@@ -49,7 +47,7 @@ function load_resources()::Vector{Resource}
             ip = split(username, "-")[end]
             push!(proxies, "http://$username:$password@$host:$port")
         end
-        sort(proxies)
+        Random.shuffle(proxies)
     end
     shared = get_proxies("$RESOURCE_PATH/proxies/shared.txt")
     dedicated = get_proxies("$RESOURCE_PATH/proxies/dedicated.txt")
@@ -99,9 +97,7 @@ function load_resources()::Vector{Resource}
         kitsu_resources,
         animeplanet_resources,
     )
-    # shard resources across multiple machines
-    part, num_parts = get_partition()
-    [x for (i, x) in Iterators.enumerate(resources) if (i % num_parts) == part]
+    Random.shuffle(resources)
 end
 
 struct ResourceMetadata
@@ -135,33 +131,22 @@ function Resources(resources)
 end
 
 const RESOURCES = Resources(load_resources());
+const RECOURCE_RECLAIM_SECS = 1000
+RESOURCE_RECLAIM::Float64 = time()
 
-function update_resources(r::Resources, refresh_secs::Real, timeout_secs::Real)
-    while true
-        sleep(refresh_secs)
-        new_resources = Set(load_resources())
-        old_resources = Set(keys(r.resources))
-        lock(r.lock) do
-            # update resources
-            t = time()
-            for k in old_resources
-                if k ∉ new_resources
-                    # resource got assigned to a different machine
-                    delete!(r.resources, k)
-                    filter!(x -> x != k, r.index[k["location"]])
-                else
-                    m = r.resources[k]
-                    if !isnothing(m.checkout_time) && t - m.checkout_time > timeout_secs
-                        # resource was never returned, reclaim it
-                        r.resources[k] =
-                            ResourceMetadata(m.version + 1, nothing, m.request_times)
-                        push_front!(r.index[k["location"]], k)
-                    end
-                end
-            end
-            for k in setdiff(new_resources, old_resources)
-                # resource was added
-                r.resources[k] = ResourceMetadata(0, nothing, [])
+function reclaim(r::Resources)
+    lock(r.lock) do
+        t = time()
+        global RESOURCE_RECLAIM
+        if t - RESOURCE_RECLAIM < RECOURCE_RECLAIM_SECS
+            return
+        end
+        RESOURCE_RECLAIM = t
+        for k in Set(keys(r.resources))
+            m = r.resources[k]
+            if !isnothing(m.checkout_time) && t - m.checkout_time > RECOURCE_RECLAIM_SECS
+                r.resources[k] =
+                    ResourceMetadata(m.version + 1, nothing, m.request_times)
                 push_front!(r.index[k["location"]], k)
             end
         end
@@ -170,6 +155,9 @@ end
 
 function take!(r::Resources, location::String, timeout::Real)
     start = time()
+    if start - RESOURCE_RECLAIM > RECOURCE_RECLAIM_SECS
+        reclaim(r)
+    end
     uuid = string(UUIDs.uuid4())
     lock(r.lock) do
         push!(RESOURCES.queue[location], uuid)
@@ -184,8 +172,12 @@ function take!(r::Resources, location::String, timeout::Real)
                 if isempty(r.index[location])
                     return nothing
                 end
-                k = popfirst!(r.index[location])
+                k = first(r.index[location])
                 m = r.resources[k]
+                if ratelimit_delta(m, k["ratelimit"], RATELIMIT_WINDOW) > 0
+                    return nothing
+                end
+                popfirst!(r.index[location])
                 @assert isnothing(m.checkout_time)
                 r.resources[k] = ResourceMetadata(m.version, time(), m.request_times)
                 Dict("resource" => k, "version" => m.version)
@@ -220,8 +212,6 @@ function put!(r::Resources, resource::Dict, version::Integer)
     end
 end
 
-Threads.@spawn @handle_errors update_resources(RESOURCES, 100, 1000)
-
 Oxygen.@post "/resources" function resources_api(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     if data["method"] == "take"
@@ -238,19 +228,23 @@ Oxygen.@post "/resources" function resources_api(r::HTTP.Request)::HTTP.Response
     end
 end
 
-function ratelimit!(x::ResourceMetadata, ratelimit::Real)
-    window = RATELIMIT_WINDOW
+function ratelimit_delta(x::ResourceMetadata, ratelimit::Real, window::Real)
     if length(x.request_times) >= window
         startindex = length(x.request_times) - window + 1
         times = x.request_times[startindex:end]
         wait_until = first(times) + length(times) * ratelimit
         delta = wait_until - time()
         if delta > 0
-            sleep(delta)
+            return delta
         end
     end
+    0
+end
+
+function ratelimit!(x::ResourceMetadata, ratelimit::Real)
+    sleep(ratelimit_delta(x, ratelimit, RATELIMIT_WINDOW))
     push!(x.request_times, time())
-    if length(x.request_times) > window
+    if length(x.request_times) > RATELIMIT_WINDOW
         popfirst!(x.request_times)
     end
 end
@@ -2125,4 +2119,7 @@ function animeplanet_get_username(resource::Resource, sessionid::String, userid:
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, metrics=false, show_banner=false)
+function compile(::Integer) end
+include("../julia_utils/start_oxygen.jl")
+
+end
