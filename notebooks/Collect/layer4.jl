@@ -9,7 +9,7 @@ include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
 
 const PORT = parse(Int, ARGS[1])
-const LAYER_3_URL = ARGS[2]
+const LAYER_3_URL = ARGS[2] != "nothing" ? ARGS[2] : nothing
 const TEST_CASES = ARGS[3]
 
 Oxygen.@post "/read" function read_user(r::HTTP.Request)::HTTP.Response
@@ -75,6 +75,9 @@ Oxygen.@post "/write" function write_user(r::HTTP.Request)::HTTP.Response
 end
 
 Oxygen.@post "/fingerprint" function fingerprint_user(r::HTTP.Request)::HTTP.Response
+    if isnothing(LAYER_3_URL)
+        return HTTP.Response(403, [])
+    end
     data = decode(r)
     source = data["source"]
     username = data["username"]
@@ -92,6 +95,9 @@ Oxygen.@post "/fingerprint" function fingerprint_user(r::HTTP.Request)::HTTP.Res
 end
 
 Oxygen.@post "/fetch" function fetch_user(r::HTTP.Request)::HTTP.Response
+    if isnothing(LAYER_3_URL)
+        return HTTP.Response(403, [])
+    end
     data = decode(r)
     source = data["source"]
     username = data["username"]

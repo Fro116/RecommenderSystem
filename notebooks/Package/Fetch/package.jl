@@ -1,3 +1,5 @@
+import Dates
+
 function copy(file::String, dst::String)
     mkpath(joinpath(dst, dirname(file)))
     cp(file, joinpath(dst, file))
@@ -48,17 +50,21 @@ function build(basedir::String, name::String, tag::String)
     repo = read("environment/docker/repo.txt", String)
     run(`docker tag $name $repo/$name:$tag`)
     run(`docker push $repo/$name:$tag`)
+    deploy = read("environment/docker/deploy.txt", String)
+    deploy = replace(deploy, "{app}" => name, "{tag}" => tag, "{args}" => "--max-instances=1")
+    run(`sh -c $deploy`)
 end
 
 cd("../../..")
-basedir = "data/inference/fetch"
+basedir = "data/package/fetch"
 if ispath(basedir)
     rm(basedir; recursive = true)
 end
-
+mkpath(basedir)
 cp("notebooks/Package/Fetch/app", basedir, force = true)
 layer1(basedir)
 layer2(basedir)
 layer3(basedir)
 layer4(basedir)
-build(basedir, "fetch", "test")
+tag = Dates.format(Dates.today(), "yyyymmdd")
+build(basedir, "fetch", tag)

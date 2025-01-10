@@ -10,4 +10,4 @@ curl http://localhost:5002/shutdown
 curl http://localhost:5001/shutdown
 cat /usr/src/app/*/notebooks/Collect/trace > trace
 julia /usr/src/app/compile.jl
-rm /usr/src/app/*/notebooks/Collect/trace  trace
+rm /usr/src/app/*/notebooks/Collect/trace trace

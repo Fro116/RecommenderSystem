@@ -171,7 +171,7 @@ function take!(r::Resources, location::String, timeout::Real)
                 end
                 if timeout == 0
                     k = first(r.index[location])
-                    m = resources[k]
+                    m = r.resources[k]
                     if ratelimit_delta(m, k["ratelimit"], RATELIMIT_WINDOW) > 0
                         return nothing
                     end
