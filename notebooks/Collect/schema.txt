@@ -408,3 +408,9 @@ CREATE TABLE animeplanet_media_relations (
     version TEXT
 );
 CREATE INDEX animeplanet_media_relations_medium_itemid_idx ON animeplanet_media_relations (medium, itemid);
+
+CREATE TABLE external_dependencies (
+    key TEXT UNIQUE,
+    value TEXT,
+    db_last_success_at DOUBLE PRECISION
+);

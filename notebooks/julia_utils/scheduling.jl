@@ -8,7 +8,7 @@ macro periodic(tag::AbstractString, secs::Real, expr)
             sleep_secs = $(esc(secs)) - (time() - curtime)
             logtag($(esc(tag)), "END")
             if sleep_secs < 0
-                logtag(tag, "late by $sleep_secs seconds")
+                logtag($(esc(tag)), "late by $sleep_secs seconds")
             else
                 sleep(sleep_secs)
             end

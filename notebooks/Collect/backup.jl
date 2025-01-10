@@ -24,6 +24,7 @@ function backup()
         "animeplanet_user_items",
         "animeplanet_media",
         "animeplanet_media_relations",
+        "external_dependencies",
     ]
     save_template = read("$DB_PATH/storage.txt", String)
     date = Dates.format(Dates.today(), "yyyymmdd")
