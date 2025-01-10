@@ -131,20 +131,17 @@ function Resources(resources)
 end
 
 const RESOURCES = Resources(load_resources());
-const RECOURCE_RECLAIM_SECS = 1000
-RESOURCE_RECLAIM::Float64 = time()
+const RECLAIM_TIMEOUT = 1000
+LAST_RECLAIM::Float64 = time()
 
 function reclaim(r::Resources)
     lock(r.lock) do
         t = time()
-        global RESOURCE_RECLAIM
-        if t - RESOURCE_RECLAIM < RECOURCE_RECLAIM_SECS
-            return
-        end
-        RESOURCE_RECLAIM = t
+        global LAST_RECLAIM
+        LAST_RECLAIM = t
         for k in Set(keys(r.resources))
             m = r.resources[k]
-            if !isnothing(m.checkout_time) && t - m.checkout_time > RECOURCE_RECLAIM_SECS
+            if !isnothing(m.checkout_time) && t - m.checkout_time > RECLAIM_TIMEOUT
                 r.resources[k] =
                     ResourceMetadata(m.version + 1, nothing, m.request_times)
                 push_front!(r.index[k["location"]], k)
@@ -155,11 +152,11 @@ end
 
 function take!(r::Resources, location::String, timeout::Real)
     start = time()
-    if start - RESOURCE_RECLAIM > RECOURCE_RECLAIM_SECS
-        reclaim(r)
-    end
     uuid = string(UUIDs.uuid4())
     lock(r.lock) do
+        if start - LAST_RECLAIM > RECLAIM_TIMEOUT
+            reclaim(r)
+        end
         push!(RESOURCES.queue[location], uuid)
     end
     try
@@ -172,12 +169,15 @@ function take!(r::Resources, location::String, timeout::Real)
                 if isempty(r.index[location])
                     return nothing
                 end
-                k = first(r.index[location])
-                m = r.resources[k]
-                if ratelimit_delta(m, k["ratelimit"], RATELIMIT_WINDOW) > 0
-                    return nothing
+                if timeout == 0
+                    k = first(r.index[location])
+                    m = resources[k]
+                    if ratelimit_delta(m, k["ratelimit"], RATELIMIT_WINDOW) > 0
+                        return nothing
+                    end
                 end
-                popfirst!(r.index[location])
+                k = popfirst!(r.index[location])
+                m = r.resources[k]
                 @assert isnothing(m.checkout_time)
                 r.resources[k] = ResourceMetadata(m.version, time(), m.request_times)
                 Dict("resource" => k, "version" => m.version)
@@ -188,7 +188,7 @@ function take!(r::Resources, location::String, timeout::Real)
             if time() - start > timeout
                 return nothing
             end
-            sleep(0.001)
+            sleep(0.01)
         end
     finally
         lock(r.lock) do
@@ -228,7 +228,7 @@ Oxygen.@post "/resources" function resources_api(r::HTTP.Request)::HTTP.Response
     end
 end
 
-function ratelimit_delta(x::ResourceMetadata, ratelimit::Real, window::Real)
+function ratelimit_delta(x::ResourceMetadata, ratelimit::Real, window::Integer)
     if length(x.request_times) >= window
         startindex = length(x.request_times) - window + 1
         times = x.request_times[startindex:end]
@@ -242,7 +242,10 @@ function ratelimit_delta(x::ResourceMetadata, ratelimit::Real, window::Real)
 end
 
 function ratelimit!(x::ResourceMetadata, ratelimit::Real)
-    sleep(ratelimit_delta(x, ratelimit, RATELIMIT_WINDOW))
+    delay = ratelimit_delta(x, ratelimit, RATELIMIT_WINDOW)
+    if delay > 0
+        sleep(delay)
+    end
     push!(x.request_times, time())
     if length(x.request_times) > RATELIMIT_WINDOW
         popfirst!(x.request_times)

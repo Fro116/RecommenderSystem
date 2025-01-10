@@ -1,4 +1,4 @@
-import PackageCompiler 
+import PackageCompiler
 PackageCompiler.create_sysimage(
     ;
     sysimage_path="sysimg.so",

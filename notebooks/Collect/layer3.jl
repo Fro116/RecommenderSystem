@@ -14,7 +14,14 @@ include("../julia_utils/multithreading.jl")
 
 function request(url::String, query::String, params::Dict)
     url = "$url/$query"
-    for delay in ExponentialBackOff(;n = RETRIES+1)
+    delays = ExponentialBackOff(;
+        n = RETRIES+1,
+        first_delay = 1,
+        max_delay = 1000,
+        factor = 2.0,
+        jitter = 0.1,
+    )
+    for delay in delays
         r = HTTP.post(url, encode(params, :msgpack)..., status_exception = false)
         if r.status < 400 || r.status in [400, 401, 403, 404]
             # 400, 401 -> auth error
