@@ -411,6 +411,6 @@ CREATE INDEX animeplanet_media_relations_medium_itemid_idx ON animeplanet_media_
 
 CREATE TABLE external_dependencies (
     key TEXT UNIQUE,
-    value TEXT,
+    value BYTEA,
     db_last_success_at DOUBLE PRECISION
 );

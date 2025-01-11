@@ -40,11 +40,8 @@ function backup()
     save = replace(save_template, "{FILE}" => "latest")
     cmd = "echo -n $date $save"
     run(`sh -c $cmd`)
-    logtag("BACKUP", "pg_dump")
-    dump = read("$DB_PATH/dump.txt", String)
-    save = replace(save_template, "{FILE}" => "database.sql.zst")
-    cmd = "$dump $save"
-    run(`sh -c $cmd`)
+    cleanup = read("$DB_PATH/cleanup.txt", String)
+    run(`sh -c $cleanup`)
 end
 
 @scheduled "BACKUP" "04:00" @handle_errors backup()
