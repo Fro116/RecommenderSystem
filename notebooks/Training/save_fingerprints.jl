@@ -132,7 +132,7 @@ function save_fingerprints(source::String)
     )
     user_cols = [x for x in DataFrames.names(users) if !startswith(x, "db_")]
     ret = Channel(Inf)
-    task = Threads.@spawn @handle_errors collect_(ret)
+    task = Threads.@spawn @handle_errors multithreading.collect(ret)
     Threads.@threads for i = 1:DataFrames.nrow(users)
         if ismissing(users[i, :db_last_success_at])
             continue

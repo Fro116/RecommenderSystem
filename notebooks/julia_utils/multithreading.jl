@@ -11,18 +11,6 @@ macro handle_errors(ex)
     end
 end
 
-function collect_(c::Channel)
-    ret = []
-    while true
-        try
-            push!(ret, take!(c))
-        catch
-            break
-        end
-    end
-    ret
-end
-
 macro timeout(s::Real, f)
     quote
         c = Channel(2)
@@ -36,4 +24,20 @@ macro timeout(s::Real, f)
         end
         take!(c)
     end
+end
+
+module multithreading
+
+function collect(c::Channel)
+    ret = []
+    while true
+        try
+            push!(ret, take!(c))
+        catch
+            break
+        end
+    end
+    ret
+end
+
 end
