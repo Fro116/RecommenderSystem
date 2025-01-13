@@ -4,7 +4,9 @@ include("../julia_utils/multithreading.jl")
 include("../julia_utils/scheduling.jl")
 include("../julia_utils/stdout.jl")
 
-function write_db(key::String, value::Vector{UInt8}, ts::Float64)
+function write_db(key::String, data::String)
+    ts = time()
+    value = CodecZstd.transcode(CodecZstd.ZstdCompressor, data)
     with_db(:update) do db
         query = """
             INSERT INTO external_dependencies (key, value, db_last_success_at)
@@ -17,19 +19,36 @@ function write_db(key::String, value::Vector{UInt8}, ts::Float64)
     end
 end
 
-function save_entry(key::String, url::String)
+function save_url(key::String, url::String)
     for delay in ExponentialBackOff(;n=3)
         r = HTTP.get(url; status_exception=false)
         if HTTP.iserror(r)
             continue
         end
-        value = CodecZstd.transcode(CodecZstd.ZstdCompressor, r.body)
-        write_db(key, value, time())
+        write_db(key, String(r.body))
         break
     end
 end
 
-Threads.@spawn @periodic "MANAMI" 86400 @handle_errors save_entry(
-    "manami",
-    "https://github.com/manami-project/anime-offline-database/raw/master/anime-offline-database.json",
-)
+function save_external(key::String, path::String)
+    retrieval = read("../../environment/database/retrieval.txt", String)
+    datadir = "../../data"
+    cmd = "$retrieval/$path $datadir/$path"
+    run(`sh -c $cmd`)
+    data = read("$datadir/$path", String)
+    write_db(key, data)
+    rm("$datadir/$path")
+end
+
+function save()
+    save_url(
+        "manami",
+        (
+            "https://github.com/manami-project/" *
+            "anime-offline-database/raw/master/anime-offline-database.json"
+        ),
+    )
+    save_external("media_match_manual", "media_match_manual.csv")
+end
+
+Threads.@spawn @periodic "MANAMI" 86400 @handle_errors save()
