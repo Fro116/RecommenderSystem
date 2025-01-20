@@ -1,9 +1,9 @@
 import CSV
 import DataFrames
 import JSON3
-include("../julia_utils/stdout.jl")
-const envdir = "../../environment"
-const datadir = "../../data/media"
+include("../../julia_utils/stdout.jl")
+const envdir = "../../../environment"
+const datadir = "../../../data/media"
 
 function download_media(source::String)
     mkdir("$datadir/$source")
@@ -25,25 +25,6 @@ function download_media(source::String)
 end
 
 function import_media_relations()
-    relations = Set([
-        "prequel",
-        "sequel",
-        "parent_story",
-        "side_story",
-        "full_story",
-        "summary",
-        "alternative_version",
-        "alternative_setting",
-        "spin_off",
-        "adaptation",
-        "contains",
-        "source",
-        "compilation",
-        "character",
-        "other",
-        "unknown",
-    ])
-
     mal_relation_map = Dict(
         "SUMMARY" => "summary",
         "Summary" => "summary",
@@ -129,10 +110,10 @@ function import_mal(medium)
     df = CSV.read("$datadir/$source/$(source)_media.csv", DataFrames.DataFrame, ntasks = 1)
     df = filter(x -> x.medium == medium && !ismissing(x.db_last_success_at), df)
     function alternative_titles(x)
-        titles = []
         if ismissing(x)
-            return titles
+            return missing
         end
+        titles = []
         for (k, v) in JSON3.read(x)
             if isempty(v)
                 continue
@@ -231,6 +212,12 @@ function import_mal(medium)
         end
         get(source_map, x, missing)
     end
+    function duration(x)
+        if ismissing(x)
+            return missing
+        end
+        x / 60
+    end
     ret = DataFrames.DataFrame()
     ret[!, "medium"] = df.medium
     ret[!, "itemid"] = df.itemid
@@ -240,7 +227,7 @@ function import_mal(medium)
     ret[!, "startdate"] = df.start_date
     ret[!, "enddate"] = df.end_date
     ret[!, "episodes"] = optnum.(df.num_episodes)
-    ret[!, "duration"] = optnum.(df.average_episode_duration)
+    ret[!, "duration"] = duration.(df.average_episode_duration)
     ret[!, "chapters"] = optnum.(df.num_chapters)
     ret[!, "volumes"] = optnum.(df.num_volumes)
     ret[!, "status"] = [status(x...) for x in zip(df.status, df.start_date)]
@@ -281,6 +268,7 @@ function import_anilist(medium)
             append!(r, json)
         catch
         end
+        r = [x for x in r if !isnothing(x)]
         JSON3.write(r)
     end
     function mediatype(x)
@@ -433,7 +421,7 @@ function import_kitsu(medium)
         end
         x = string(x)
         while endswith(x, "-01")
-            x = x[1:end-length("-01")]
+            x = chop(x, tail=length("-01"))
         end
         x
     end
@@ -485,6 +473,25 @@ function import_animeplanet(medium)
         else
             return JSON3.write([x])
         end
+    end
+    function mediatitle(x)
+        if ismissing(x)
+            return missing
+        end
+        suffixes = [
+            " (Light Novel)",
+            " (Novel)",
+            " (Pilot)",
+            " (Promo)",
+            " (Doujinshi)",
+            " (One Shot)",
+        ]
+        for s in suffixes
+            if endswith(x, s)
+                return chop(x, tail=length(s))
+            end
+        end
+        x
     end
     mediatype_col = Dict("manga" => "title", "anime" => "type")
     function mediatype(x)
@@ -555,7 +562,7 @@ function import_animeplanet(medium)
             return missing
         end
         key = strip(fields[end])
-        regex = Regex("\\(" * """(?s)(.*?)""" * "ep")
+        regex = Regex("\\(" * """(?s)(.*?)""" * " ep")
         matches = [only(m.captures) for m in eachmatch(regex, key)]
         only(matches)
     end
@@ -568,7 +575,7 @@ function import_animeplanet(medium)
             return missing
         end
         key = strip(fields[end])
-        regex = Regex(" x " * """(?s)(.*?)""" * "min\\)")
+        regex = Regex(" x " * """(?s)(.*?)""" * " min\\)")
         matches = [only(m.captures) for m in eachmatch(regex, key)]
         if isempty(matches)
             return missing
@@ -626,7 +633,7 @@ function import_animeplanet(medium)
     ret = DataFrames.DataFrame()
     ret[!, "medium"] = df.medium
     ret[!, "itemid"] = df.itemid
-    ret[!, "title"] = df.title
+    ret[!, "title"] = mediatitle.(df.title)
     ret[!, "alternative_titles"] = alternative_titles.(df.alttitle)
     ret[!, "mediatype"] = mediatype.(df[:, mediatype_col[medium]])
     ret[!, "startdate"] = startdate.(df.year)

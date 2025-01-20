@@ -228,9 +228,6 @@ function upload_fingerprints()
     conn_str = read("$DB_PATH/primary.txt", String)
     cmd = """psql "$conn_str" -f save_fingerprints.sql"""
     run(`sh -c $cmd`)
-    for source in ["mal", "anilist", "kitsu", "animeplanet"]
-        rm("$datadir/$source.fingerprints.csv.zst")
-    end
 end
 
-@scheduled "FINGERPRINTS" "05:00" @handle_errors upload_fingerprints()
+upload_fingerprints()
