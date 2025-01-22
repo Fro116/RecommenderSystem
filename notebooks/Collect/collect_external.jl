@@ -51,4 +51,4 @@ function save()
     save_external("media_match_manual", "media_match_manual.csv")
 end
 
-Threads.@spawn @periodic "MANAMI" 86400 @handle_errors save()
+@scheduled "EXTERNAL" "00:30" @handle_errors save()

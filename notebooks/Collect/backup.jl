@@ -44,4 +44,4 @@ function backup()
     run(`sh -c $cleanup`)
 end
 
-@scheduled "BACKUP" "04:00" @handle_errors backup()
+@scheduled "BACKUP" "01:00" @handle_errors backup()
