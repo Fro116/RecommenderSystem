@@ -116,11 +116,15 @@ function get_media(source, medium)
     df
 end
 
-@memoize function get_mediatypes(medium)
+@memoize function get_mediatypes(source1::String, source2::String, medium::String)
     if medium == "manga"
-        manga_types = Set(["Manhwa", "Manhua", "Manga", "OEL", "Doujinshi", "One-shot"])
+        manga_types = Set(["Manhwa", "Manhua", "Manga", "OEL"])
+        shortmanga_types = Set(["Doujinshi", "One-shot"])
         novel_types = Set(["Light Novel", "Novel"])
-        return (manga_types, novel_types)
+        if source1 == "anilist" || source2 == "anilist"
+            push!(manga_types, "Doujinshi") # anilist doesn't have a doujinshi category
+        end
+        return (manga_types, shortmanga_types, novel_types)
     elseif medium == "anime"
         tv_types = Set(["ONA", "TV"])
         shortanime_types = Set(["Music", "CM", "PV", "Special"])
@@ -133,6 +137,8 @@ end
 end
 
 function match_mediatype(
+    source1::String,
+    source2::String,
     medium::String,
     t1::Union{AbstractString,Missing},
     t2::Union{AbstractString,Missing},
@@ -142,7 +148,7 @@ function match_mediatype(
         return 0
     end
     if fuzzy
-        for types in get_mediatypes(medium)
+        for types in get_mediatypes(source1, source2, medium)
             if t1 in types && t2 in types
                 return 1
             end
@@ -153,12 +159,19 @@ function match_mediatype(
     end
 end
 
-function match_date(d1::Union{DateType,Missing}, d2::Union{DateType,Missing}, fuzzy::Bool)
+function match_date(medium::String, d1::Union{DateType,Missing}, d2::Union{DateType,Missing}, fuzzy::Bool)
     if ismissing(d1) || ismissing(d2)
         return 0
     end
     if fuzzy
-        if abs(d1.date - d2.date) <= Dates.Day(31)
+        if medium == "manga"
+            maxdays = 365
+        elseif medium == "anime"
+            maxdays = 31
+        else
+            @assert false
+        end
+        if abs(d1.date - d2.date) <= Dates.Day(maxdays)
             return 1
         end
     end
@@ -321,11 +334,11 @@ function fuzzy(fn::Function, args...)
     n
 end
 
-function match_rows(medium, df1, i, df2, j)
+function match_rows(source1, source2, medium, df1, i, df2, j)
     n = 0
-    @earlyreturn -1 n fuzzy(match_mediatype, medium, df1.mediatype[i], df2.mediatype[j])
-    @earlyreturn -1 n fuzzy(match_date, df1.startdate[i], df2.startdate[j])
-    @earlyreturn -1 n fuzzy(match_date, df1.enddate[i], df2.enddate[j])
+    @earlyreturn -1 n fuzzy(match_mediatype, source1, source2, medium, df1.mediatype[i], df2.mediatype[j])
+    @earlyreturn -1 n fuzzy(match_date, medium, df1.startdate[i], df2.startdate[j])
+    @earlyreturn -1 n fuzzy(match_date, medium, df1.enddate[i], df2.enddate[j])
     @earlyreturn -1 n fuzzy(match_season, df1.season[i], df2.season[j])
     @earlyreturn -1 n fuzzy(match_status, df1.status[i], df2.status[j])
     @earlyreturn -1 n fuzzy(match_count, df1.episodes[i], df2.episodes[j])
@@ -345,7 +358,7 @@ function match_metadata(source1, source2, medium, idxs, showprogress)
         candidate = nothing
         max_matches = 0
         for j = 1:DataFrames.nrow(media2)
-            nmatches = match_rows(medium, media1, i, media2, j)
+            nmatches = match_rows(source1, source2, medium, media1, i, media2, j)
             if nmatches == max_matches
                 candidate = nothing
             elseif nmatches > max_matches

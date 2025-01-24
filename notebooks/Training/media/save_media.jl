@@ -483,8 +483,8 @@ function import_animeplanet(medium)
             " (Novel)",
             " (Pilot)",
             " (Promo)",
-            " (Doujinshi)",
             " (One Shot)",
+            " (Doujinshi)",
         ]
         for s in suffixes
             if endswith(x, s)
@@ -494,19 +494,33 @@ function import_animeplanet(medium)
         x
     end
     mediatype_col = Dict("manga" => "title", "anime" => "type")
-    function mediatype(x)
+    function mediatype(x, genres)
+        if !ismissing(genres)
+            genres = JSON3.read(genres)
+            typemap = [
+                "light-novels" => "Light Novel",
+                "one-shot" => "One-shot",
+                "manhwa" => "Manhwa",
+                "manhua" => "Manhua",
+            ]
+            for (k, v) in typemap
+                if k in genres
+                    return v
+                end
+            end
+        end
         if ismissing(x)
             return missing
         end
         if medium == "manga"
-            suffixes = Dict(
+            suffixes = [
                 " (Light Novel)" => "Light Novel",
                 " (Novel)" => "Novel",
                 " (Pilot)" => "One-shot",
                 " (Promo)" => "One-shot",
-                " (Doujinshi)" => "Doujinshi",
                 " (One Shot)" => "One-shot",
-            )
+                " (Doujinshi)" => "Doujinshi",
+            ]
             for (k, v) in suffixes
                 if endswith(x, k)
                     return v
@@ -635,7 +649,7 @@ function import_animeplanet(medium)
     ret[!, "itemid"] = df.itemid
     ret[!, "title"] = mediatitle.(df.title)
     ret[!, "alternative_titles"] = alternative_titles.(df.alttitle)
-    ret[!, "mediatype"] = mediatype.(df[:, mediatype_col[medium]])
+    ret[!, "mediatype"] = mediatype.(df[:, mediatype_col[medium]], df.genres)
     ret[!, "startdate"] = startdate.(df.year)
     ret[!, "enddate"] = enddate.(df.year)
     ret[!, "episodes"] = episodes.(df.type)

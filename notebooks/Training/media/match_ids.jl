@@ -7,6 +7,11 @@ function get_media(source, medium)
     CSV.read("$datadir/$(source)_$(medium).csv", DataFrames.DataFrame, ntasks = 1)
 end
 
+function get_mediatype_map(source::String, medium::String)
+    df = get_media(source, medium)
+    Dict(df.itemid .=> df.mediatype)
+end
+
 function save_mapping(source1::String, source2::String, medium::String)
     mappings = Set()
     if source2 == "mal" && source1 != "mal"
@@ -17,9 +22,17 @@ function save_mapping(source1::String, source2::String, medium::String)
         col = nothing
     end
     media = get_media(source1, medium)
+    mediatype1 = get_mediatype_map(source1, medium)
+    mediatype2 = get_mediatype_map(source2, medium)
+    novel_types = Set(["Light Novel", "Novel"])
     if !isnothing(col)
         for (uid, mid) in zip(media.itemid, media[:, col])
             if !ismissing(uid) && !ismissing(mid)
+                if !ismissing(get(mediatype1, uid, missing)) &&
+                   !ismissing(get(mediatype2, mid, missing)) &&
+                   xor(mediatype1[uid] in novel_types, mediatype2[mid] in novel_types)
+                    continue
+                end
                 push!(mappings, (uid, mid))
             end
         end

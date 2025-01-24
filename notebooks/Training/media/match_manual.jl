@@ -59,7 +59,6 @@ function save_mapping(source1::String, source2::String, medium::String, edgetype
     CSV.write("$datadir/$edgetype/$medium.$source1.$source2.csv", df)
 end
 
-
 function save_matches()
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     for edgetype in ["invalid", "valid", "overlapping"]
@@ -81,6 +80,5 @@ function save_matches()
         end
     end
 end
-
 
 save_matches()
