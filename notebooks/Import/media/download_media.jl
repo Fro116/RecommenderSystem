@@ -2,8 +2,7 @@ import CSV
 import DataFrames
 import JSON3
 include("../../julia_utils/stdout.jl")
-const envdir = "../../../environment"
-const datadir = "../../../data/media"
+include("common.jl")
 
 function download_media(source::String)
     mkdir("$datadir/$source")

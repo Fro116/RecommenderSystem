@@ -8,6 +8,15 @@ CREATE TABLE collect_users (
 );
 CREATE INDEX collect_users_source_username_idx ON collect_users (source, lower(username));
 
+CREATE TABLE collect_users_staging (
+    source TEXT,
+    username TEXT,
+    userid BIGINT,
+    fingerprint TEXT,
+    data BYTEA,
+    db_refreshed_at DOUBLE PRECISION
+);
+
 CREATE TABLE inference_users (
     source TEXT,
     username TEXT,

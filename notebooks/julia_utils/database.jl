@@ -1,6 +1,15 @@
 import LibPQ
 
-const DB_PATH = "../../environment/database"
+function get_db_path()
+    for f in ["../../environment/database", "../../../environment/database"]
+        if ispath(f)
+            return f
+        end
+    end
+    @assert false
+end
+
+const DB_PATH = get_db_path()
 
 function get_db_connection(max_retries::Real)
     conn_str = read("$DB_PATH/primary.txt", String)

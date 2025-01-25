@@ -2,13 +2,12 @@ import CSV
 import DataFrames
 import Glob
 
-include("../julia_utils/http.jl")
-include("../julia_utils/database.jl")
-include("../julia_utils/multithreading.jl")
-include("../julia_utils/scheduling.jl")
-include("../julia_utils/stdout.jl")
-const envdir = "../../environment"
-const datadir = "../../data/users"
+include("../../julia_utils/http.jl")
+include("../../julia_utils/database.jl")
+include("../../julia_utils/multithreading.jl")
+include("../../julia_utils/stdout.jl")
+const envdir = "../../../environment"
+const datadir = "../../../data/users"
 
 function download_users(source::String)
     mkdir("$datadir/$source")
@@ -212,8 +211,9 @@ end
 
 function upload_fingerprints()
     rm(datadir, force = true, recursive = true)
+    sources = ["mal", "anilist", "kitsu", "animeplanet"]
     mkpath(datadir)
-    Threads.@threads for source in ["mal", "anilist", "kitsu", "animeplanet"]
+    Threads.@threads for source in sources
         download_users(source)
         partition(source)
         fingerprints = save_fingerprints(source)
@@ -225,6 +225,14 @@ function upload_fingerprints()
         rm("$datadir/$source", force = true, recursive = true)
         run(`zstd $datadir/$source.fingerprints.csv`)
     end
+    files = join(["$s.fingerprints.csv" for s in sources], " ")
+    cmd = "cd $datadir && mlr --csv cat $files > fingerprints.csv && rm $files"
+    run(`sh -c $cmd`)
+    save_template = read("$envdir/database/storage.txt", String)
+    cmd = replace(save_template, "{INPUT}" => "$datadir/fingerprints.csv", "{OUTPUT}" => "fingerprints.csv")
+    run(`sh -c $cmd`)
+    cmd = "$envdir/database/import_csv.sh $datadir"
+    run(`sh -c $cmd`)
     conn_str = read("$DB_PATH/primary.txt", String)
     cmd = """psql "$conn_str" -f save_fingerprints.sql"""
     run(`sh -c $cmd`)

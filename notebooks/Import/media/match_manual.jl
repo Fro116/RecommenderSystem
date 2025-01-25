@@ -1,7 +1,5 @@
 import CSV
 import DataFrames
-import Memoize: @memoize
-const datadir = "../../../data/media"
 include("common.jl")
 
 function merge_animeplanet_manga()

@@ -1,7 +1,6 @@
 import CSV
 import DataFrames
 import JSON3
-import Memoize: @memoize
 include("common.jl")
 
 function save_mapping(source1::String, source2::String, medium::String)

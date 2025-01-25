@@ -1,14 +1,12 @@
 import CSV
 import DataFrames
-import Memoize: @memoize
 import ProgressMeter: @showprogress
 import StatsBase
 include("../../julia_utils/stdout.jl")
+include("common.jl")
 
 const itemtype = Tuple{String,Union{AbstractString,Int}}
 const edgetype = Tuple{itemtype,itemtype}
-const envdir = "../../../environment"
-const datadir = "../../../data/media"
 
 @memoize function download_items(source::String)
     outdir = "$datadir/users/$source"

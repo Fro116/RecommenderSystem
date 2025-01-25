@@ -1,6 +1,5 @@
 import CSV
 import DataFrames
-import Memoize: @memoize
 include("common.jl")
 
 function get_media(source, medium)
