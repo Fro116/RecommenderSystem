@@ -5,6 +5,7 @@ import Glob
 include("../../julia_utils/http.jl")
 include("../../julia_utils/database.jl")
 include("../../julia_utils/multithreading.jl")
+include("../../julia_utils/scheduling.jl")
 include("../../julia_utils/stdout.jl")
 const envdir = "../../../environment"
 const datadir = "../../../data/users"
@@ -223,7 +224,6 @@ function upload_fingerprints()
         ]
         CSV.write("$datadir/$source.fingerprints.csv", fingerprints; bufsize = 2^24, quotestrings=true)
         rm("$datadir/$source", force = true, recursive = true)
-        run(`zstd $datadir/$source.fingerprints.csv`)
     end
     files = join(["$s.fingerprints.csv" for s in sources], " ")
     cmd = "cd $datadir && mlr --csv cat $files > fingerprints.csv && rm $files"
@@ -234,8 +234,8 @@ function upload_fingerprints()
     cmd = "$envdir/database/import_csv.sh $datadir"
     run(`sh -c $cmd`)
     conn_str = read("$DB_PATH/primary.txt", String)
-    cmd = """psql "$conn_str" -f save_fingerprints.sql"""
+    cmd = """psql "$conn_str" -f import_csv.sql"""
     run(`sh -c $cmd`)
 end
 
-upload_fingerprints()
+@scheduled "BACKUP" "2:00" upload_fingerprints()

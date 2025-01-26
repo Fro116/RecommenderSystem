@@ -2,20 +2,19 @@ include("../../julia_utils/multithreading.jl")
 include("../../julia_utils/scheduling.jl")
 include("../../julia_utils/stdout.jl")
 include("common.jl")
-const logdir = "../../../data"
 
 function backup()
-    for fn in [
-        "download_media.jl",
-        "match_ids.jl",
-        "match_manami.jl",
-        "match_manual.jl",
-        "match_metadata.jl",
-        "match_media.jl",
-    ]
-        logfile = split(fn, ".")[1] * ".log"
-        cmd = "julia $fn > $logdir/$logfile"
-        run(`sh -c $cmd`)
+    open("../../../data/match_media.log", "w") do f
+        for fn in [
+            "download_media.jl",
+            "match_ids.jl",
+            "match_manami.jl",
+            "match_manual.jl",
+            "match_metadata.jl",
+            "match_media.jl",
+        ]
+            run(pipeline(`julia $fn`, stdout=f, stderr=f))
+        end
     end
     save_template = read("$envdir/database/storage.txt", String)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
@@ -30,4 +29,4 @@ function backup()
     end
 end
 
-@scheduled "BACKUP" "13:00" @handle_errors backup()
+@scheduled "BACKUP" "22:00" @handle_errors backup()
