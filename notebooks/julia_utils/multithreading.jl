@@ -25,19 +25,3 @@ macro timeout(s::Real, f)
         take!(c)
     end
 end
-
-module multithreading
-
-function collect(c::Channel)
-    ret = []
-    while true
-        try
-            push!(ret, take!(c))
-        catch
-            break
-        end
-    end
-    ret
-end
-
-end

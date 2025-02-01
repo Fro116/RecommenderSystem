@@ -1,6 +1,9 @@
 import CSV
 import DataFrames
 import Glob
+import Memoize: @memoize
+import ProgressMeter
+import ProgressMeter: @showprogress
 
 include("../../julia_utils/http.jl")
 include("../../julia_utils/database.jl")
@@ -8,7 +11,8 @@ include("../../julia_utils/multithreading.jl")
 include("../../julia_utils/scheduling.jl")
 include("../../julia_utils/stdout.jl")
 const envdir = "../../../environment"
-const datadir = "../../../data/users"
+const datadir = "../../../data/lists"
+const dbschema = "../../Collect/schema.txt"
 
 function download_users(source::String)
     mkdir("$datadir/$source")
@@ -22,6 +26,40 @@ function download_users(source::String)
         run(`unzstd -f $datadir/$source/$(source)_$(t).csv.zstd`)
         rm("$datadir/$source/$(source)_$(t).csv.zstd")
     end
+end
+
+@memoize function get_typemap(schema::String)
+    dbtypes = Dict(
+        "BIGINT" => Int,
+        "TEXT" => String,
+        "DOUBLE" => Float64,
+        "BOOLEAN" => String, # postgres outputs bools as "t", "f"
+        "BYTEA" => Vector{UInt8},
+    )
+    typemap = Dict()
+    types = nothing
+    table = nothing
+    for line in readlines(schema)
+        if startswith(line, "CREATE TABLE")
+            table = split(line, " ")[3]
+            types = Dict()
+            continue
+        end
+        if startswith(line, ");")
+            typemap[table] = types
+            types = nothing
+            table = nothing
+            continue
+        end
+        if !isnothing(table)
+            fields = split(strip(replace(line, "," => " ")), " ")
+            if fields[1] in ["UNIQUE"]
+                continue
+            end
+            types[lowercase(fields[1])] = dbtypes[fields[2]]
+        end
+    end
+    typemap
 end
 
 function partition(source)
@@ -39,17 +77,11 @@ function partition(source)
     )
     run(`sh -c $cmd`)
     rm("$datadir/$source/$(source)_user_items.csv")
-    mkdir("$datadir/$source/user_items")
-    for (chunk_idx, f) in
+    @showprogress for (chunk_idx, f) in
         Iterators.enumerate(Glob.glob("$datadir/$source/splits/split_*.csv"))
-        mkdir("$datadir/$source/user_items/$chunk_idx")
-        df = CSV.read(f, DataFrames.DataFrame, ntasks=1)
-        gdf = DataFrames.groupby(df, col)
-        Threads.@threads for subdf in gdf
-            name = first(subdf[:, col])
-            filename = "$datadir/$source/user_items/$chunk_idx/$name.csv"
-            CSV.write(filename, subdf, quotestrings=true)
-        end
+        savedir = "$datadir/$source/user_items/$chunk_idx"
+        mkpath(savedir)
+        run(`mlr --csv --from $f split -g $(string(col)) --prefix $savedir/ -j ""`)
     end
     rm("$datadir/$source/splits", recursive = true, force = true)
 end
@@ -88,17 +120,16 @@ function get_fingerprints(source::String, items::DataFrames.DataFrame)
     elseif source == "animeplanet"
         for m in ["manga", "anime"]
             sdf = filter(x -> x.medium == m, items)
-            if DataFrames.nrow(sdf) == 0
-                continue
+            if DataFrames.nrow(sdf) != 0
+                d = last(sort(sdf, :item_order))
+                d = Dict(
+                    "version" => d["version"],
+                    "medium" => d["medium"],
+                    "itemid" => d["itemid"],
+                )
+                push!(fingerprints, d)
             end
-            d = last(sort(sdf, :item_order))
-            d = Dict(
-                "version" => d["version"],
-                "medium" => d["medium"],
-                "itemid" => d["itemid"],
-            )
-            push!(fingerprints, d)
-            d = Dict("version" => d["version"], "$(m)_count" => DataFrames.nrow(sdf))
+            d = Dict("$(m)_count" => DataFrames.nrow(sdf))
             push!(fingerprints, d)
         end
     end
@@ -111,7 +142,7 @@ function save_fingerprints(source::String)
     for c in chunks
         for f in readdir("$datadir/$source/user_items/$c")
             if source in ["mal", "animeplanet"]
-                parser = lowercase
+                parser = identity
             elseif source in ["kitsu", "anilist"]
                 parser = x -> parse(Int, x)
             else
@@ -129,10 +160,41 @@ function save_fingerprints(source::String)
         DataFrames.DataFrame,
         stringtype = String,
         ntasks = 1,
+        types = get_typemap(dbschema)["$(source)_users"]
     )
     user_cols = [x for x in DataFrames.names(users) if !startswith(x, "db_")]
-    ret = Channel(Inf)
-    task = Threads.@spawn @handle_errors multithreading.collect(ret)
+    function writecsv(c::Channel)
+        p = ProgressMeter.ProgressUnknown(desc = "$source fingerprints"; showspeed=true)
+        function write!(dfs, part)
+            CSV.write(
+                "$datadir/$source.$part.csv",
+                reduce(vcat, dfs);
+                bufsize = 2^24,
+                quotestrings=true,
+                transform=(col, val) -> something(val, missing),
+            )
+            empty!(dfs)
+        end
+        part = 1
+        dfs = []
+        try
+            while true
+                push!(dfs, take!(c))
+                if length(dfs) == 1_000_000
+                    write!(dfs, part)
+                    ProgressMeter.next!(p)
+                    part += 1
+                end
+            end
+        catch
+        finally
+            if length(dfs) > 0
+                write!(dfs, part)
+            end
+        end
+        ProgressMeter.finish!(p)
+    end
+    ch = Channel(writecsv, 1000)
     Threads.@threads for i = 1:DataFrames.nrow(users)
         if ismissing(users[i, :db_last_success_at])
             continue
@@ -141,20 +203,20 @@ function save_fingerprints(source::String)
             if ismissing(users[i, :username])
                 continue
             end
-            uid = lowercase(users[i, :username])
-            username = lowercase(users[i, :username])
+            uid = users[i, :username]
+            username = users[i, :username]
         elseif source == "anilist"
             if ismissing(users[i, :username]) || ismissing(users[i, :userid])
                 continue
             end
             uid = users[i, :userid]
-            username = lowercase(users[i, :username])
+            username = users[i, :username]
         elseif source == "kitsu"
             if ismissing(users[i, :name]) || ismissing(users[i, :userid])
                 continue
             end
             uid = users[i, :userid]
-            username = lowercase(users[i, :name])
+            username = users[i, :name]
         else
             @assert false
         end
@@ -172,8 +234,8 @@ function save_fingerprints(source::String)
                     f,
                     DataFrames.DataFrame,
                     stringtype = String,
-                    typemap = Dict(Dates.Date => String, Dates.Time => String),
                     ntasks = 1,
+                    types = get_typemap(dbschema)["$(source)_user_items"]
                 )
                 cols = DataFrames.names(df)
                 for i = 1:DataFrames.nrow(df)
@@ -190,7 +252,7 @@ function save_fingerprints(source::String)
             "items" => items,
             "usermap" => Dict("username" => username, "userid" => userid),
         )
-        d = Dict(
+        df = DataFrames.DataFrame(
             "source" => source,
             "username" => username,
             "userid" => userid,
@@ -204,29 +266,23 @@ function save_fingerprints(source::String)
                 ),
             "db_refreshed_at" => db_refreshed_at,
         )
-        put!(ret, d)
+        put!(ch, df)
     end
-    close(ret)
-    DataFrames.DataFrame(fetch(task))
+    close(ch)
+    rm("$datadir/$source", force = true, recursive = true)
 end
 
 function upload_fingerprints()
     rm(datadir, force = true, recursive = true)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     mkpath(datadir)
-    Threads.@threads for source in sources
+    for source in reverse(sources)
         download_users(source)
         partition(source)
-        fingerprints = save_fingerprints(source)
-        fingerprints = fingerprints[
-            :,
-            [:source, :username, :userid, :fingerprint, :data, :db_refreshed_at],
-        ]
-        CSV.write("$datadir/$source.fingerprints.csv", fingerprints; bufsize = 2^24, quotestrings=true)
-        rm("$datadir/$source", force = true, recursive = true)
+        save_fingerprints(source)
     end
-    files = join(["$s.fingerprints.csv" for s in sources], " ")
-    cmd = "cd $datadir && mlr --csv cat $files > fingerprints.csv && rm $files"
+    files = join(readdir(datadir), " ")
+    cmd = "cd $datadir && mlr --csv cat *.csv > fingerprints.csv && rm $files"
     run(`sh -c $cmd`)
     save_template = read("$envdir/database/storage.txt", String)
     cmd = replace(save_template, "{INPUT}" => "$datadir/fingerprints.csv", "{OUTPUT}" => "fingerprints.csv")

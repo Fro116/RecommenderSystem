@@ -1880,7 +1880,7 @@ function animeplanet_get_fingerprint(
     else
         count = 0
     end
-    push!(entries, Dict("version" => API_VERSION, "$(medium)_count" => count))
+    push!(entries, Dict("$(medium)_count" => count))
     ret = Dict("entries" => entries)
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
