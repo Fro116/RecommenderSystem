@@ -581,9 +581,19 @@ function db_gc_junction_table(
             LIMIT \$4;
             """
         stmt = db_prepare(db, query)
-        df = DataFrames.DataFrame(
+        df1 = DataFrames.DataFrame(
             LibPQ.execute(stmt, tuple(3, curtime, month, N); binary_format = true),
         )
+        query = """
+            SELECT $col_str FROM $junction_table
+            EXCEPT SELECT $col_str from $primary_table
+            LIMIT \$1;
+            """
+        stmt = db_prepare(db, query)
+        df2 = DataFrames.DataFrame(
+            LibPQ.execute(stmt, tuple(N); binary_format = true),
+        )
+        df = vcat(df1, df2)
         for i = 1:DataFrames.nrow(df)
             vals = [df[i, x] for x in idcols]
             placeholders = join(["\$" * string(i) for i = 1:length(vals)], ", ")
@@ -593,6 +603,6 @@ function db_gc_junction_table(
                 LibPQ.execute(stmt, (vals...,); binary_format = true)
             end
         end
-        DataFrames.nrow(df) == N
+        DataFrames.nrow(df1) == N || DataFrames.nrow(df2) == N
     end
 end
