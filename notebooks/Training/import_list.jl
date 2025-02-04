@@ -4,17 +4,24 @@ import DataFrames
 import Memoize: @memoize
 
 const STATUS_MAP = Dict{String,Int32}(
-    "rewatching" => 7,
-    "completed" => 6,
-    "currently_watching" => 5,
-    "on_hold" => 4,
-    "planned" => 3,
-    "dropped" => 2,
-    "wont_watch" => 1,
     "none" => 0,
+    "wont_watch" => 1,
+    "dropped" => 2,
+    "planned" => 3,
+    "on_hold" => 4,
+    "currently_watching" => 5,
+    "completed" => 6,
+    "rewatching" => 7,
 )
 
 const MEDIUM_MAP = Dict{String,Int32}("manga" => 0, "anime" => 1)
+
+const SOURCE_MAP = Dict{String,Int32}(
+    "mal" => 0,
+    "anilist" => 1,
+    "kitsu" => 2,
+    "animeplanet" => 3,
+)
 
 const mediadir = "../../data/training"
 
@@ -111,7 +118,7 @@ end
 
 function import_mal_user(data)
     source = "mal"
-    user = Dict("source" => source)
+    user = Dict("source" => SOURCE_MAP[source])
     items = []
     status_map = Dict(
         "completed" => "completed",
@@ -146,12 +153,13 @@ function import_mal_user(data)
         create_item!(source, x["medium"], x["itemid"], item)
         push!(items, item)
     end
+    sort!(items, by=x -> (x["updated_at"], x["update_order"]))
     Dict("user" => user, "items" => items)
 end
 
 function import_anilist_user(data)
     source = "anilist"
-    user = Dict("source" => source)
+    user = Dict("source" => SOURCE_MAP[source])
     items = []
     status_map = Dict(
         "REPEATING" => "rewatching",
@@ -181,12 +189,13 @@ function import_anilist_user(data)
         create_item!(source, x["medium"], x["itemid"], item)
         push!(items, item)
     end
+    sort!(items, by=x -> (x["updated_at"], x["update_order"]))
     Dict("user" => user, "items" => items)
 end
 
 function import_kitsu_user(data)
     source = "kitsu"
-    user = Dict("source" => source)
+    user = Dict("source" => SOURCE_MAP[source])
     items = []
     status_map = Dict(
         "completed" => "completed",
@@ -219,12 +228,13 @@ function import_kitsu_user(data)
         create_item!(source, x["medium"], x["itemid"], item)
         push!(items, item)
     end
+    sort!(items, by=x -> (x["updated_at"], x["update_order"]))
     Dict("user" => user, "items" => items)
 end
 
 function import_animeplanet_user(data)
     source = "animeplanet"
-    user = Dict("source" => source)
+    user = Dict("source" => SOURCE_MAP[source])
     items = []
     status_map = Dict(
         1 => "completed",
@@ -254,6 +264,7 @@ function import_animeplanet_user(data)
         create_item!(source, x["medium"], x["itemid"], item)
         push!(items, item)
     end
+    sort!(items, by=x -> (x["updated_at"], x["update_order"]))
     Dict("user" => user, "items" => items)
 end
 
