@@ -17,9 +17,7 @@ const dbschema = "../../Collect/schema.txt"
 function download_users(source::String)
     mkdir("$datadir/$source")
     retrieval = read("$envdir/database/retrieval.txt", String)
-    cmd = "$retrieval/latest $datadir/$source/latest"
-    run(`sh -c $cmd`)
-    tag = read("$datadir/$source/latest", String)
+    tag = read("$datadir/latest", String)
     for t in ["users", "user_items"]
         cmd = "$retrieval/$tag/$(source)_$(t).zstd $datadir/$source/$(source)_$(t).csv.zstd"
         run(`sh -c $cmd`)
@@ -276,6 +274,9 @@ function upload_fingerprints()
     rm(datadir, force = true, recursive = true)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     mkpath(datadir)
+    retrieval = read("$envdir/database/retrieval.txt", String)
+    cmd = "$retrieval/latest $datadir/latest"
+    run(`sh -c $cmd`)
     for source in reverse(sources)
         download_users(source)
         partition(source)
@@ -294,4 +295,4 @@ function upload_fingerprints()
     run(`sh -c $cmd`)
 end
 
-@scheduled "BACKUP" "2:00" upload_fingerprints()
+@scheduled "BACKUP" "2:00" @handle_errors upload_fingerprints()
