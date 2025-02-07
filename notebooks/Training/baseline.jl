@@ -14,7 +14,7 @@ include("../julia_utils/stdout.jl")
 const datadir = "../../data/training"
 const MEDIUM_MAP = Dict(0 => "manga", 1 => "anime")
 
-function num_items(medium::Int)
+@memoize function num_items(medium::Int)
     m = MEDIUM_MAP[medium]
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
 end
@@ -48,6 +48,7 @@ function get_data(split::String, medium::Int)
     userids = []
     itemids = []
     ratings = []
+    userid_base = 0
     @showprogress for outdir in readdir("$datadir/users/$split")
         fns = Glob.glob("$datadir/users/$split/$outdir/*.msgpack")
         push!(userids, Vector{Vector{Int32}}(undef, length(fns)))
@@ -56,10 +57,11 @@ function get_data(split::String, medium::Int)
         Threads.@threads for (i, f) in collect(Iterators.enumerate(fns))
             user = MsgPack.unpack(read(f))
             items = [x for x in user["items"] if x["medium"] == medium && x["rating"] != 0]
-            userids[end][i] = fill(i, length(items))
+            userids[end][i] = fill(userid_base + i, length(items))
             itemids[end][i] = [x["matchedid"] for x in items]
             ratings[end][i] = [x["rating"] for x in items]
         end
+        userid_base += length(fns)
     end
     N = sum(sum(length.(x)) for x in userids)
     rd = RatingsDataset(
@@ -99,7 +101,7 @@ function random_split(df::RatingsDataset, test_frac::Float64)
     train_df, test_df
 end
 
-function get_user_biases(df, λ, a, item_counts)
+function get_user_biases(df, λ, a, user_countmap, item_countmap)
     μ_a, λ_u, λ_a, λ_wu, λ_wa = λ
     λ_u, λ_a = exp.((λ_u, λ_a))
     function get_user_partition(users, threadid, num_threads)
@@ -112,7 +114,9 @@ function get_user_biases(df, λ, a, item_counts)
     @sync for t = 1:T
         Threads.@spawn begin
             @inbounds for i in get_user_partition(df.userid, t, T)
-                w = (item_counts[i]^λ_wa)
+                w =
+                    (user_countmap[df.userid[i]]^λ_wu) *
+                    (get(item_countmap, df.itemid[i], 1)^λ_wa)
                 user_bias[df.userid[i]] += (df.rating[i] - a[df.itemid[i]]) * w
                 denom[df.userid[i]] += w
             end
@@ -147,6 +151,10 @@ function update_users!(users, items, ratings, weights, u, a, μ_uλ_u, Ω)
     Threads.@threads for i = 1:length(u)
         @inbounds u[i] /= Ω[i]
     end
+end
+
+@memoize function get_countmap(df, col)
+    StatsBase.countmap(getfield(df, col))
 end
 
 @memoize function get_counts(df, col)
@@ -208,7 +216,13 @@ end;
 
 function mse_and_beta(λ, training, test_input, test_output, medium)
     _, a = train_model(λ, training, medium)
-    u = get_user_biases(test_input, λ, a, get_counts(training, :itemid))
+    u = get_user_biases(
+        test_input,
+        λ,
+        a,
+        get_countmap(test_input, :userid),
+        get_countmap(training, :itemid),
+    )
     x = Array{eltype(a)}(undef, length(test_output.userid))
     Threads.@threads for i = 1:length(x)
         @inbounds x[i] = get(u, test_output.userid[i], 0) + a[test_output.itemid[i]]
@@ -251,7 +265,7 @@ function save_model(medium::Int)
             show_trace = true,
             extended_trace = true,
             g_tol = Float64(sqrt(eps(Float32))),
-            time_limit = 3600,
+            time_limit = 1800,
         ),
     )
     λ = Optim.minimizer(res)
@@ -259,7 +273,11 @@ function save_model(medium::Int)
     logtag("BASELINE", "The optimal λ, mse is $λ, $mse")
     _, a = train_model(λ, training, medium)
     d = Dict(
-        "params" => Dict("λ" => λ, "a" => a, "item_counts" => get_counts(training, :itemid)),
+        "params" => Dict(
+            "λ" => λ,
+            "a" => a,
+            "item_counts" => get_countmap(training, :itemid),
+        ),
         "weight" => [β],
         "bias" => a .* β,
     )
