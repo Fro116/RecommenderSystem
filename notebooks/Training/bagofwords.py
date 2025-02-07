@@ -3,6 +3,7 @@ import glob
 import logging
 import os
 
+import filelock
 import h5py
 import hdf5plugin
 import numpy as np
@@ -14,10 +15,15 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
 
+with open("bagofwords.model.py") as f:
+    exec(f.read())
+
 
 class BagOfWordsDataset(IterableDataset):
-    def __init__(self, datadir, split, batch_size):
+    def __init__(self, datadir, medium, metric, split, batch_size):
         self.datadir = f"{datadir}/bagofwords/{split}"
+        self.medium = medium
+        self.metric = metric
         self.epoch = 0
         self.epochs = len(glob.glob(f"{self.datadir}/*"))
         self.batch_size = batch_size
@@ -39,21 +45,11 @@ class BagOfWordsDataset(IterableDataset):
             num_workers = worker_info.num_workers
         fns = sorted(glob.glob(f"{self.datadir}/{self.epoch+1}/*.h5"))
         fns = [x for i, x in enumerate(fns) if i % num_workers == worker_id]
-        mediums = [0, 1]
-        metrics = ["rating", "watch", "plantowatch", "drop"]
         for fn in fns:
             with h5py.File(fn, "r") as f:
                 X = self.load_sparse_matrix(f, "X")
-                Y = [
-                    self.load_sparse_matrix(f, f"Y_{medium}_{metric}")
-                    for medium in mediums
-                    for metric in metrics
-                ]
-                W = [
-                    self.load_sparse_matrix(f, f"W_{medium}_{metric}")
-                    for medium in mediums
-                    for metric in metrics
-                ]
+                Y = self.load_sparse_matrix(f, f"Y_{self.medium}_{self.metric}")
+                W = self.load_sparse_matrix(f, f"W_{self.medium}_{self.metric}")
             idxs = list(range(X.shape[0]))
             np.random.shuffle(idxs)
             while len(idxs) % self.batch_size != 0:
@@ -63,103 +59,19 @@ class BagOfWordsDataset(IterableDataset):
                 for i in range(0, len(idxs), self.batch_size)
             ]
             for idx in idxs:
-                yield X[idx, :], [y[idx, :] for y in Y], [w[idx, :] for w in W]
+                yield X[idx, :], Y[idx, :], W[idx, :]
         self.epoch = (self.epoch + 1) % self.epochs
 
 
 def collate(data):
     assert len(data) == 1
-    return data[0]
+    return [
+        torch.sparse_csr_tensor(x.indptr, x.indices, x.data, x.shape) for x in data[0]
+    ]
 
 
-def to_device(x):
-    if isinstance(x, list):
-        return [to_device(y) for y in x]
-    return (
-        torch.sparse_csr_tensor(x.indptr, x.indices, x.data, x.shape)
-        .to(device)
-        .to_dense()
-    )
-
-
-class BagOfWordsModel(nn.Module):
-    def __init__(self, datadir):
-        super(BagOfWordsModel, self).__init__()
-        num_items = {
-            x: pd.read_csv(f"{datadir}/{y}.csv").matchedid.max() + 1
-            for (x, y) in {0: "manga", 1: "anime"}.items()
-        }
-        self.model = nn.Sequential(
-            nn.Linear(sum(num_items.values()) * 2, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-        )
-        mediums = [0, 1]
-        metrics = ["rating", "watch", "plantowatch", "drop"]
-        self.classifiers = nn.ModuleList(
-            [nn.Linear(256, num_items[medium]) for medium in mediums for _ in metrics]
-        )
-        self.logsoftmax = nn.LogSoftmax(dim=-1)
-        self.softmax = nn.Softmax(dim=-1)
-        self.sigmoid = nn.Sigmoid()
-        lossfn_map = {
-            "rating": self.mse,
-            "watch": self.crossentropy,
-            "plantowatch": self.crossentropy,
-            "drop": self.binarycrossentropy,
-        }
-        self.lossfns = [lossfn_map[metric] for _ in mediums for metric in metrics]
-        evaluate_map = {
-            "rating": self.moments,
-            "watch": self.crossentropy,
-            "plantowatch": self.crossentropy,
-            "drop": self.binarycrossentropy,
-        }
-        self.evaluatefns = [evaluate_map[metric] for _ in mediums for metric in metrics]
-
-    def mse(self, x, y, w):
-        return (torch.square(x - y) * w).sum()
-
-    def crossentropy(self, x, y, w):
-        x = self.logsoftmax(x)
-        return (-x * y * w).sum()
-
-    def binarycrossentropy(self, x, y, w):
-        return nn.functional.binary_cross_entropy_with_logits(
-            input=x,
-            target=y,
-            weight=w,
-            reduction="sum",
-        )
-
-    def moments(self, x, y, w):
-        return (
-            self.mse(1 * x, y, w),
-            self.mse(0 * x, y, w),
-            self.mse(-1 * x, y, w),
-        )
-
-    def forward(self, inputs, labels, weights, mode):
-        e = self.model(inputs)
-        if mode == "training":
-            return [
-                fn(c(e), l, w)
-                for (c, fn, l, w) in zip(
-                    self.classifiers, self.lossfns, labels, weights
-                )
-            ], [w.sum() for w in weights]
-        elif mode == "evaluation":
-            return [
-                fn(c(e), l, w)
-                for (c, fn, l, w) in zip(
-                    self.classifiers, self.evaluatefns, labels, weights
-                )
-            ], [w.sum() for w in weights]
-        else:
-            assert False
+def to_device(data):
+    return [x.to(device).to_dense() for x in data]
 
 
 def minimize_quadratic(x, y):
@@ -172,38 +84,30 @@ def minimize_quadratic(x, y):
     return float(y_extremum)
 
 
-def evaluate_metrics(model, dataloader, taskweights):
-    mediums = [0, 1]
-    metrics = ["rating", "watch", "plantowatch", "drop"]
-    init = lambda metric: [0, 0, 0] if metric == "rating" else 0
-    losses = [init(metric) for _ in mediums for metric in metrics]
-    weights = [0 for _ in range(len(mediums) * len(metrics))]
+def evaluate_metrics(model, dataloader, metric):
+    losses = [0, 0, 0] if metric == "rating" else 0
+    weights = 0
     progress = tqdm(desc="Test batches", mininterval=1)
     model.eval()
     for data in dataloader:
         with torch.no_grad():
             with torch.amp.autocast(device, dtype=torch.bfloat16):
-                loss, w = model(*to_device(data), mode="evaluation")
-            for i in range(len(loss)):
-                w[i] = float(w[i])
-                if w[i] != 0:
-                    if isinstance(losses[i], list):
-                        for j in range(len(losses[i])):
-                            losses[i][j] += float(loss[i][j])
-                    else:
-                        losses[i] += float(loss[i])
-                    weights[i] += w[i]
+                loss, w = model(*to_device(data), mode="eval")
+            w = float(w)
+            if w == 0:
+                continue
+            if isinstance(losses, list):
+                for i in range(len(loss)):
+                    losses[i] += float(loss[i])
+            else:
+                losses += float(loss)
+            weights += w
         progress.update()
     progress.close()
     model.train()
-    for i in range(len(losses)):
-        if isinstance(losses[i], list):
-            losses[i] = minimize_quadratic([1, 0, -1], losses[i])
-        if weights[i] != 0:
-            losses[i] /= weights[i]
-        else:
-            losses[i] = 0
-    return sum(l * w for (l, w) in zip(losses, taskweights)), losses
+    if metric == "rating":
+        losses = minimize_quadratic([1, 0, -1], losses)
+    return losses / weights
 
 
 class EarlyStopper:
@@ -260,106 +164,109 @@ def get_logger(name):
     return logger
 
 
-def train_epoch(model, dataloader, optimizer, scaler, taskweights):
-    training_losses = [0.0 for _ in taskweights]
-    weights = [0 for _ in taskweights]
+def train_epoch(model, dataloader, optimizer, scaler):
+    losses = 0
+    weights = 0
     progress = tqdm(desc="Training batches", mininterval=1)
     for data in dataloader:
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(device, dtype=torch.bfloat16):
-            losses, wsums = model(
-                *to_device(data),
-                mode="training",
-            )
-        for i in range(len(taskweights)):
-            training_losses[i] += float(losses[i])
-            weights[i] += float(wsums[i])
-        invweights = [sum(weights) / x if x != 0 else 0 for x in weights]
-        loss = sum(l * w * z for (l, w, z) in zip(losses, taskweights, invweights))
+            loss, w = model(*to_device(data), mode="train")
+        losses += float(loss)
+        weights += float(w)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
         progress.update()
     progress.close()
-    tasklosses = [l / w if w != 0 else 0 for (l, w) in zip(training_losses, weights)]
-    invweights = [sum(weights) / x if x != 0 else 0 for x in weights]
-    return (
-        sum(l * w * z for (l, w, z) in zip(tasklosses, taskweights, invweights)),
-        tasklosses,
-    )
+    return losses / weights
 
 
-def save_model(model, datadir, taskweights):
-    fn = os.path.join(
-        datadir,
-        "_".join(["bagofwords"] + [str(x) for x in taskweights] + ["model.pt"]),
-    )
-    temp = fn + "~"
-    torch.save(model._orig_mod.state_dict(), temp)
-    os.rename(temp, fn)
+def save_model(model, loss, epoch, datadir, medium, metric):
+    stem = f"{datadir}/bagofwords.{medium}.{metric}"
+    torch.save(model._orig_mod.state_dict(), f"{stem}.pt")
+    with open(f"{stem}.csv", "w") as f:
+        f.write("loss,epoch\n")
+        f.write(f"{loss},{epoch}\n")
 
 
-def load_data(datadir, logger):
-    if os.path.exists(f"{datadir}/bagofwords"):
-        return
-    logger.info("downloading training data")
-    templatefn = f"{datadir}/../../environment/database/trainingdata.txt"
+def upload(model, datadir, medium, metric, logger):
+    logger.info("uploading model")
+    templatefn = f"{datadir}/../../environment/database/upload.txt"
     with open(templatefn) as f:
         template = f.read()
-    cmd = f"{template}/bagofwords {datadir}/bagofwords"
-    os.system(cmd)
+    for suffix in ["pt", "csv"]:
+        cmd = template.replace(
+            "{INPUT}", f"{datadir}/bagofwords.{medium}.{metric}.{suffix}"
+        ).replace(
+            "{OUTPUT}",
+            f"bagofwords.{medium}.{metric}.{suffix}",
+        )
+        os.system(cmd)
 
 
-def train(datadir, taskweights):
+def download(datadir, logger):
+    logger.info("waiting for download lock")
+    lock = filelock.FileLock(f"{datadir}/bagofwords.lock")
+    with lock:
+        if os.path.exists(f"{datadir}/bagofwords"):
+            return
+        logger.info("downloading data")
+        templatefn = f"{datadir}/../../environment/database/download.txt"
+        with open(templatefn) as f:
+            template = f.read()
+        for data in ["manga.csv", "anime.csv", "bagofwords"]:
+            os.system(f"{template}/{data} {datadir}/{data}")
+
+
+def train(datadir, medium, metric):
     logger = get_logger("bagofwords")
-    load_data(datadir, logger)
+    download(datadir, logger)
     logger.setLevel(logging.DEBUG)
-    logger.info(f"training {taskweights}")
+    logger.info(f"training {medium} {metric}")
     dataloaders = {
         x: DataLoader(
-            BagOfWordsDataset(datadir, x, 2048),
+            BagOfWordsDataset(datadir, medium, metric, x, 2048),
             batch_size=1,
             drop_last=False,
-            num_workers=8,
+            num_workers=16,
             persistent_workers=True,
-            pin_memory=True,
             collate_fn=collate,
         )
         for x in ["training", "test"]
     }
-    model = BagOfWordsModel(datadir)
+    model = BagOfWordsModel(datadir, medium, metric)
     model = model.to(device)
     model = torch.compile(model)
     optimizer = create_optimizer(model)
     scaler = torch.amp.GradScaler(device)
-    stopper = EarlyStopper(patience=3, rtol=1e-4)
-    starting_epoch = 0
-    get_loss = lambda x: evaluate_metrics(x, dataloaders["test"], taskweights)
-    save = lambda x: save_model(x, datadir, taskweights)
-    save(model)
+    stopper = EarlyStopper(patience=3, rtol=1e-3)
+    get_loss = lambda x: evaluate_metrics(x, dataloaders["test"], metric)
+    save = lambda m, l, e: save_model(m, l, e, datadir, medium, metric)
     initial_loss = get_loss(model)
     logger.info(f"Initial Loss: {initial_loss}")
-    stopper(initial_loss[0])
-    save(model)
-    for epoch in range(starting_epoch, 100):
-        training_loss = train_epoch(
-            model, dataloaders["training"], optimizer, scaler, taskweights
-        )
+    stopper(initial_loss)
+    save(model, initial_loss, 0)
+    for epoch in range(128):
+        training_loss = train_epoch(model, dataloaders["training"], optimizer, scaler)
         logger.info(f"Epoch: {epoch}, Training Loss: {training_loss}")
         test_loss = get_loss(model)
         logger.info(f"Epoch: {epoch}, Test Loss: {test_loss}")
-        stopper(test_loss[0])
+        stopper(test_loss)
         if stopper.save_model:
-            save(model)
+            save(model, test_loss, epoch)
         if stopper.early_stop:
             break
+    upload(model, datadir, medium, metric, logger)
 
 
-device = "cuda"
 parser = argparse.ArgumentParser()
 parser.add_argument("--datadir", type=str)
-parser.add_argument("--taskweights", type=int, nargs='+')
+parser.add_argument("--medium", type=int)
+parser.add_argument("--metric", type=str)
+parser.add_argument("--device", type=str)
 args = parser.parse_args()
+device = args.device
 
 if __name__ == "__main__":
-    train(args.datadir, args.taskweights)
+    train(args.datadir, args.medium, args.metric)

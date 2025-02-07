@@ -282,9 +282,18 @@ function save_model(medium::Int)
         "bias" => a .* β,
     )
     mkpath("$datadir/alphas")
-    open("$datadir/alphas/baseline.$(medium).msgpack", "w") do f
+    outfn = "$datadir/alphas/baseline.$(medium).msgpack"
+    open(outfn, "w") do f
         write(f, MsgPack.pack(d))
     end
+    tag = read("$datadir/latest", String)
+    template = read("$envdir/database/storage.txt", String)
+    cmd = replace(
+        template,
+        "{INPUT}" => outfn,
+        "{OUTPUT}" => "$tag/baseline.$(medium).msgpack",
+    )
+    run(`sh -c $cmd`)
 end
 
 for m in keys(MEDIUM_MAP)

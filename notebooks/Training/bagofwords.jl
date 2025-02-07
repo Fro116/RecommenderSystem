@@ -236,5 +236,5 @@ function upload()
 end
 
 save_epochs("test", 1, 0.1, true)
-save_epochs("training", 16, 0.25, false)
+save_epochs("training", 64, 0.25, false)
 upload()

@@ -1,5 +1,6 @@
 curl_cffi==0.7.4
 fastapi==0.115.5
+filelock==3.16.1
 h5py==3.12.1
 hdf5plugin==5.0.0
 msgpack==1.1.0
