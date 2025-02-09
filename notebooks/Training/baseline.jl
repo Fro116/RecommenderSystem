@@ -12,6 +12,7 @@ import StatsBase
 include("../julia_utils/stdout.jl")
 
 const datadir = "../../data/training"
+const envdir = "../../environment"
 const MEDIUM_MAP = Dict(0 => "manga", 1 => "anime")
 
 @memoize function num_items(medium::Int)
@@ -20,7 +21,7 @@ const MEDIUM_MAP = Dict(0 => "manga", 1 => "anime")
 end
 
 function loss(x, y, w, metric)
-    safelog(x) = log(x .+ Float32(eps(Float64))) # so that log(0) doesn't NaN
+    safelog(x) = log(x .+ Float32(eps(Float64)))
     if metric == :rating
         lossfn = (x, y) -> (x - y) .^ 2
     elseif metric in [:watch, :plantowatch]
@@ -286,12 +287,11 @@ function save_model(medium::Int)
     open(outfn, "w") do f
         write(f, MsgPack.pack(d))
     end
-    tag = read("$datadir/latest", String)
-    template = read("$envdir/database/storage.txt", String)
+    template = read("$envdir/database/upload.txt", String)
     cmd = replace(
         template,
         "{INPUT}" => outfn,
-        "{OUTPUT}" => "$tag/baseline.$(medium).msgpack",
+        "{OUTPUT}" => "baseline.$(medium).msgpack",
     )
     run(`sh -c $cmd`)
 end
@@ -299,3 +299,5 @@ end
 for m in keys(MEDIUM_MAP)
     save_model(m)
 end
+
+save_model(0)

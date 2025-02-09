@@ -229,7 +229,7 @@ def train(datadir, medium, metric):
             BagOfWordsDataset(datadir, medium, metric, x, 2048),
             batch_size=1,
             drop_last=False,
-            num_workers=16,
+            num_workers=48,
             persistent_workers=True,
             collate_fn=collate,
         )

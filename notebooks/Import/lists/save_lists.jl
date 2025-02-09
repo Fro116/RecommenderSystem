@@ -190,6 +190,7 @@ function save_fingerprints(source::String)
                 write!(dfs, part)
             end
         end
+        touch("$datadir/$source.finished")
         ProgressMeter.finish!(p)
     end
     ch = Channel(writecsv, 1000)
@@ -268,6 +269,10 @@ function save_fingerprints(source::String)
     end
     close(ch)
     rm("$datadir/$source", force = true, recursive = true)
+    while !ispath("$datadir/$source.finished")
+        sleep(10)
+    end
+    rm("$datadir/$source.finished")
 end
 
 function upload_fingerprints()

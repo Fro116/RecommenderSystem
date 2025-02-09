@@ -15,10 +15,11 @@ const envdir = "../../environment"
 const mediums = [0, 1]
 const metrics = ["rating", "watch", "plantowatch", "drop"]
 const planned_status = 3
-const MEDIUM_MAP = Dict(0 => "manga", 1 => "anime")
+const medium_map = Dict(0 => "manga", 1 => "anime")
+const upload_lock = ReentrantLock()
 
 @memoize function num_items(medium::Int)
-    m = MEDIUM_MAP[medium]
+    m = medium_map[medium]
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
 end
 
@@ -188,53 +189,63 @@ function save_epochs(datasplit, epochs, mask_rate, weight_by_user)
         end
     end
     rm("$datadir/bagofwords/$datasplit", recursive = true, force = true)
-    for epoch = 1:epochs
-        mkpath("$datadir/bagofwords/$datasplit/$epoch")
-    end
-    files = collect(
-        Iterators.partition(
-            Random.shuffle(Glob.glob("$datadir/users/$datasplit/*/*.msgpack")),
-            100_000,
-        ),
-    )
-    @showprogress for p = 1:length(files)
-        fns = files[p]
-        d = Dict(x => Vector{Any}(undef, length(fns)) for x = 1:epochs)
-        Threads.@threads for i = 1:length(fns)
-            data = open(fns[i]) do f
-                MsgPack.unpack(read(f))
-            end
-            for epoch = 1:epochs
-                d[epoch][i] = get_data(data, baselines, mask_rate, weight_by_user)
-            end
+    args = []
+    for chunk in collect(Iterators.partition(1:epochs, 8))
+        for epoch in chunk
+            mkpath("$datadir/bagofwords/$datasplit/$epoch")
         end
-        Threads.@threads for epoch = 1:epochs
-            ret = d[epoch]
-            Random.shuffle!(ret)
-            h5 = Dict()
-            for k in keys(first(ret))
-                record_sparse_array!(h5, k, sparsecat([x[k] for x in ret]))
+        files = collect(
+            Iterators.partition(
+                Random.shuffle(Glob.glob("$datadir/users/$datasplit/*/*.msgpack")),
+                100_000,
+            ),
+        )
+        tasks = [Threads.@spawn upload(datasplit, x) for x in args]
+        @showprogress for p = 1:length(files)
+            fns = files[p]
+            d = Dict(x => Vector{Any}(undef, length(fns)) for x in chunk)
+            Threads.@threads for i = 1:length(fns)
+                data = open(fns[i]) do f
+                    MsgPack.unpack(read(f))
+                end
+                for epoch in chunk
+                    d[epoch][i] = get_data(data, baselines, mask_rate, weight_by_user)
+                end
             end
-            HDF5.h5open("$datadir/bagofwords/$datasplit/$epoch/$p.h5", "w") do file
-                for (k, v) in h5
-                    file[k, blosc = 3] = v
+            Threads.@threads for epoch in chunk
+                ret = d[epoch]
+                Random.shuffle!(ret)
+                h5 = Dict()
+                for k in keys(first(ret))
+                    record_sparse_array!(h5, k, sparsecat([x[k] for x in ret]))
+                end
+                HDF5.h5open("$datadir/bagofwords/$datasplit/$epoch/$p.h5", "w") do file
+                    for (k, v) in h5
+                        file[k, blosc = 3] = v
+                    end
                 end
             end
         end
+        fetch.(tasks)
+        args = collect(chunk)
+    end
+    Threads.@threads for x in args
+        upload(datasplit, x)
     end
 end
 
-function upload()
-    tag = read("$datadir/latest", String)
-    template = read("$envdir/database/storage.txt", String)
-    cmd = replace(
-        template,
-        "{INPUT}" => "$datadir/bagofwords",
-        "{OUTPUT}" => "$tag/bagofwords",
-    )
-    run(`sh -c $cmd`)
+function upload(datasplit, epoch)
+    lock(upload_lock) do
+        template = read("$envdir/database/upload.txt", String)
+        cmd = replace(
+            template,
+            "{INPUT}" => "$datadir/bagofwords/$datasplit/$epoch",
+            "{OUTPUT}" => "bagofwords/$datasplit/$epoch",
+        )
+        run(`sh -c $cmd`)
+        rm("$datadir/bagofwords/$datasplit/$epoch", recursive = true, force = true)
+    end
 end
 
 save_epochs("test", 1, 0.1, true)
 save_epochs("training", 64, 0.25, false)
-upload()
