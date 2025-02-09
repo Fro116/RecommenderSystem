@@ -293,7 +293,8 @@ function upload_fingerprints()
     save_template = read("$envdir/database/storage.txt", String)
     cmd = replace(save_template, "{INPUT}" => "$datadir/fingerprints.csv", "{OUTPUT}" => "fingerprints.csv")
     run(`sh -c $cmd`)
-    cmd = "$envdir/database/import_csv.sh $datadir"
+    script = "$envdir/database/import_csv.sh"
+    cmd = "chmod +x $script && $script $datadir"
     run(`sh -c $cmd`)
     conn_str = read("$DB_PATH/primary.txt", String)
     cmd = """psql "$conn_str" -f import_csv.sql"""

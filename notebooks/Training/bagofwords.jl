@@ -188,7 +188,6 @@ function save_epochs(datasplit, epochs, mask_rate, weight_by_user)
             baselines[m] = MsgPack.unpack(read(f))
         end
     end
-    rm("$datadir/bagofwords/$datasplit", recursive = true, force = true)
     args = []
     for chunk in collect(Iterators.partition(1:epochs, 8))
         for epoch in chunk
@@ -247,5 +246,7 @@ function upload(datasplit, epoch)
     end
 end
 
+rm("$datadir/bagofwords", recursive = true, force = true)
 save_epochs("test", 1, 0.1, true)
 save_epochs("training", 64, 0.25, false)
+rm("$datadir/bagofwords", recursive = true, force = true)

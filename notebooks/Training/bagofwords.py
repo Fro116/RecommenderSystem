@@ -2,6 +2,7 @@ import argparse
 import glob
 import logging
 import os
+import time
 
 import filelock
 import h5py
@@ -20,12 +21,12 @@ with open("bagofwords.model.py") as f:
 
 
 class BagOfWordsDataset(IterableDataset):
-    def __init__(self, datadir, medium, metric, split, batch_size):
+    def __init__(self, datadir, medium, metric, split, batch_size, epochs):
         self.datadir = f"{datadir}/bagofwords/{split}"
         self.medium = medium
         self.metric = metric
         self.epoch = 0
-        self.epochs = len(glob.glob(f"{self.datadir}/*"))
+        self.epochs = epochs
         self.batch_size = batch_size
 
     def load_sparse_matrix(self, f, name):
@@ -43,6 +44,8 @@ class BagOfWordsDataset(IterableDataset):
         else:
             worker_id = worker_info.id
             num_workers = worker_info.num_workers
+        while not os.path.exists(f"{self.datadir}/{self.epoch+1}.finished"):
+            time.sleep(1)
         fns = sorted(glob.glob(f"{self.datadir}/{self.epoch+1}/*.h5"))
         fns = [x for i, x in enumerate(fns) if i % num_workers == worker_id]
         for fn in fns:
@@ -205,7 +208,7 @@ def upload(model, datadir, medium, metric, logger):
         os.system(cmd)
 
 
-def download(datadir, logger):
+def download(datadir, logger, epochs):
     logger.info("waiting for download lock")
     lock = filelock.FileLock(f"{datadir}/bagofwords.lock")
     with lock:
@@ -215,25 +218,33 @@ def download(datadir, logger):
         templatefn = f"{datadir}/../../environment/database/download.txt"
         with open(templatefn) as f:
             template = f.read()
-        for data in ["manga.csv", "anime.csv", "bagofwords"]:
+        for data in ["manga.csv", "anime.csv"]:
             os.system(f"{template}/{data} {datadir}/{data}")
+        for dsplit, depochs in zip(["test", "training"], [1, epochs]):
+            os.system(
+                f"for e in `seq 1 {depochs}`;"
+                f"do {template}/bagofwords/{dsplit}/$e {datadir}/bagofwords/{dsplit}/$e;"
+                f"touch {datadir}/bagofwords/{dsplit}/$e.finished;"
+                "done &"
+            )
 
 
 def train(datadir, medium, metric):
     logger = get_logger("bagofwords")
-    download(datadir, logger)
+    dataepochs = 64
+    download(datadir, logger, dataepochs)
     logger.setLevel(logging.DEBUG)
     logger.info(f"training {medium} {metric}")
     dataloaders = {
         x: DataLoader(
-            BagOfWordsDataset(datadir, medium, metric, x, 2048),
+            BagOfWordsDataset(datadir, medium, metric, x, 2048, e),
             batch_size=1,
             drop_last=False,
-            num_workers=48,
+            num_workers=w,
             persistent_workers=True,
             collate_fn=collate,
         )
-        for x in ["training", "test"]
+        for (x, e, w) in zip(["training", "test"], [dataepochs, 1], [16, 1])
     }
     model = BagOfWordsModel(datadir, medium, metric)
     model = model.to(device)
