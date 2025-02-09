@@ -24,7 +24,7 @@ async def remove_expired_sessions():
                     if current_time - last_access > 10_000
                 ]
                 for sid in expired_sessions:
-                    await sessions[sid][0].aclose()
+                    await sessions[sid][0].close()
                     del sessions[sid]
             await asyncio.sleep(1000)
     except asyncio.CancelledError:
@@ -61,6 +61,7 @@ async def get_session(sessionid, proxyurl):
             sessions[sessionid] = (session, current_time)
             if session.proxies == proxies:
                 return session
+            await session.close()
         session = requests.AsyncSession(proxies=proxies)
         sessions[sessionid] = (session, current_time)
         return session
