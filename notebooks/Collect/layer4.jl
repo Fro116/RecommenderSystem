@@ -19,7 +19,7 @@ Oxygen.@post "/read" function read_user(r::HTTP.Request)::HTTP.Response
     tasks = []
     for table in ["collect_users", "inference_users"]
         task = Threads.@spawn begin
-            df = with_db(Symbol(table), 0) do db
+            df = with_db(Symbol(table), 3) do db
                 query = "SELECT * FROM $table WHERE (source, lower(username)) = (\$1, lower(\$2))"
                 stmt = db_prepare(db, query)
                 DataFrames.DataFrame(LibPQ.execute(stmt, (source, username)))
@@ -57,7 +57,7 @@ Oxygen.@post "/write" function write_user(r::HTTP.Request)::HTTP.Response
         bytes2hex(Vector{UInt8}(data["data"])),
         time()
     )
-    r = with_db(:write, 0) do db
+    r = with_db(:write, 3) do db
         query = "DELETE FROM inference_users WHERE (source, lower(username)) = (\$1, lower(\$2))"
         stmt = db_prepare(db, query)
         LibPQ.execute(stmt, (source, username), binary_format=true)

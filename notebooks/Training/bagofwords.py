@@ -7,6 +7,7 @@ import time
 import filelock
 import h5py
 import hdf5plugin
+import msgpack
 import numpy as np
 import pandas as pd
 import scipy
@@ -21,13 +22,13 @@ with open("bagofwords.model.py") as f:
 
 
 class BagOfWordsDataset(IterableDataset):
-    def __init__(self, datadir, medium, metric, split, batch_size, epochs):
-        self.datadir = f"{datadir}/bagofwords/{split}"
+    def __init__(self, datadir, medium, metric, mask_rate, weight_by_user, batch_size):
+        self.datadir = datadir
         self.medium = medium
         self.metric = metric
-        self.epoch = 0
-        self.epochs = epochs
+        self.mask_rate = mask_rate
         self.batch_size = batch_size
+        self.weight_by_user = weight_by_user
 
     def load_sparse_matrix(self, f, name):
         i = f[f"{name}_i"][:] - 1
@@ -44,16 +45,17 @@ class BagOfWordsDataset(IterableDataset):
         else:
             worker_id = worker_info.id
             num_workers = worker_info.num_workers
-        while not os.path.exists(f"{self.datadir}/{self.epoch+1}.finished"):
-            time.sleep(1)
-        fns = sorted(glob.glob(f"{self.datadir}/{self.epoch+1}/*.h5"))
+        fns = sorted(glob.glob(f"{self.datadir}/*.h5"))
         fns = [x for i, x in enumerate(fns) if i % num_workers == worker_id]
         for fn in fns:
             with h5py.File(fn, "r") as f:
-                X = self.load_sparse_matrix(f, "X")
-                Y = self.load_sparse_matrix(f, f"Y_{self.medium}_{self.metric}")
-                W = self.load_sparse_matrix(f, f"W_{self.medium}_{self.metric}")
-            idxs = list(range(X.shape[0]))
+                d = {}
+                for t in ["X", "Y", "W"]:
+                    for m in [0, 1]:
+                        for metric in ["rating", "watch", "plantowatch", "drop"]:
+                            name = f"{t}_{m}_{metric}"
+                            d[name] = self.load_sparse_matrix(f, name)
+            idxs = list(range(d[name].shape[0]))
             np.random.shuffle(idxs)
             while len(idxs) % self.batch_size != 0:
                 idxs.append(np.random.choice(idxs))
@@ -62,19 +64,70 @@ class BagOfWordsDataset(IterableDataset):
                 for i in range(0, len(idxs), self.batch_size)
             ]
             for idx in idxs:
-                yield X[idx, :], Y[idx, :], W[idx, :]
-        self.epoch = (self.epoch + 1) % self.epochs
+                ret = {
+                    "medium": self.medium,
+                    "metric": self.metric,
+                    "mask_rate": self.mask_rate,
+                    "weight_by_user": self.weight_by_user,
+                }
+                for k, v in d.items():
+                    ret[k] = v[idx, :]
+                yield ret
 
 
 def collate(data):
     assert len(data) == 1
-    return [
-        torch.sparse_csr_tensor(x.indptr, x.indices, x.data, x.shape) for x in data[0]
-    ]
+    ret = {}
+    for k, v in data[0].items():
+        if k in ["medium", "metric", "mask_rate", "weight_by_user"]:
+            ret[k] = v
+        else:
+            ret[k] = torch.sparse_csr_tensor(v.indptr, v.indices, v.data, v.shape)
+    return ret
 
 
 def to_device(data):
-    return [x.to(device).to_dense() for x in data]
+    medium = data["medium"]
+    metric = data["metric"]
+    mask_rate = data["mask_rate"]
+    masks = [
+        torch.rand(data[f"X_{m}_rating"].shape, device=device) < mask_rate
+        for m in [0, 1]
+    ]
+    Y = data[f"Y_{medium}_{metric}"].to(device).to_dense()
+    W = data[f"W_{medium}_{metric}"].to(device).to_dense()
+    Y[~masks[medium]] = 0
+    W[~masks[medium]] = 0
+    if data["weight_by_user"]:
+        W = W / W.sum(dim=1).reshape(-1, 1).clip(1)
+    d = {}
+    for m in [0, 1]:
+        d[f"X_{m}_rating"] = data[f"X_{m}_rating"].to(device).to_dense()
+        d[f"X_{m}_watch"] = data[f"X_{m}_watch"].to(device).to_dense()
+        d[f"X_{m}_rating"][masks[m]] = 0
+        d[f"X_{m}_watch"][masks[m]] = 0
+        r = d[f"X_{m}_rating"]
+        _, λ_u, _, λ_wu, λ_wa = baselines[m]["params"]
+        user_count = (r != 0).sum(dim=1)
+        user_weights = user_count**λ_wu
+        user_weights[user_count == 0] = 0
+        item_count = (r != 0) * baselines[m]["item_counts"]
+        item_weights = item_count**λ_wa
+        item_weights[item_count == 0] = 0
+        weights = user_weights.reshape(-1, 1) * item_weights
+        user_baseline = ((r - baselines[m]["a"]) * weights).sum(dim=1) / (
+            weights.sum(dim=1) + np.exp(λ_u)
+        )
+        pred = (
+            user_baseline.reshape(-1, 1) + baselines[m]["a"].reshape(1, -1)
+        ) * baselines[m]["weight"]
+        d[f"X_{m}_rating"] = (d[f"X_{m}_rating"] != 0) * (d[f"X_{m}_rating"] - pred)
+        if medium == m and metric == "rating":
+            Y = (Y != 0) * (Y - pred)
+    X = torch.cat(
+        (d[f"X_0_rating"], d[f"X_0_watch"], d[f"X_1_rating"], d[f"X_1_watch"]), dim=1
+    )
+    return X, Y, W
 
 
 def minimize_quadratic(x, y):
@@ -185,12 +238,15 @@ def train_epoch(model, dataloader, optimizer, scaler):
     return losses / weights
 
 
-def save_model(model, loss, epoch, datadir, medium, metric):
+def checkpoint_model(model, save, loss, epoch, datadir, medium, metric):
     stem = f"{datadir}/bagofwords.{medium}.{metric}"
-    torch.save(model._orig_mod.state_dict(), f"{stem}.pt")
-    with open(f"{stem}.csv", "w") as f:
-        f.write("loss,epoch\n")
-        f.write(f"{loss},{epoch}\n")
+    if save:
+        torch.save(model._orig_mod.state_dict(), f"{stem}.pt")
+    if epoch < 0:
+        with open(f"{stem}.csv", "w") as f:
+            f.write("epoch,loss\n")
+    with open(f"{stem}.csv", "a") as f:
+        f.write(f"{epoch},{loss}\n")
 
 
 def upload(model, datadir, medium, metric, logger):
@@ -208,43 +264,23 @@ def upload(model, datadir, medium, metric, logger):
         os.system(cmd)
 
 
-def download(datadir, logger, epochs):
-    logger.info("waiting for download lock")
-    lock = filelock.FileLock(f"{datadir}/bagofwords.lock")
-    with lock:
-        if os.path.exists(f"{datadir}/bagofwords"):
-            return
-        logger.info("downloading data")
-        templatefn = f"{datadir}/../../environment/database/download.txt"
-        with open(templatefn) as f:
-            template = f.read()
-        for data in ["manga.csv", "anime.csv"]:
-            os.system(f"{template}/{data} {datadir}/{data}")
-        for dsplit, depochs in zip(["test", "training"], [1, epochs]):
-            os.system(
-                f"for e in `seq 1 {depochs}`;"
-                f"do {template}/bagofwords/{dsplit}/$e {datadir}/bagofwords/{dsplit}/$e;"
-                f"touch {datadir}/bagofwords/{dsplit}/$e.finished;"
-                "done &"
-            )
-
-
 def train(datadir, medium, metric):
     logger = get_logger("bagofwords")
     dataepochs = 64
-    download(datadir, logger, dataepochs)
     logger.setLevel(logging.DEBUG)
     logger.info(f"training {medium} {metric}")
     dataloaders = {
         x: DataLoader(
-            BagOfWordsDataset(datadir, medium, metric, x, 2048, e),
+            BagOfWordsDataset(f"{datadir}/bagofwords/{x}", medium, metric, r, u, 2048),
             batch_size=1,
             drop_last=False,
             num_workers=w,
             persistent_workers=True,
             collate_fn=collate,
         )
-        for (x, e, w) in zip(["training", "test"], [dataepochs, 1], [16, 1])
+        for (x, r, u, w) in zip(
+            ["training", "test"], [0.25, 0.1], [False, True], [16, 4]
+        )
     }
     model = BagOfWordsModel(datadir, medium, metric)
     model = model.to(device)
@@ -253,22 +289,59 @@ def train(datadir, medium, metric):
     scaler = torch.amp.GradScaler(device)
     stopper = EarlyStopper(patience=3, rtol=1e-3)
     get_loss = lambda x: evaluate_metrics(x, dataloaders["test"], metric)
-    save = lambda m, l, e: save_model(m, l, e, datadir, medium, metric)
+    checkpoint = lambda m, s, l, e: checkpoint_model(
+        m, s, l, e, datadir, medium, metric
+    )
     initial_loss = get_loss(model)
     logger.info(f"Initial Loss: {initial_loss}")
     stopper(initial_loss)
-    save(model, initial_loss, 0)
+    checkpoint(model, True, initial_loss, -1)
     for epoch in range(128):
         training_loss = train_epoch(model, dataloaders["training"], optimizer, scaler)
         logger.info(f"Epoch: {epoch}, Training Loss: {training_loss}")
         test_loss = get_loss(model)
         logger.info(f"Epoch: {epoch}, Test Loss: {test_loss}")
         stopper(test_loss)
-        if stopper.save_model:
-            save(model, test_loss, epoch)
+        checkpoint(model, stopper.save_model, test_loss, epoch)
         if stopper.early_stop:
             break
     upload(model, datadir, medium, metric, logger)
+
+
+def download(datadir):
+    lock = filelock.FileLock(f"{datadir}/bagofwords.lock")
+    with lock:
+        if os.path.exists(f"{datadir}/bagofwords"):
+            return
+        templatefn = f"{datadir}/../../environment/database/download.txt"
+        with open(templatefn) as f:
+            template = f.read()
+        for data in [
+            "manga.csv",
+            "anime.csv",
+            "baseline.0.msgpack",
+            "baseline.1.msgpack",
+            "bagofwords",
+        ]:
+            os.system(f"{template}/{data} {datadir}/{data}")
+
+
+def get_baselines(datadir):
+    baselines = {}
+    for m in [0, 1]:
+        with open(f"{datadir}/baseline.{m}.msgpack", "rb") as f:
+            baseline = msgpack.unpackb(f.read(), strict_map_key=False)
+            d = {}
+            d["params"] = baseline["params"]["λ"]
+            d["weight"] = baseline["weight"][0]
+            d["a"] = torch.tensor(baseline["params"]["a"]).to(device)
+            item_counts = baseline["params"]["item_counts"]
+            item_counts = [
+                item_counts.get(x, 1) for x in range(len(baseline["params"]["a"]))
+            ]
+            d["item_counts"] = torch.tensor(item_counts).to(device)
+            baselines[m] = d
+    return baselines
 
 
 parser = argparse.ArgumentParser()
@@ -278,6 +351,8 @@ parser.add_argument("--metric", type=str)
 parser.add_argument("--device", type=str)
 args = parser.parse_args()
 device = args.device
+download(args.datadir)
+baselines = get_baselines(args.datadir)
 
 if __name__ == "__main__":
     train(args.datadir, args.medium, args.metric)

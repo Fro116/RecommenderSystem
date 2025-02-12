@@ -282,8 +282,7 @@ function save_model(medium::Int)
         "weight" => [β],
         "bias" => a .* β,
     )
-    mkpath("$datadir/alphas")
-    outfn = "$datadir/alphas/baseline.$(medium).msgpack"
+    outfn = "$datadir/baseline.$(medium).msgpack"
     open(outfn, "w") do f
         write(f, MsgPack.pack(d))
     end
