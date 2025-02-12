@@ -115,41 +115,47 @@ function record_sparse_array!(d, name, x)
 end;
 
 function save_data(datasplit)
-    mkpath("$datadir/bagofwords/$datasplit")
-    files = Glob.glob("$datadir/users/$datasplit/*/*.msgpack")
+    num_shards = 8
+    users = sort(Glob.glob("$datadir/users/$datasplit/*/*.msgpack"))
     if datasplit == "test"
-        files = repeat(files, 8)
+        users = repeat(users, 5)
     end
-    files = collect(Iterators.partition(Random.shuffle(files), 100_000))
-    @showprogress for p = 1:length(files)
-        fns = files[p]
-        d = Vector{Any}(undef, length(fns))
-        Threads.@threads for i = 1:length(fns)
-            data = open(fns[i]) do f
-                MsgPack.unpack(read(f))
+    while length(users) % num_shards != 0
+        push!(users, rand(users))
+    end
+    for shard in 1:num_shards
+        dest = mkpath("$datadir/bagofwords/$datasplit/$shard")
+        files = [x for (i, x) in Iterators.enumerate(users) if (i % num_shards) + 1 == shard]
+        files = collect(Iterators.partition(Random.shuffle(files), 65_536))
+        @showprogress for p = 1:length(files)
+            fns = files[p]
+            d = Vector{Any}(undef, length(fns))
+            Threads.@threads for i = 1:length(fns)
+                data = open(fns[i]) do f
+                    MsgPack.unpack(read(f))
+                end
+                d[i] = get_data(data)
             end
-            d[i] = get_data(data)
-        end
-        Random.shuffle!(d)
-        h5 = Dict()
-        for k in keys(first(d))
-            record_sparse_array!(h5, k, sparsecat([x[k] for x in d]))
-        end
-        HDF5.h5open("$datadir/bagofwords/$datasplit/$p.h5", "w") do file
-            for (k, v) in h5
-                file[k, blosc = 3] = v
+            Random.shuffle!(d)
+            h5 = Dict()
+            for k in keys(first(d))
+                record_sparse_array!(h5, k, sparsecat([x[k] for x in d]))
+            end
+            HDF5.h5open("$dest/$p.h5", "w") do file
+                for (k, v) in h5
+                    file[k, blosc = 3] = v
+                end
             end
         end
     end
-    upload(datasplit)
 end
 
-function upload(datasplit)
+function upload()
     template = read("$envdir/database/upload.txt", String)
     cmd = replace(
         template,
-        "{INPUT}" => "$datadir/bagofwords/$datasplit",
-        "{OUTPUT}" => "bagofwords/$datasplit",
+        "{INPUT}" => "$datadir/bagofwords",
+        "{OUTPUT}" => "bagofwords",
     )
     run(`sh -c $cmd`)
 end
@@ -157,3 +163,4 @@ end
 rm("$datadir/bagofwords", recursive = true, force = true)
 save_data("test")
 save_data("training")
+upload()

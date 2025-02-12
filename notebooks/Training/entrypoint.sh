@@ -1,6 +1,17 @@
 #!/bin/bash
 set -euxo pipefail
-cd ~
+handle_error() {
+  sleep 600 # give time to debug
+}
+trap handle_error ERR
+cleanup() {
+    if [ -n "${RUNPOD_POD_ID+x}" ]; then
+	runpodctl remove pod $RUNPOD_POD_ID
+    fi
+}
+trap cleanup EXIT
+python -c 'import torch; torch.rand(1, device="cuda:0")'
+cd /data
 apt update
 apt install unzip git -y
 git clone https://github.com/Fro116/RecommenderSystem.git
@@ -19,15 +30,9 @@ mv environment RecommenderSystem/
 mkdir -p RecommenderSystem/data/training
 pip install filelock h5py hdf5plugin msgpack pandas scipy tqdm
 cd RecommenderSystem/notebooks/Training/
-python bagofwords.py --datadir ../../data/training --medium 0 --metric rating --device cuda:0 &> ../../data/training.0.watch.log &
-python bagofwords.py --datadir ../../data/training --medium 0 --metric watch --device cuda:1 &> ../../data/training.0.watch.log &
-python bagofwords.py --datadir ../../data/training --medium 0 --metric plantowatch --device cuda:2 &> ../../data/training.0.plantowatch.log &
-python bagofwords.py --datadir ../../data/training --medium 0 --metric drop --device cuda:3 &> ../../data/training.0.drop.log &
-python bagofwords.py --datadir ../../data/training --medium 1 --metric rating --device cuda:4 &> ../../data/training.1.rating.log &
-python bagofwords.py --datadir ../../data/training --medium 1 --metric watch --device cuda:5 &> ../../data/training.1.watch.log &
-python bagofwords.py --datadir ../../data/training --medium 1 --metric plantowatch --device cuda:6 &> ../../data/training.1.plantowatch.log &
-python bagofwords.py --datadir ../../data/training --medium 1 --metric drop --device cuda:7 &> ../../data/training.1.drop.log &
-wait
-if [[ -v RUNPOD_POD_ID ]]; then
-    runpodctl remove pod $RUNPOD_POD_ID
-fi    
+for m in 1 0; do
+for metric in watch rating plantowatch drop; do
+    cmd="torchrun --standalone --nproc_per_node=8 bagofwords.py --datadir ../../data/training --medium $m --metric $metric"
+    $cmd || (sleep 60 && $cmd)
+done
+done
