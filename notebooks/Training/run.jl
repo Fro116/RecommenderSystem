@@ -25,14 +25,15 @@ function start_runpod(gpuname)
         "--gpuType '$gpuname'",
         "--gpuCount 8",
         "--imageName '$image'",
-        "--containerDiskSize 128",
+        "--volumePath /data",
+        "--volumeSize 128",
         "--secureCloud",
         "--args 'bash -c \"$entrypoint\"'",
     ]
     create = join(create, " ")
     cmds = [
         create,
-        "sleep 120",
+        "sleep 300",
         "runpodctl get pod | grep -w $podname | grep -w RUNNING",
     ]
     cmd = join(cmds, " && ")
@@ -47,7 +48,9 @@ end
 
 function start_gpu()
     while true
-        for gpuname in ["NVIDIA H100 NVL", "NVIDIA H100 PCIe", "NVIDIA H100 80GB HBM3", "NVIDIA H200"]
+        #gputypes = ["NVIDIA H100 NVL", "NVIDIA H100 PCIe", "NVIDIA H100 80GB HBM3", "NVIDIA H200"]
+        gputypes = ["NVIDIA H100 80GB HBM3", "NVIDIA H200"]
+        for gpuname in gputypes
             success = start_runpod(gpuname)
             if success
                 return
