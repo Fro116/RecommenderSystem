@@ -108,22 +108,24 @@ def collate(data):
 
 
 def to_device(data, baselines, rank):
-    mask_rate = data["mask_rate"]
-    masks = [
-        torch.rand(data[f"X_{m}_rating"].shape, device=rank) < mask_rate for m in [0, 1]
-    ]
     Y = data[f"Y_{medium}_{metric}"].to(rank).to_dense()
     W = data[f"W_{medium}_{metric}"].to(rank).to_dense()
-    Y[~masks[medium]] = 0
-    W[~masks[medium]] = 0
+    if data["mask_rate"] is not None:
+        mask_rate = data["mask_rate"]
+        masks = [
+            torch.rand(data[f"X_{m}_rating"].shape, device=rank) < mask_rate for m in [0, 1]
+        ]
+        Y[~masks[medium]] = 0
+        W[~masks[medium]] = 0
     if data["weight_by_user"]:
         W = W / W.sum(dim=1).reshape(-1, 1).clip(1)
     d = {}
     for m in [0, 1]:
         d[f"X_{m}_rating"] = data[f"X_{m}_rating"].to(rank).to_dense()
         d[f"X_{m}_watch"] = data[f"X_{m}_watch"].to(rank).to_dense()
-        d[f"X_{m}_rating"][masks[m]] = 0
-        d[f"X_{m}_watch"][masks[m]] = 0
+        if data["mask_rate"] is not None:
+            d[f"X_{m}_rating"][masks[m]] = 0
+            d[f"X_{m}_watch"][masks[m]] = 0
         r = d[f"X_{m}_rating"]
         _, λ_u, _, λ_wu, λ_wa = baselines[m]["params"]
         user_count = (r != 0).sum(dim=1)
@@ -234,23 +236,26 @@ def create_optimizer(model):
 class EarlyStopper:
     def __init__(self, patience, rtol):
         self.patience = patience
-        self.counter = 0
-        self.best_score = float("inf")
-        self.early_stop = False
-        self.save_model = False
         self.rtol = rtol
+        self.counter = 0
+        self.stop_score = float("inf")
+        self.early_stop = False
+        self.saved_score = float("inf")
+        self.save_model = False
 
     def __call__(self, score):
-        if score > self.best_score * (1 - self.rtol):
+        if score < self.stop_score * (1 - self.rtol):
+            self.counter = 0
+            self.stop_score = score
+        else:
             self.counter += 1
             if self.counter >= self.patience:
                 self.early_stop = True
-        else:
-            self.counter = 0
-        self.save_model = False
-        if score < self.best_score:
-            self.best_score = score
+        if score < self.saved_score:
+            self.saved_score = score
             self.save_model = True
+        else:
+            self.save_model = False
 
 
 def get_logger(rank, name):
@@ -310,9 +315,13 @@ def train():
     logger = get_logger(rank, "bagofwords")
     logger.setLevel(logging.DEBUG)
     logger.info(f"training {medium} {metric}")
-    batch_size = 32768
+    batch_size = 32768 if finetune is None else 2048
     assert batch_size % world_size == 0
     batch_size = batch_size // world_size
+    if finetune is None:
+        dataloader_args = [("training", 0.25, False, 24), ("test", 0.1, True, 2)]
+    else:
+        dataloader_args = [("training", None, True, 4), ("test", None, True, 2)]
     dataloaders = {
         x: DataLoader(
             BagOfWordsDataset(
@@ -324,11 +333,11 @@ def train():
             persistent_workers=True,
             collate_fn=collate,
         )
-        for (x, r, u, w) in zip(
-            ["training", "test"], [0.25, 0.1], [False, True], [24, 2]
-        )
+        for (x, r, u, w) in dataloader_args
     }
-    model = BagOfWordsModel(datadir, medium, metric)
+    model = BagOfWordsModel(medium, metric)
+    if finetune is not None:
+        model.load_state_dict(torch.load(finetune, weights_only=True))
     model = model.to(rank)
     model = torch.compile(model)
     model = DDP(model, device_ids=[rank], output_device=rank)
@@ -398,10 +407,12 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--datadir", type=str)
 parser.add_argument("--medium", type=int)
 parser.add_argument("--metric", type=str)
+parser.add_argument("--finetune", type=str, default=None)
 args = parser.parse_args()
 datadir = args.datadir
 medium = args.medium
 metric = args.metric
+finetune = args.finetune
 
 if __name__ == "__main__":
     download()

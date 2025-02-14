@@ -1,8 +1,8 @@
 class BagOfWordsModel(nn.Module):
-    def __init__(self, datadir, medium, metric):
+    def __init__(self, medium, metric):
         super(BagOfWordsModel, self).__init__()
         num_items = {
-            x: pd.read_csv(f"{datadir}/{y}.csv").matchedid.max() + 1
+            x: pd.read_csv(f"../../data/training/{y}.csv").matchedid.max() + 1
             for (x, y) in {0: "manga", 1: "anime"}.items()
         }
         self.model = nn.Sequential(
