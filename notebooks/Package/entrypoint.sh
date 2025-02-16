@@ -25,14 +25,14 @@ access_key_id = $R2_ACCESS_KEY_ID
 secret_access_key = $R2_SECRET_ACCESS_KEY
 endpoint = https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com
 " > ~/.config/rclone/rclone.conf
-rclone --retries=10 -Pv copy r2:rsys/environment/training environment
+rclone --retries=10 -Pv copy r2:rsys/environment/finetune environment
 mv environment RecommenderSystem/
-mkdir -p RecommenderSystem/data/training
+mkdir -p RecommenderSystem/data/finetune
 pip install filelock h5py hdf5plugin msgpack pandas scipy tqdm
 cd RecommenderSystem/notebooks/Training/
 for m in 0 1; do
 for metric in rating watch plantowatch drop; do
-    cmd="torchrun --standalone --nproc_per_node=8 bagofwords.py --datadir ../../data/training --medium $m --metric $metric"
+    cmd="torchrun --standalone --nproc_per_node=1 bagofwords.py --datadir ../../data/finetune --medium $m --metric $metric --finetune ../../data/finetune/bagofwords.$m.$metric.pt"
     # sleep to cleanup resources after torchrun exits
     $cmd || (sleep 10 && $cmd) || (sleep 60 && $cmd)
 done

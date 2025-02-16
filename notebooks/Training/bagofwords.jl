@@ -24,7 +24,6 @@ function parse_args()
 end
 
 const finetune, datadir = parse_args()
-const mediadir = "../../data/training"
 const envdir = "../../environment"
 const mediums = [0, 1]
 const metrics = ["rating", "watch", "plantowatch", "drop"]
@@ -33,7 +32,7 @@ const medium_map = Dict(0 => "manga", 1 => "anime")
 
 @memoize function num_items(medium::Int)
     m = medium_map[medium]
-    maximum(CSV.read("$mediadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
+    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
 end
 
 function get_data(data)
@@ -147,9 +146,9 @@ function record_sparse_array!(d, name, x)
 end;
 
 function save_data(datasplit)
-    num_shards = 8
+    num_shards = finetune ? 1 : 8
     users = sort(Glob.glob("$datadir/users/$datasplit/*/*.msgpack"))
-    if datasplit == "test"
+    if datasplit == "test" && !finetune
         users = repeat(users, 5)
     end
     while length(users) % num_shards != 0

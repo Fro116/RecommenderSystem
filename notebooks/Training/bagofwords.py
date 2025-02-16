@@ -36,10 +36,12 @@ class BagOfWordsDataset(IterableDataset):
         world_size,
         mask_rate,
         weight_by_user,
+        shuffle,
         batch_size,
     ):
         self.datadir = datadir
         self.mask_rate = mask_rate
+        self.shuffle = shuffle
         self.batch_size = batch_size
         self.weight_by_user = weight_by_user
         shards = sorted(glob.glob(f"{self.datadir}/*"))
@@ -79,9 +81,10 @@ class BagOfWordsDataset(IterableDataset):
                 )
             N = next(iter(d.values())).shape[0]
             idxs = list(range(N))
-            np.random.shuffle(idxs)
-            while len(idxs) % self.batch_size != 0:
-                idxs.append(np.random.choice(idxs))
+            if self.shuffle:
+                np.random.shuffle(idxs)
+                while len(idxs) % self.batch_size != 0:
+                    idxs.append(np.random.choice(idxs))
             idxs = [
                 idxs[i : i + self.batch_size]
                 for i in range(0, len(idxs), self.batch_size)
@@ -214,7 +217,7 @@ def train_epoch(rank, model, baselines, dataloader, optimizer, scaler):
 
 
 def create_optimizer(model):
-    learning_rate = 3e-4
+    learning_rate = 3e-4 if finetune is None else 3e-5
     weight_decay = 1e-2
     decay_parameters = []
     no_decay_parameters = []
@@ -276,6 +279,8 @@ def checkpoint_model(rank, model, save, loss, epoch):
     if rank != 0:
         return
     stem = f"{datadir}/bagofwords.{medium}.{metric}"
+    if finetune is not None:
+        stem = f"{stem}.finetune"
     if save:
         torch.save(model.module._orig_mod.state_dict(), f"{stem}.pt")
     if epoch < 0:
@@ -293,6 +298,8 @@ def upload(rank, logger):
     with open(templatefn) as f:
         template = f.read()
     for suffix in ["pt", "csv"]:
+        if finetune is not None:
+            suffix = f"finetune.{suffix}"
         cmd = template.replace(
             "{INPUT}", f"{datadir}/bagofwords.{medium}.{metric}.{suffix}"
         ).replace(
@@ -319,13 +326,13 @@ def train():
     assert batch_size % world_size == 0
     batch_size = batch_size // world_size
     if finetune is None:
-        dataloader_args = [("training", 0.25, False, 24), ("test", 0.1, True, 2)]
+        dataloader_args = [("training", 0.25, False, True, 24), ("test", 0.1, True, True, 2)]
     else:
-        dataloader_args = [("training", None, True, 4), ("test", None, True, 2)]
+        dataloader_args = [("training", None, True, True, 4), ("test", None, True, False, 1)]
     dataloaders = {
         x: DataLoader(
             BagOfWordsDataset(
-                f"{datadir}/bagofwords/{x}", rank, world_size, r, u, batch_size
+                f"{datadir}/bagofwords/{x}", rank, world_size, r, u, s, batch_size
             ),
             batch_size=1,
             drop_last=False,
@@ -333,9 +340,9 @@ def train():
             persistent_workers=True,
             collate_fn=collate,
         )
-        for (x, r, u, w) in dataloader_args
+        for (x, r, u, s, w) in dataloader_args
     }
-    model = BagOfWordsModel(medium, metric)
+    model = BagOfWordsModel(datadir, medium, metric)
     if finetune is not None:
         model.load_state_dict(torch.load(finetune, weights_only=True))
     model = model.to(rank)
@@ -375,13 +382,13 @@ def download():
         templatefn = f"{datadir}/../../environment/database/download.txt"
         with open(templatefn) as f:
             template = f.read()
-        for data in [
-            "manga.csv",
-            "anime.csv",
-            "baseline.0.msgpack",
-            "baseline.1.msgpack",
-            "bagofwords",
-        ]:
+        files = (
+            ["bagofwords"] +
+            [f"{m}.csv" for m in ["manga", "anime"]] +
+            [f"baseline.{m}.msgpack" for m in [0, 1]] +
+            [f"bagofwords.{m}.{metric}.pt" for m in [0, 1] for metric in ["rating", "watch", "plantowatch", "drop"]]
+        )
+        for data in files:
             os.system(f"{template}/{data} {datadir}/{data}")
 
 
