@@ -7,7 +7,7 @@ include("../julia_utils/stdout.jl")
 function pretrain()
     run(`julia import_data.jl`)
     run(`julia baseline.jl`)
-    run(`julia bagofwords.jl`)
+    run(`julia bagofwords.jl --finetune`)
     for medium in [0 1]
         for metric in ["rating", "watch", "drop", "plantowatch"]
             run(

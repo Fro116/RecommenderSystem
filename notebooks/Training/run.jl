@@ -106,7 +106,7 @@ start_gpu()
 # function pretrain()
 #     run(`julia import_data.jl`)
 #     run(`julia baseline.jl`)
-#     run(`julia -t auto bagofwords.jl`)
+#     run(`julia -t auto bagofwords.jl --pretrain`)
 #     start_gpu()
 #     cmd = replace(
 #         read("../../environment/database/storage.txt", String),

@@ -9,7 +9,22 @@ import ProgressMeter: @showprogress
 import Random
 import SparseArrays
 
-const datadir = "../../data/training"
+function parse_args()
+    @assert length(ARGS) == 1
+    if only(ARGS) == "--pretrain"
+        finetune = false
+        datadir = "../../data/training"
+    elseif only(ARGS) == "--finetune"
+        finetune = true
+        datadir = "../../data/finetune"
+    else
+        @assert false
+    end
+    finetune, datadir
+end
+
+const finetune, datadir = parse_args()
+const mediadir = "../../data/training"
 const envdir = "../../environment"
 const mediums = [0, 1]
 const metrics = ["rating", "watch", "plantowatch", "drop"]
@@ -18,7 +33,7 @@ const medium_map = Dict(0 => "manga", 1 => "anime")
 
 @memoize function num_items(medium::Int)
     m = medium_map[medium]
-    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
+    maximum(CSV.read("$mediadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
 end
 
 function get_data(data)
@@ -32,47 +47,64 @@ function get_data(data)
             W["$(m)_$(metric)"] = Dict{Int32,Float32}()
         end
     end
-    items = data["items"]
-    for x in items
+    input_items = data["items"]
+    output_items = finetune ? data["test_items"] : data["items"]
+    for x in input_items
         m = x["medium"]
         idx = x["matchedid"] + 1
         if x["rating"] > 0
             X["$(m)_rating"][idx] = x["rating"]
+        else
+            X["$(m)_rating"][idx] = 0
+        end
+        if x["status"] > planned_status
+            X["$(m)_watch"][idx] = 1
+        else
+            X["$(m)_watch"][idx] = 0
+        end
+        if x["status"] == planned_status
+            X["$(m)_plantowatch"][idx] = 1
+        else
+            X["$(m)_plantowatch"][idx] = 0
+        end
+        if x["status"] > 0 && x["status"] < planned_status
+            X["$(m)_drop"][idx] = 1
+        else
+            X["$(m)_drop"][idx] = 0
+        end
+
+    end
+    for x in output_items
+        m = x["medium"]
+        idx = x["matchedid"] + 1
+        if x["rating"] > 0
             Y["$(m)_rating"][idx] = x["rating"]
             W["$(m)_rating"][idx] = 1
         else
-            X["$(m)_rating"][idx] = 0
             Y["$(m)_rating"][idx] = 0
             W["$(m)_rating"][idx] = 0
         end
         if x["status"] > planned_status
-            X["$(m)_watch"][idx] = 1
             Y["$(m)_watch"][idx] = 1
             W["$(m)_watch"][idx] = 1
         else
-            X["$(m)_watch"][idx] = 0
             Y["$(m)_watch"][idx] = 0
             W["$(m)_watch"][idx] = 0
         end
         if x["status"] == planned_status
-            X["$(m)_plantowatch"][idx] = 1
             Y["$(m)_plantowatch"][idx] = 1
             W["$(m)_plantowatch"][idx] = 1
         else
-            X["$(m)_plantowatch"][idx] = 0
             Y["$(m)_plantowatch"][idx] = 0
             W["$(m)_plantowatch"][idx] = 0
         end
         if x["status"] > 0 && x["status"] < planned_status
-            X["$(m)_drop"][idx] = 1
             Y["$(m)_drop"][idx] = 1
             W["$(m)_drop"][idx] = 1
         else
-            X["$(m)_drop"][idx] = 0
             Y["$(m)_drop"][idx] = 0
             W["$(m)_drop"][idx] = 1
         end
-
     end
     ret = Dict()
     for m in mediums
