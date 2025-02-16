@@ -9,35 +9,33 @@ import ProgressMeter: @showprogress
 include("../julia_utils/stdout.jl")
 include("../Training/import_list.jl")
 
-const MEDIUMS = ["manga", "anime"]
 const METRICS = ["rating", "watch", "plantowatch", "drop"]
 const SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
 const datadir = "../../data/finetune"
 const envdir = "../../environment"
 
 function download_data()
-    rm(mediadir, force = true, recursive = true)
     rm(datadir, force = true, recursive = true)
     mkpath(datadir)
     download = read("$envdir/database/retrieval.txt", String)
-    cmd = "$download/training/latest $mediadir/latest"
+    cmd = "$download/training/latest $datadir/training_tag"
     run(`sh -c $cmd`)
-    tag = read("$mediadir/latest", String)
+    tag = read("$datadir/training_tag", String)
     files = vcat(
-        ["$m.csv" for m in MEDIUMS],
-        ["baseline.$m.csv" for m in MEDIUMS],
-        ["bagofwords.$m.$metric.pt" for m in MEDIUMS for metric in METRICS],
+        ["$m.csv" for m in ["manga", "anime"]],
+        ["baseline.$m.msgpack" for m in [0, 1]],
+        ["bagofwords.$m.$metric.pt" for m in [0, 1] for metric in METRICS],
     )
     for fn in files
-        cmd = "$download/training/$tag/$fn $mediadir/$fn"
+        cmd = "$download/training/$tag/$fn $datadir/$fn"
         run(`sh -c $cmd`)
     end
-    cmd = "$download/import/fingerprints.csv $mediadir/fingerprints.csv"
+    cmd = "$download/import/fingerprints.csv $datadir/fingerprints.csv"
     run(`sh -c $cmd`)
     run(
-        `mlr --csv split -n 1000000 --prefix $datadir/fingerprints $mediadir/fingerprints.csv`,
+        `mlr --csv split -n 1000000 --prefix $datadir/fingerprints $datadir/fingerprints.csv`,
     )
-    rm("$mediadir/fingerprints.csv")
+    rm("$datadir/fingerprints.csv")
 end
 
 function save_tag()
@@ -52,6 +50,19 @@ function save_tag()
         "{OUTPUT}" => "$date/latest",
     )
     run(`sh -c $cmd`)
+    files = vcat(
+        ["$m.csv" for m in ["manga", "anime"]],
+        ["baseline.$m.msgpack" for m in [0, 1]],
+        ["bagofwords.$m.$metric.pt" for m in [0, 1] for metric in METRICS],
+    )
+    for fn in files
+        cmd = replace(
+            save_template,
+            "{INPUT}" => "$datadir/$fn",
+            "{OUTPUT}" => "$date/$fn",
+        )
+        run(`sh -c $cmd`)
+    end
 end
 
 function gen_splits()

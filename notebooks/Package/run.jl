@@ -15,7 +15,7 @@ function pretrain()
                      --datadir ../../data/training
                      --medium $medium
                      --metric $metric
-                     --finetune ../../data/training/bagofwords.$medium.$metric.jl`
+                     --finetune ../../data/training/bagofwords.$medium.$metric.pt`
            )
         end
     end

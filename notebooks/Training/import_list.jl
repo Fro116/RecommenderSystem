@@ -25,11 +25,9 @@ const SOURCE_MAP = Dict{String,Int32}(
     "animeplanet" => 3,
 )
 
-const mediadir = "../../data/training"
-
 @memoize function get_media(medium)
     df = CSV.read(
-        "$mediadir/$medium.csv",
+        "$datadir/$medium.csv",
         DataFrames.DataFrame,
         types = Dict("itemid" => String),
     )
