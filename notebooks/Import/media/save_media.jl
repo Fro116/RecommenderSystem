@@ -16,7 +16,7 @@ function backup()
             run(pipeline(`julia $fn`, stdout=f, stderr=f))
         end
     end
-    save_template = read("$envdir/database/storage.txt", String)
+    save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/import/{OUTPUT}"
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     mediums = ["manga", "anime"]
     files = vcat(

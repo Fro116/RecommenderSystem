@@ -31,10 +31,8 @@ function save_url(key::String, url::String)
 end
 
 function save_external(key::String, path::String)
-    retrieval = read("../../environment/database/retrieval.txt", String)
     datadir = "../../data"
-    cmd = "$retrieval/$path $datadir/$path"
-    run(`sh -c $cmd`)
+    run(`rclone --retries=10 copyto r2:rsys/database/external/$path $datadir/$path`)
     data = read("$datadir/$path", String)
     write_db(key, data)
     rm("$datadir/$path")

@@ -12,12 +12,11 @@ include("../Training/import_list.jl")
 const METRICS = ["rating", "watch", "plantowatch", "drop"]
 const SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
 const datadir = "../../data/finetune"
-const envdir = "../../environment"
 
 function download_data()
     rm(datadir, force = true, recursive = true)
     mkpath(datadir)
-    download = read("$envdir/database/retrieval.txt", String)
+    download = "rclone --retries=10 copyto r2:rsys/database"
     cmd = "$download/training/latest $datadir/training_tag"
     run(`sh -c $cmd`)
     tag = read("$datadir/training_tag", String)
@@ -43,7 +42,7 @@ function save_tag()
     open("$datadir/latest", "w") do f
         write(f, date)
     end
-    save_template = read("$envdir/database/storage.txt", String)
+    save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/finetune/{OUTPUT}"
     cmd = replace(
         save_template,
         "{INPUT}" => "$datadir/latest",

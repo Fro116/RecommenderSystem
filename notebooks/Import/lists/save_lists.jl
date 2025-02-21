@@ -10,13 +10,12 @@ include("../../julia_utils/database.jl")
 include("../../julia_utils/multithreading.jl")
 include("../../julia_utils/scheduling.jl")
 include("../../julia_utils/stdout.jl")
-const envdir = "../../../environment"
 const datadir = "../../../data/lists"
 const dbschema = "../../Collect/schema.txt"
 
 function download_users(source::String)
     mkdir("$datadir/$source")
-    retrieval = read("$envdir/database/retrieval.txt", String)
+    retrieval = "rclone --retries=10 copyto r2:rsys/database/collect"
     tag = read("$datadir/latest", String)
     for t in ["users", "user_items"]
         cmd = "$retrieval/$tag/$(source)_$(t).zstd $datadir/$source/$(source)_$(t).csv.zstd"
@@ -279,7 +278,7 @@ function upload_fingerprints()
     rm(datadir, force = true, recursive = true)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     mkpath(datadir)
-    retrieval = read("$envdir/database/retrieval.txt", String)
+    retrieval = "rclone --retries=10 copyto r2:rsys/database/collect"
     cmd = "$retrieval/latest $datadir/latest"
     run(`sh -c $cmd`)
     for source in reverse(sources)
@@ -290,13 +289,13 @@ function upload_fingerprints()
     files = join(readdir(datadir), " ")
     cmd = "cd $datadir && mlr --csv cat *.csv > fingerprints.csv && rm $files"
     run(`sh -c $cmd`)
-    save_template = read("$envdir/database/storage.txt", String)
+    save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/import/{OUTPUT}"
     cmd = replace(save_template, "{INPUT}" => "$datadir/fingerprints.csv", "{OUTPUT}" => "fingerprints.csv")
     run(`sh -c $cmd`)
-    script = "$envdir/database/import_csv.sh"
+    script = "./import_csv.sh"
     cmd = "chmod +x $script && $script $datadir"
     run(`sh -c $cmd`)
-    conn_str = read("$DB_PATH/primary.txt", String)
+    conn_str = read("../../../secrets/db.inference.upload.txt", String)
     cmd = """psql "$conn_str" -f import_csv.sql"""
     run(`sh -c $cmd`)
 end

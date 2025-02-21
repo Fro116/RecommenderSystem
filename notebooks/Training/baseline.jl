@@ -12,7 +12,6 @@ import StatsBase
 include("../julia_utils/stdout.jl")
 
 const datadir = "../../data/training"
-const envdir = "../../environment"
 const MEDIUM_MAP = Dict(0 => "manga", 1 => "anime")
 
 @memoize function num_items(medium::Int)
@@ -286,7 +285,7 @@ function save_model(medium::Int)
     open(outfn, "w") do f
         write(f, MsgPack.pack(d))
     end
-    template = read("$envdir/database/upload.txt", String)
+    template = raw"tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
     cmd = replace(
         template,
         "{INPUT}" => outfn,

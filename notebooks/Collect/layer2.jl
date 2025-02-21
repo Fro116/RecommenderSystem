@@ -5,7 +5,7 @@ const RATELIMIT_WINDOW = parse(Int, ARGS[2])
 const LAYER_1_URLS = split(ARGS[3], ",")
 const DEFAULT_IMPERSONATE = parse(Bool, ARGS[4])
 const DEFAULT_TIMEOUT = parse(Int, ARGS[5])
-const RESOURCE_PATH = ARGS[6]
+const USE_SHARED_IPS = parse(Bool, ARGS[6])
 const API_VERSION = "5.0.0"
 
 import CSV
@@ -49,11 +49,14 @@ function load_resources()::Vector{Resource}
         end
         Random.shuffle(proxies)
     end
-    shared = get_proxies("$RESOURCE_PATH/proxies/shared.txt")
-    dedicated = get_proxies("$RESOURCE_PATH/proxies/dedicated.txt")
-
-    mal_tokens =
-        [only(readlines(x)) for x in Glob.glob("$RESOURCE_PATH/mal/authentication/*.txt")]
+    dedicated = get_proxies("../../secrets/ips.dedicated.txt")
+    if USE_SHARED_IPS
+        shared = get_proxies("../../secrets/ips.shared.txt")
+        mal_tokens = readlines("../../secrets/mal.auth.shared.txt")
+    else
+        shared = dedicated
+        mal_tokens = readlines("../../secrets/mal.auth.dedicated.txt")
+    end
     mal_resources = [
         Dict("location" => "mal", "token" => x, "proxyurls" => [], "ratelimit" => 8) for
         x in mal_tokens
@@ -73,11 +76,8 @@ function load_resources()::Vector{Resource}
     anilist_resources =
         [Dict("location" => "anilist", "proxyurl" => x, "ratelimit" => 4) for x in shared]
 
-    kitsu_credentials = []
-    for x in Glob.glob("$RESOURCE_PATH/kitsu/authentication/*.txt")
-        (username, password) = readlines(x)
-        push!(kitsu_credentials, Dict("username" => username, "password" => password))
-    end
+    (username, password) = readlines("../../secrets/kitsu.auth.txt")
+    kitsu_credentials = [Dict("username" => username, "password" => password)]
     kitsu_resources = [
         Dict(
             "location" => "kitsu",

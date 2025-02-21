@@ -26,7 +26,7 @@ function backup()
         "animeplanet_media_relations",
         "external_dependencies",
     ]
-    save_template = read("$DB_PATH/storage.txt", String)
+    save_template = "> cloudstorage.tmp; PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin rclone --retries=10 copyto cloudstorage.tmp r2:rsys/database/collect/{FILE}; rm cloudstorage.tmp"
     date = Dates.format(Dates.today(), "yyyymmdd")
     with_db(:garbage_collect) do db
         for table in tables
@@ -40,7 +40,7 @@ function backup()
     save = replace(save_template, "{FILE}" => "latest")
     cmd = "echo -n $date $save"
     run(`sh -c $cmd`)
-    cleanup = read("$DB_PATH/cleanup.txt", String)
+    cleanup = raw"rclone lsd r2:rsys/database/collect/ | sort | head -n -30 | awk '{print $NF}' | xargs -I {} rclone purge r2:rsys/database/collect/{}"
     run(`sh -c $cleanup`)
 end
 

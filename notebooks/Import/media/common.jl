@@ -1,7 +1,6 @@
 import CodecZstd
 import Memoize: @memoize
 
-const envdir = "../../../environment"
 const datadir = "../../../data/media"
 
 @memoize function get_valid_ids(source::String, medium::String)

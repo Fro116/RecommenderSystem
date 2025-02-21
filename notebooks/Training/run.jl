@@ -6,7 +6,7 @@ include("../julia_utils/stdout.jl")
 
 function get_gpu_args()
     image = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
-    envvars = readlines("../../environment/gpu/envvars.sh")
+    envvars = readlines("../../secrets/r2.auth.txt")
     script = [
         "wget https://github.com/Fro116/RecommenderSystem/raw/main/notebooks/Training/entrypoint.sh",
         "chmod +x entrypoint.sh",
@@ -25,8 +25,7 @@ function start_runpod(gpuname)
         "--gpuType '$gpuname'",
         "--gpuCount 8",
         "--imageName '$image'",
-        "--volumePath /data",
-        "--volumeSize 128",
+        "--containerDiskSize 128",
         "--secureCloud",
         "--args 'bash -c \"$entrypoint\"'",
     ]
@@ -48,8 +47,8 @@ end
 
 function start_gpu()
     while true
-        #gputypes = ["NVIDIA H100 NVL", "NVIDIA H100 PCIe", "NVIDIA H100 80GB HBM3", "NVIDIA H200"]
-        gputypes = ["NVIDIA H100 80GB HBM3", "NVIDIA H200"]
+        # TODO reevaluate sfcompute
+        gputypes = ["NVIDIA H100 80GB HBM3", "NVIDIA H100 NVL", "NVIDIA H100 PCIe", "NVIDIA H200"]
         for gpuname in gputypes
             success = start_runpod(gpuname)
             if success
@@ -61,71 +60,25 @@ function start_gpu()
     end
 end
 
-start_gpu()
+function pretrain()
+    run(`julia import_data.jl`)
+    run(`julia baseline.jl`)
+    run(`julia -t auto bagofwords.jl --pretrain`)
+    start_gpu()
+    cmd = replace(
+        "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}",
+        "{INPUT}" => "../../data/training/latest",
+        "{OUTPUT}" =>  "latest",
+    )
+    run(`sh -c $cmd`)
+    cleanup = raw"rclone lsd r2:rsys/database/training/ | sort | head -n -2 | awk '{print $NF}' | xargs -I {} rclone purge r2:rsys/database/training/{}"
+    run(`sh -c $cleanup`)
+end
 
-# function start_sfcompute()
-#     image, entrypoint = get_gpu_args()
-#     template = replace(
-#         read("entrypoint.yaml", String),
-#         "{IMAGE}" => image,
-#         "{ENTRYPOINT}" => entrypoint,
-#     )
-#     fn = "../../data/training/entrypoint.yaml"
-#     open(fn, "w") do f
-#         write(f, template)
-#     end
-#     now = Dates.now()
-#     start_hour = Dates.hour(now)
-#     runtime_mins = 150
-#     requested_hours = 1
-#     allocated_mins = 60 - Dates.minute(now)
-#     while allocated_mins < runtime_mins
-#         requested_hours += 1
-#         allocated_mins += 60
-#     end
-#     cmds = [
-#         "sf buy -s $start_hour:00 --duration $(requested_hours)hr -n 8 -p 3 -y",
-#         "clustername=`sf clusters list | grep -w name | awk '{print \$2}'`",
-#         "sf clusters users add --cluster \$clustername --user myuser",
-#         "kubectl apply -f $fn"
-#     ]
-#     cmd = join(cmds, " && ")
-#     print(cmd)
-#     return
-#     try
-#         run(`sh -c $cmd`)
-#         logtag("RUN", "started sfcompute with command $cmd")
-#         return true
-#     catch
-#         return false
-#     end
-# end
+function train()
+    if Dates.dayofmonth(Dates.now()) in [1, 9, 15, 22]
+        pretrain()
+    end
+end
 
-# start_sfcompute()
-
-# function pretrain()
-#     run(`julia import_data.jl`)
-#     run(`julia baseline.jl`)
-#     run(`julia -t auto bagofwords.jl --pretrain`)
-#     start_gpu()
-#     cmd = replace(
-#         read("../../environment/database/storage.txt", String),
-#         "{INPUT}" => "../../data/training/latest",
-#         "{OUTPUT}" =>  "latest",
-#     )
-#     run(`sh -c $cmd`)
-#     cleanup = read("../../environment/database/cleanup.txt", String)
-#     run(`sh -c $cleanup`)
-# end
-
-# function finetune()
-# end
-
-# function train()
-#     if Dates.dayofmonth(Dates.now()) in [1, 15]
-#         pretrain()
-#     end
-#     finetune()
-# end
-
-# @scheduled "TRAIN" "7:00" @handle_errors train()
+@scheduled "TRAIN" "7:00" @handle_errors train()

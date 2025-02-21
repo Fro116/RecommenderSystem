@@ -6,7 +6,7 @@ include("common.jl")
 
 function download_media(source::String)
     mkdir("$datadir/$source")
-    retrieval = read("$envdir/database/retrieval.txt", String)
+    retrieval = "rclone --retries=10 copyto r2:rsys/database/collect"
     cmd = "$retrieval/latest $datadir/$source/latest"
     run(`sh -c $cmd`)
     tag = read("$datadir/$source/latest", String)

@@ -1,7 +1,7 @@
 import LibPQ
 
-function get_db_path()
-    for f in ["../../environment/database", "../../../environment/database"]
+function get_secrets_path()
+    for f in ["../../secrets", "../../../secrets"]
         if ispath(f)
             return f
         end
@@ -9,10 +9,15 @@ function get_db_path()
     @assert false
 end
 
-const DB_PATH = get_db_path()
-
-function get_db_connection(max_retries::Real)
-    conn_str = read("$DB_PATH/primary.txt", String)
+function get_db_connection(conntype::Symbol, max_retries::Real)
+    if conntype in [:update, :prioritize, :garbage_collect, :monitor, :write]
+        dbname = "collect"
+    elseif conntype in [:collect_users, :inference_users]
+        dbname = "inference"
+    else
+        @assert false
+    end
+    conn_str = read("$(get_secrets_path())/db.$dbname.txt", String)
     retries = 0
     while retries <= max_retries
         retries += 1
@@ -44,7 +49,7 @@ const DATABASE_LOCK = ReentrantLock()
 function with_db(f, conntype::Symbol, max_retries::Real=Inf)
     db = lock(DATABASE_LOCK) do
         if conntype ∉ keys(DATABASES)
-            conn = get_db_connection(max_retries)
+            conn = get_db_connection(conntype, max_retries)
             if conn == :connection_failed
                 return conn
             end

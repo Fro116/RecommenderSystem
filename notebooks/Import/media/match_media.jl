@@ -12,7 +12,7 @@ const edgetype = Tuple{itemtype,itemtype}
     outdir = "$datadir/users/$source"
     rm(outdir, recursive = true, force = true)
     mkpath(outdir)
-    retrieval = read("$envdir/database/retrieval.txt", String)
+    retrieval = "rclone --retries=10 copyto r2:rsys/database/collect"
     cmd = "$retrieval/latest $outdir/latest"
     run(`sh -c $cmd`)
     tag = read("$outdir/latest", String)

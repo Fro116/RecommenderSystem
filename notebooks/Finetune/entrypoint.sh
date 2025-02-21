@@ -10,6 +10,7 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
+(sleep 14400 && exit 1) & # max runtime of 4 hours
 python -c 'import torch; torch.rand(1, device="cuda:0")'
 cd /data
 apt update
@@ -25,8 +26,8 @@ access_key_id = $R2_ACCESS_KEY_ID
 secret_access_key = $R2_SECRET_ACCESS_KEY
 endpoint = https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com
 " > ~/.config/rclone/rclone.conf
-rclone --retries=10 -Pv copy r2:rsys/environment/finetune environment
-mv environment RecommenderSystem/
+rclone --retries=10 -Pv copy r2:rsys/secrets secrets
+mv secrets RecommenderSystem/
 mkdir -p RecommenderSystem/data/finetune
 pip install filelock h5py hdf5plugin msgpack pandas scipy tqdm
 cd RecommenderSystem/notebooks/Training/

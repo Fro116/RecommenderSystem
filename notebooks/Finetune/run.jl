@@ -4,9 +4,9 @@ include("../julia_utils/stdout.jl")
 
 function get_gpu_args()
     image = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
-    envvars = readlines("../../environment/gpu/envvars.sh")
+    envvars = readlines("../../secrets/r2.auth.txt")
     script = [
-        "wget https://github.com/Fro116/RecommenderSystem/raw/main/notebooks/Package/entrypoint.sh",
+        "wget https://github.com/Fro116/RecommenderSystem/raw/main/notebooks/Finetune/entrypoint.sh",
         "chmod +x entrypoint.sh",
         "./entrypoint.sh",
     ]
@@ -67,5 +67,4 @@ function train()
     # end
 end
 
-# @scheduled "FINETUNE" "15:00" @handle_errors
-# train()
+@scheduled "FINETUNE" "15:00" @handle_errors train()

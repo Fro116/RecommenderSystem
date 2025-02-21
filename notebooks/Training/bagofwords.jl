@@ -24,7 +24,6 @@ function parse_args()
 end
 
 const finetune, datadir = parse_args()
-const envdir = "../../environment"
 const mediums = [0, 1]
 const metrics = ["rating", "watch", "plantowatch", "drop"]
 const planned_status = 3
@@ -182,7 +181,7 @@ function save_data(datasplit)
 end
 
 function upload()
-    template = read("$envdir/database/upload.txt", String)
+    template = raw"tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
     cmd = replace(
         template,
         "{INPUT}" => "$datadir/bagofwords",

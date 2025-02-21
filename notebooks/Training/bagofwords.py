@@ -7,7 +7,6 @@ import warnings
 
 warnings.filterwarnings("ignore", ".*Sparse CSR tensor support is in beta state.*")
 
-import filelock
 import h5py
 import hdf5plugin
 import msgpack
@@ -294,9 +293,8 @@ def upload(rank, logger):
     if rank != 0:
         return
     logger.info("uploading model")
-    templatefn = f"{datadir}/../../environment/database/upload.txt"
-    with open(templatefn) as f:
-        template = f.read()
+    template = "tag=`rclone lsd r2:rsys/database/{DB}/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/{DB}/$tag/{OUTPUT}"
+    template = template.replace("{DB}", "finetune" if finetune else "training")
     for suffix in ["pt", "csv"]:
         if finetune is not None:
             suffix = f"finetune.{suffix}"
@@ -375,21 +373,17 @@ def train():
 
 
 def download():
-    lock = filelock.FileLock(f"{datadir}/bagofwords.lock")
-    with lock:
-        if os.path.exists(f"{datadir}/bagofwords"):
-            return
-        templatefn = f"{datadir}/../../environment/database/download.txt"
-        with open(templatefn) as f:
-            template = f.read()
-        files = (
-            ["bagofwords"] +
-            [f"{m}.csv" for m in ["manga", "anime"]] +
-            [f"baseline.{m}.msgpack" for m in [0, 1]] +
-            [f"bagofwords.{m}.{metric}.pt" for m in [0, 1] for metric in ["rating", "watch", "plantowatch", "drop"]]
-        )
-        for data in files:
-            os.system(f"{template}/{data} {datadir}/{data}")
+    template = "tag=`rclone lsd r2:rsys/database/{DB}/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto r2:rsys/database/{DB}/$tag"
+    template = template.replace("{DB}", "finetune" if finetune else "training")
+    files = (
+        ["bagofwords"] +
+        [f"{m}.csv" for m in ["manga", "anime"]] +
+        [f"baseline.{m}.msgpack" for m in [0, 1]]
+    )
+    if finetune is not None:
+        files += [f"bagofwords.{m}.{metric}.pt" for m in [0, 1] for metric in ["rating", "watch", "plantowatch", "drop"]]
+    for data in files:
+        os.system(f"{template}/{data} {datadir}/{data}")
 
 
 def get_baselines(rank):
@@ -415,6 +409,7 @@ parser.add_argument("--datadir", type=str)
 parser.add_argument("--medium", type=int)
 parser.add_argument("--metric", type=str)
 parser.add_argument("--finetune", type=str, default=None)
+parser.add_argument('--download', action=argparse.BooleanOptionalAction)
 args = parser.parse_args()
 datadir = args.datadir
 medium = args.medium
@@ -422,5 +417,7 @@ metric = args.metric
 finetune = args.finetune
 
 if __name__ == "__main__":
-    download()
-    train()
+    if args.download:
+        download()
+    else:
+        train()

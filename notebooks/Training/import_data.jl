@@ -11,12 +11,11 @@ include("import_list.jl")
 const MEDIUMS = ["manga", "anime"]
 const SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
 const datadir = "../../data/training"
-const envdir = "../../environment"
 
 function download_data()
     rm(datadir, force = true, recursive = true)
     mkpath(datadir)
-    retrieval = read("$envdir/database/retrieval.txt", String)
+    retrieval = "rclone --retries=10 copyto r2:rsys/database/import"
     files = vcat(
         ["$m.groups.csv" for m in MEDIUMS],
         ["$(s)_$(m).csv" for s in SOURCES for m in MEDIUMS],
@@ -134,7 +133,7 @@ function import_data()
     open("$datadir/latest", "w") do f
         write(f, date)
     end
-    save_template = read("$envdir/database/storage.txt", String)
+    save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}"
     for m in MEDIUMS
         cmd = replace(
             save_template,
