@@ -35,32 +35,9 @@ function download_data()
         `mlr --csv split -n 1000000 --prefix $datadir/fingerprints $datadir/fingerprints.csv`,
     )
     rm("$datadir/fingerprints.csv")
-end
-
-function save_tag()
     date = Dates.format(Dates.today(), "yyyymmdd")
     open("$datadir/latest", "w") do f
         write(f, date)
-    end
-    save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/finetune/{OUTPUT}"
-    cmd = replace(
-        save_template,
-        "{INPUT}" => "$datadir/latest",
-        "{OUTPUT}" => "$date/latest",
-    )
-    run(`sh -c $cmd`)
-    files = vcat(
-        ["$m.csv" for m in ["manga", "anime"]],
-        ["baseline.$m.msgpack" for m in [0, 1]],
-        ["bagofwords.$m.$metric.pt" for m in [0, 1] for metric in METRICS],
-    )
-    for fn in files
-        cmd = replace(
-            save_template,
-            "{INPUT}" => "$datadir/$fn",
-            "{OUTPUT}" => "$date/$fn",
-        )
-        run(`sh -c $cmd`)
     end
 end
 
@@ -112,5 +89,4 @@ function gen_splits()
 end
 
 download_data()
-save_tag()
 gen_splits()

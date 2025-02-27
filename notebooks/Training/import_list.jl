@@ -59,10 +59,14 @@ function read_csv(fn)
     df[:, colnames]
 end
 
-function decompress(x)
+function decompress(x::AbstractString)
     MsgPack.unpack(
         CodecZstd.transcode(CodecZstd.ZstdDecompressor, Vector{UInt8}(hex2bytes(x[3:end]))),
     )
+end
+
+function decompress(x::Vector)
+    MsgPack.unpack(CodecZstd.transcode(CodecZstd.ZstdDecompressor, Vector{UInt8}(x)))
 end
 
 function get_progress(source, medium, itemid, episodes, chapters, volumes)::Float32
@@ -194,6 +198,13 @@ function import_anilist_user(data)
 end
 
 function import_kitsu_user(data)
+    function import_kitsu_time(x)
+        if isnothing(x)
+            return 0
+        end
+        @assert x[end] == 'Z'
+        Dates.datetime2unix(Dates.DateTime(x[1:end-1], "yyyy-mm-ddTHH:MM:SS.sss"))
+    end
     source = "kitsu"
     user = Dict("source" => SOURCE_MAP[source])
     items = []
@@ -210,11 +221,7 @@ function import_kitsu_user(data)
             "medium" => MEDIUM_MAP[x["medium"]],
             "status" => STATUS_MAP[status_map[x["status"]]],
             "rating" => convert(Float32, something(x["ratingtwenty"], 0)) / 2,
-            "updated_at" =>
-                isnothing(x["updatedat"]) ? 0 :
-                Dates.datetime2unix(
-                    Dates.DateTime(x["updatedat"], "yyyy-mm-ddTHH:MM:SS.sssZ"),
-                ),
+            "updated_at" => import_kitsu_time(x["updatedat"]),
             "update_order" => 0,
             "progress" => get_progress(
                 source,

@@ -10,7 +10,6 @@ include("../julia_utils/multithreading.jl")
 
 const PORT = parse(Int, ARGS[1])
 const LAYER_3_URL = ARGS[2] != "nothing" ? ARGS[2] : nothing
-const TEST_CASES = ARGS[3]
 
 Oxygen.@post "/read" function read_user(r::HTTP.Request)::HTTP.Response
     data = decode(r)
@@ -19,7 +18,7 @@ Oxygen.@post "/read" function read_user(r::HTTP.Request)::HTTP.Response
     tasks = []
     for table in ["collect_users", "inference_users"]
         task = Threads.@spawn begin
-            df = with_db(Symbol(table), 3) do db
+            df = with_db(:inference_read, 3) do db
                 query = "SELECT * FROM $table WHERE (source, lower(username)) = (\$1, lower(\$2))"
                 stmt = db_prepare(db, query)
                 DataFrames.DataFrame(LibPQ.execute(stmt, (source, username)))
@@ -57,7 +56,7 @@ Oxygen.@post "/write" function write_user(r::HTTP.Request)::HTTP.Response
         bytes2hex(Vector{UInt8}(data["data"])),
         time()
     )
-    r = with_db(:write, 3) do db
+    r = with_db(:inference_write, 3) do db
         query = "DELETE FROM inference_users WHERE (source, lower(username)) = (\$1, lower(\$2))"
         stmt = db_prepare(db, query)
         LibPQ.execute(stmt, (source, username), binary_format=true)
@@ -128,8 +127,94 @@ Oxygen.@post "/fetch" function fetch_user(r::HTTP.Request)::HTTP.Response
     HTTP.Response(200, r.headers, r.body)
 end
 
+Oxygen.@post "/refresh" function refresh_user(r::HTTP.Request)::HTTP.Response
+    if isnothing(LAYER_3_URL)
+        return HTTP.Response(403, [])
+    end
+    data = decode(r)
+    source = data["source"]
+    username = data["username"]
+    force = get(data, "force", false)
+    r_read = HTTP.post(
+        "http://localhost:$PORT/read",
+        encode(Dict("source" => source, "username" => username), :msgpack)...,
+        status_exception = false,
+    )
+    if !HTTP.iserror(r_read)
+        d_read = decode(r_read)
+        r_fingerprint = HTTP.post(
+            "http://localhost:$PORT/fingerprint",
+            encode(
+                Dict(
+                    "source" => source,
+                    "username" => username,
+                    "userid" => d_read["userid"],
+                ),
+                :msgpack,
+            )...,
+            status_exception = false,
+        )
+        if HTTP.iserror(r_fingerprint)
+            return HTTP.Response(r_fingerprint.status, [])
+        end
+        d_fingerprint = decode(r_fingerprint)
+        if d_read["fingerprint"] == d_fingerprint["fingerprint"] && !force
+            return HTTP.Response(200, encode(Dict("refresh" => false), :msgpack)...)
+        end
+    else
+        r_fingerprint = nothing
+    end
+    r_fetch = HTTP.post(
+        "http://localhost:$PORT/fetch",
+        encode(Dict("source" => source, "username" => username), :msgpack)...,
+        status_exception = false,
+    )
+    if HTTP.iserror(r_fetch)
+        return HTTP.Response(r_fetch.status, [])
+    end
+    d_fetch = decode(r_fetch)
+    if isnothing(r_fingerprint)
+        r_fingerprint = HTTP.post(
+            "http://localhost:$PORT/fingerprint",
+            encode(
+                Dict(
+                    "source" => source,
+                    "username" => username,
+                    "userid" => d_fetch["usermap"]["userid"],
+                ),
+                :msgpack,
+            )...,
+            status_exception = false,
+        )
+        if HTTP.iserror(r_fingerprint)
+            return HTTP.Response(r_fingerprint.status, [])
+        end
+        d_fingerprint = decode(r_fingerprint)
+    end
+    data = merge(
+        d_fetch["usermap"],
+        d_fingerprint,
+        Dict(
+            "source" => source,
+            "data" => CodecZstd.transcode(
+                CodecZstd.ZstdCompressor,
+                Vector{UInt8}(MsgPack.pack(d_fetch)),
+            ),
+        ),
+    )
+    r_write = HTTP.post(
+        "http://localhost:$PORT/write",
+        encode(data, :msgpack)...,
+        status_exception = false,
+    )
+    if HTTP.iserror(r_fetch)
+        return HTTP.Response(r_write.status, [])
+    end
+    HTTP.Response(200, encode(Dict("refresh" => true), :msgpack)...)
+end
+
 function compile(port::Integer)
-    profiles = CSV.read(TEST_CASES, DataFrames.DataFrame, stringtype = String)
+    profiles = CSV.read("../../secrets/test.users.csv", DataFrames.DataFrame, stringtype = String)
     @sync for (source, username, userid) in zip(profiles.source, profiles.username, profiles.userid)
         Threads.@spawn begin
             logtag("STARTUP", "/read")
@@ -138,35 +223,12 @@ function compile(port::Integer)
                 encode(Dict("source" => source, "username" => username), :msgpack)...,
                 status_exception = false,
             )
-            logtag("STARTUP", "/fingerprint")
-            r_fingerprint = HTTP.post(
-                "http://localhost:$PORT/fingerprint",
-                encode(Dict("source" => source, "username" => username, "userid" => userid), :msgpack)...,
+            logtag("STARTUP", "/refresh")
+            r_refresh = HTTP.post(
+                "http://localhost:$PORT/refresh",
+                encode(Dict("source" => source, "username" => username, "force" => true), :msgpack)...,
                 status_exception = false,
             )
-            logtag("STARTUP", "/fetch")
-            r_fetch = HTTP.post(
-                "http://localhost:$PORT/fetch",
-                encode(Dict("source" => source, "username" => username), :msgpack)...,
-                status_exception = false,
-            )
-            if !HTTP.iserror(r_fetch) && !HTTP.iserror(r_fingerprint)
-                list = decode(r_fetch)
-                fingerprint = decode(r_fingerprint)
-                data = merge(
-                    list["usermap"],
-                    fingerprint,
-                    Dict(
-                        "source" => source,
-                        "data" => CodecZstd.transcode(
-                            CodecZstd.ZstdCompressor,
-                            Vector{UInt8}(MsgPack.pack(list)),
-                        ),
-                    ),
-                )
-                logtag("STARTUP", "/write")
-                HTTP.post("http://localhost:$PORT/write", encode(data, :msgpack)..., status_exception = false)
-            end
         end
     end
 end

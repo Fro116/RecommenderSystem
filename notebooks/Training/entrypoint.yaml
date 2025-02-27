@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pretrain
+spec:
+  completions: 1
+  parallelism: 1
+  completionMode: Indexed
+  template:
+    metadata:
+      labels:
+        job-name: pretrain
+    spec:
+      containers:
+      - name: trainer
+        image: {IMAGE}
+        command: 
+        - /bin/sh
+        - -c
+        - |
+          {ENTRYPOINT}
+        ports:
+        - containerPort: 29500
+        resources:
+          requests:
+            nvidia.com/gpu: 8
+            nvidia.com/hostdev: 8
+            memory: "512Gi"
+            cpu: "32"
+          limits:
+            nvidia.com/gpu: 8
+            nvidia.com/hostdev: 8
+            memory: "512Gi"
+            cpu: "32"
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: data-volume
+        emptyDir: {}
+      - name: dshm
+        emptyDir:
+          medium: Memory
+      restartPolicy: Never

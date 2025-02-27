@@ -5,42 +5,49 @@ function copy(file::String, dst::String)
     cp(file, joinpath(dst, file))
 end
 
-function layer1(basedir::String)
-    app = "$basedir/layer1"
-    if ispath(app)
-        rm(app; recursive = true)
-    end
-    copy("notebooks/Collect/layer1.py", app)
-    copy("secrets", app)
-end
-
-function layer2(basedir::String)
-    app = "$basedir/layer2"
-    if ispath(app)
-        rm(app; recursive = true)
-    end
-    copy("notebooks/Collect/layer2.jl", app)
-    copy("notebooks/Collect/entities.json", app)
-    copy("notebooks/julia_utils", app)
-    copy("secrets", app)
-end
-
-function layer3(basedir::String)
-    app = "$basedir/layer3"
-    if ispath(app)
-        rm(app; recursive = true)
-    end
-    copy("notebooks/Collect/layer3.jl", app)
-    copy("notebooks/julia_utils", app)
-    copy("secrets", app)
-end
-
 function layer4(basedir::String)
     app = "$basedir/layer4"
     if ispath(app)
         rm(app; recursive = true)
     end
     copy("notebooks/Collect/layer4.jl", app)
+    copy("notebooks/julia_utils", app)
+    copy("secrets", app)
+end
+
+function embed_py(basedir::String)
+    app = "$basedir/embed_py"
+    if ispath(app)
+        rm(app; recursive = true)
+    end
+    copy("notebooks/Training/bagofwords.model.py", app)
+    copy("notebooks/Finetune/embed.py", app)
+    mediums = [0, 1]
+    metrics = ["rating", "watch", "plantowatch", "drop"]
+    files = vcat(
+        ["manga.csv", "anime.csv"],
+        ["latest", "training_tag"],
+        ["bagofwords.$m.$metric.finetune.pt" for m in mediums for metric in metrics],
+        ["baseline.$m.msgpack" for m in mediums],
+    )
+    for f in files
+        copy("data/finetune/$f", app)
+    end
+    copy("secrets", app)
+end
+
+function embed_jl(basedir::String)
+    app = "$basedir/embed_jl"
+    if ispath(app)
+        rm(app; recursive = true)
+    end
+    copy("notebooks/Finetune/embed.jl", app)
+    copy("notebooks/Training/import_list.jl", app)
+    mediums = [0, 1]
+    files = ["manga.csv", "anime.csv"]
+    for f in files
+        copy("data/finetune/$f", app)
+    end    
     copy("notebooks/julia_utils", app)
     copy("secrets", app)
 end
@@ -67,15 +74,14 @@ function build(basedir::String, name::String, tag::String, args::String)
 end
 
 cd("../../..")
-basedir = "data/package/fetch"
+basedir = "data/package/embed"
 if ispath(basedir)
     rm(basedir; recursive = true)
 end
 mkpath(basedir)
-cp("notebooks/Package/Fetch/app", basedir, force = true)
-layer1(basedir)
-layer2(basedir)
-layer3(basedir)
+cp("notebooks/Package/Embed/app", basedir, force = true)
 layer4(basedir)
+embed_py(basedir)
+embed_jl(basedir)
 tag = Dates.format(Dates.today(), "yyyymmdd")
-build(basedir, "fetch", tag, "--max-instances=1")
+build(basedir, "embed", tag, "--cpu=8 --memory=16Gi")

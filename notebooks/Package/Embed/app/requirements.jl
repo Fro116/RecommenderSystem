@@ -7,6 +7,7 @@ dependencies = [
     ("HTTP", "1.10.14"),
     ("JSON3", "1.14.1"),
     ("LibPQ", "1.18.0"),
+    ("Memoize", "0.4.4"),
     ("MsgPack", "1.2.1"),
     ("Oxygen", "1.5.15"),
     ("PackageCompiler", "2.2.0"),

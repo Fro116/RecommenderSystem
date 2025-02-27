@@ -290,14 +290,12 @@ def checkpoint_model(rank, model, save, loss, epoch):
 
 
 def upload(rank, logger):
-    if rank != 0:
+    if rank != 0 or finetune is not None:
         return
     logger.info("uploading model")
     template = "tag=`rclone lsd r2:rsys/database/{DB}/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/{DB}/$tag/{OUTPUT}"
     template = template.replace("{DB}", "finetune" if finetune else "training")
     for suffix in ["pt", "csv"]:
-        if finetune is not None:
-            suffix = f"finetune.{suffix}"
         cmd = template.replace(
             "{INPUT}", f"{datadir}/bagofwords.{medium}.{metric}.{suffix}"
         ).replace(

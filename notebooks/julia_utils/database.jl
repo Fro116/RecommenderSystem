@@ -12,25 +12,28 @@ end
 function get_db_connection(conntype::Symbol, max_retries::Real)
     if conntype in [:update, :prioritize, :garbage_collect, :monitor, :write]
         dbname = "collect"
-    elseif conntype in [:collect_users, :inference_users]
+    elseif conntype in [:inference_read, :inference_write]
         dbname = "inference"
     else
         @assert false
     end
-    conn_str = read("$(get_secrets_path())/db.$dbname.txt", String)
+    conn_strs = readlines("$(get_secrets_path())/db.$dbname.txt")
     retries = 0
     while retries <= max_retries
         retries += 1
-        try
-            x = LibPQ.Connection(conn_str)
-            @assert LibPQ.status(x) == LibPQ.libpq_c.CONNECTION_OK
-            return x
-        catch
-            if retries <= max_retries
-                timeout = 1
-                logerror("connection failed, retrying in $timeout seconds")
-                sleep(timeout)
+        for conn_str in conn_strs
+            try
+                x = LibPQ.Connection(conn_str)
+                @assert LibPQ.status(x) == LibPQ.libpq_c.CONNECTION_OK
+                return x
+            catch
+                nothing
             end
+        end
+        if retries <= max_retries
+            timeout = 1
+            logerror("connection failed, retrying in $timeout seconds")
+            sleep(timeout)
         end
     end
     logerror("connection failed")

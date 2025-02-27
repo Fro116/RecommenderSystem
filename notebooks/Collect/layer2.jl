@@ -986,7 +986,7 @@ function anilist_get_fingerprint(resource::Resource, userid::Integer, medium::St
                     "version" => API_VERSION,
                     "medium" => medium,
                     "itemid" => entry["mediaId"],
-                    "updatedAt" => entry["updatedAt"],
+                    "updated_at" => entry["updatedAt"],
                 )
             end
         end
@@ -1619,7 +1619,7 @@ function kitsu_get_fingerprint(
     for x in json["data"]
         d = Dict(
             "version" => API_VERSION,
-            "updatedAt" => optget(x["attributes"], "updatedAt"),
+            "updated_at" => optget(x["attributes"], "updatedAt"),
         )
         push!(entries, d)
     end

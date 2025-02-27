@@ -3,7 +3,6 @@ include("../julia_utils/multithreading.jl")
 include("../julia_utils/scheduling.jl")
 include("../julia_utils/stdout.jl")
 
-
 function get_gpu_args()
     image = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
     envvars = readlines("../../secrets/r2.auth.txt")
@@ -14,6 +13,32 @@ function get_gpu_args()
     ]
     entrypoint = join(vcat(envvars, script), " && ")
     image, entrypoint
+end
+
+function start_sfcompute()
+    image, entrypoint = get_gpu_args()
+    yaml = read("entrypoint.yaml", String)
+    yaml = replace(yaml, "{IMAGE}" => image, "{ENTRYPOINT}" => entrypoint)
+    fn = "../../data/training/prod.yaml"
+    open(fn, "w") do f
+        write(f, yaml)
+    end
+    h = 0
+    runtime_mins = 150
+    runtime_mins -= 60 - Dates.minute(Dates.now())
+    while runtime_mins > 0
+        runtime_mins -= 60
+        h += 1
+    end
+    @assert h <= 5
+    # TODO get cluster programatically
+    cmds = [
+        "sf buy -d $(h)hr -n 8 -p 2.50",
+        "sf clusters users add --cluster alamo --user myuser",
+        "kubectl apply -f prod.yaml"
+    ]
+    cmd = join(cmds, " && ")
+    run("sh -c $cmd")
 end
 
 function start_runpod(gpuname)
@@ -79,6 +104,8 @@ function train()
     if Dates.dayofmonth(Dates.now()) in [1, 9, 15, 22]
         pretrain()
     end
+    cmd = "cd ../Finetune && julia run.jl"
+    run(`sh -c $cmd`)
 end
 
 @scheduled "TRAIN" "7:00" @handle_errors train()

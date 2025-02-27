@@ -15,8 +15,6 @@ class BagOfWordsModel(nn.Module):
         )
         self.classifier = nn.Linear(256, num_items[medium])
         self.logsoftmax = nn.LogSoftmax(dim=-1)
-        self.softmax = nn.Softmax(dim=-1)
-        self.sigmoid = nn.Sigmoid()
         lossfn_map = {
             "rating": self.mse,
             "watch": self.crossentropy,
