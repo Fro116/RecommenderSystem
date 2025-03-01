@@ -1,3 +1,4 @@
+import JLD2
 import Glob
 import NNlib: logsoftmax, sigmoid, softmax
 import Optim
@@ -151,9 +152,8 @@ function save_weights()
             ret["$medium.$metric"] = regress(users, medium, metric)
         end
     end
-    open("../../data/finetune/model.weights.msgpack", "w") do g
-        write(g, MsgPack.pack(ret))
-    end
+    ret = merge(ret, registry)
+    JLD2.save("../../data/finetune/model.registry.jld2", ret)
 end
 
 const users = get_users()

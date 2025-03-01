@@ -64,6 +64,16 @@ function start_runpod(gpuname)
     try
         run(`sh -c $cmd`)
         logtag("RUN", "started runpod with command $cmd")
+        cmd = "runpodctl get pod | grep -w $podname | grep -w RUNNING"
+        while true
+            try
+                run(`sh -c $cmd`)
+                logtag("RUN", "waiting for runpod to finish")
+                sleep(3600)
+            catch
+                break
+            end
+        end
         return true
     catch
         return false

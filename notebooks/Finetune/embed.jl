@@ -1,6 +1,8 @@
 module embed
 
 import Oxygen
+import JLD2
+import NNlib: logsoftmax, sigmoid
 include("../Training/import_list.jl")
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
@@ -10,8 +12,15 @@ const PORT = parse(Int, ARGS[1])
 const FETCH_URL = ARGS[2]
 const MODEL_URL = ARGS[3]
 const datadir = "../../data/finetune"
+const registry = JLD2.load("../../data/finetune/model.registry.jld2")
 
 standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
+
+@memoize function num_items(medium::Integer)
+    datadir = "../../data/finetune"
+    m = Dict(0 => "manga", 1 => "anime")[medium]
+    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
+end
 
 Oxygen.@post "/embed_user" function embed_user(r::HTTP.Request)::HTTP.Response
     d = decode(r)
@@ -35,8 +44,71 @@ Oxygen.@post "/embed_user" function embed_user(r::HTTP.Request)::HTTP.Response
     )
     if HTTP.iserror(r_embed)
         return HTTP.Response(r_embed.status, [])
-    end    
-    HTTP.Response(200, encode(decode(r_embed), :msgpack)...)
+    end
+    d_embed = decode(r_embed)
+    d_embed["source"] = d["source"]
+    d_embed["weights"] = Dict()
+    for m in [0, 1]
+        d_embed["$(m)_idx"] = []
+        d_embed["$(m)_status"] = []
+    end
+    for x in u["items"]
+        m = x["medium"]
+        push!(d_embed["$(m)_idx"], x["matchedid"])
+        push!(d_embed["$(m)_status"], x["status"])
+    end
+    HTTP.Response(200, encode(d_embed, :msgpack)...)
+end
+
+function compute(state)
+    medium = state["medium"]
+    project(user, name) = sum(
+        (registry[k]["weight"] * convert.(Float32, user[k]) .+ registry[k]["bias"]) *
+        registry[name][k] for (k, w) in registry[name]
+    )
+    log10(x) = log(x) / log(10)
+    x = zeros(Float32, num_items(medium))
+    for user in state["users"]
+        weight = user["weights"]
+        x .+=
+            project(user, "$medium.rating") *
+            get(weight, "rating", 1) *
+            get(weight, "total", 1)
+        x .+= logsoftmax(project(user, "$medium.watch")) * (1 / log(10))
+        get(weight, "watch", 1) * get(weight, "total", 1)
+        x .+= logsoftmax(project(user, "$medium.plantowatch")) * (0.1 / log(10))
+        get(weight, "plantowatch", 1) * get(weight, "total", 1)
+        x .+= sigmoid.(project(user, "$medium.drop")) * (-10)
+        get(weight, "drop", 1) * get(weight, "total", 1)
+    end
+    x
+end
+
+Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
+    d = decode(r)
+    state = d["state"]
+    action = d["action"]
+    if action["type"] == "add_user"
+        username = action["username"]
+        source = action["source"]
+        r_embed = HTTP.post(
+            "http://localhost:$PORT/embed_user",
+            encode(Dict("source" => source, "username" => username), :msgpack)...,
+            status_exception = false,
+        )
+        if HTTP.iserror(r_embed)
+            return HTTP.Response(r.status)
+        end
+        d_embed = decode(r_embed)
+        if "users" ∉ keys(state)
+            state["users"] = []
+        end
+        push!(state["users"], d_embed)
+    else
+        @assert false
+    end
+    ret = Dict("state" => state, "view" => compute(state))
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function compile(port::Integer)
@@ -50,11 +122,20 @@ function compile(port::Integer)
             sleep(1)
         end
     end
-    @sync for (source, username) in zip(profiles.source, profiles.username)
-        Threads.@spawn HTTP.post(
-            "http://localhost:$PORT/embed_user",
-            encode(Dict("source" => source, "username" => username), :msgpack)...,
+    state = Dict("medium" => 0)
+    for (source, username) in zip(profiles.source, profiles.username)
+        action = Dict("type" => "add_user", "source" => source, "username" => username)
+        r = HTTP.post(
+            "http://localhost:$PORT/update",
+            encode(Dict("state" => state, "action" => action), :msgpack)...,
+            status_exception = false,
         )
+        if HTTP.iserror(r)
+            logerror("error $(r.status)")
+            continue
+        end
+        d = decode(r)
+        state = d["state"]
     end
 end
 

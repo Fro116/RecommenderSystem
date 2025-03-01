@@ -6,13 +6,13 @@ handle_error() {
 trap handle_error ERR
 cleanup() {
     if [ -n "${RUNPOD_POD_ID+x}" ]; then
-	runpodctl remove pod $RUNPOD_POD_ID
+	    runpodctl remove pod $RUNPOD_POD_ID
     fi
 }
 trap cleanup EXIT
-(sleep 14400 && exit 1) & # max runtime of 4 hours
-python -c 'import torch; torch.rand(1, device="cuda:0")'
 if [ -n "${RUNPOD_POD_ID+x}" ]; then
+    (sleep 14400 && cleanup) & # max runtime of 4 hours
+    python -c 'import torch; torch.rand(1, device="cuda:0")'
 	cd ~
 else
     cd /data

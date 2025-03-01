@@ -34,7 +34,6 @@ end
 @memoize function get_media_length(source, medium)
     fn = "$datadir/$(source)_$(medium).csv"
     df = CSV.read(fn, DataFrames.DataFrame)
-    rm(fn)
     parseint(x::Missing) = nothing
     parseint(x::Real) = x
     parseint(x::AbstractString) = parse(Int, replace(x, "+" => ""))
@@ -64,7 +63,6 @@ end
         DataFrames.DataFrame,
         types = Dict("itemid" => String),
     )
-    rm(fn)
     cols = [:episodes, :chapters, :volumes]
     for c in cols
         df[!, c] .= 0
@@ -103,7 +101,6 @@ end
 function gen_splits()
     min_items = 5
     test_perc = 0.01
-    rm("$datadir/users", recursive = true, force = true)
     @showprogress for (idx, f) in
                       Iterators.enumerate(Glob.glob("$datadir/fingerprints_*.csv"))
         train_dir = "$datadir/users/training/$idx"
@@ -134,11 +131,15 @@ function import_data()
         write(f, date)
     end
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}"
-    for m in MEDIUMS
+    files = vcat(
+        ["$m.csv" for m in MEDIUMS],
+        ["$(s)_$(m).csv" for s in SOURCES for m in MEDIUMS],
+    )
+    for f in files
         cmd = replace(
             save_template,
-            "{INPUT}" => "$datadir/$m.csv",
-            "{OUTPUT}" => "$date/$m.csv",
+            "{INPUT}" => "$datadir/$f",
+            "{OUTPUT}" => "$date/$f",
         )
         run(`sh -c $cmd`)
     end
