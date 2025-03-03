@@ -11,7 +11,7 @@ cleanup() {
 }
 trap cleanup EXIT
 if [ -n "${RUNPOD_POD_ID+x}" ]; then
-    (sleep 14400 && cleanup) & # max runtime of 4 hours
+    (sleep 86400 && cleanup) & # max runtime of 24 hours
     python -c 'import torch; torch.rand(1, device="cuda:0")'
 	cd ~
 else
@@ -35,6 +35,9 @@ mv secrets RecommenderSystem/
 mkdir -p RecommenderSystem/data/training
 pip install h5py hdf5plugin msgpack pandas scipy tqdm
 cd RecommenderSystem/notebooks/Training/
+python transformer.py --download
+cmd="torchrun --standalone --nproc_per_node=8 transformer.py"
+$cmd || (sleep 10 && $cmd) || (sleep 60 && $cmd)
 python bagofwords.py --datadir ../../data/training --download
 for m in 0 1; do
 for metric in rating watch plantowatch drop; do

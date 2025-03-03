@@ -1,4 +1,5 @@
 import Dates
+import JSON3
 include("../julia_utils/multithreading.jl")
 include("../julia_utils/scheduling.jl")
 include("../julia_utils/stdout.jl")
@@ -15,6 +16,25 @@ function get_gpu_args()
     image, entrypoint
 end
 
+function get_active_sf_cluster()
+    read_json(cmd) = JSON3.read(replace(read(cmd, String), r"(\w+): " => s"\"\1\": "))
+    for _ in 1:3
+        try
+            contracts = read_json(`sf contracts list --json`)
+            cluster_id = first(contracts)["cluster_id"]
+            clusters = read_json(`sf clusters list --json`)
+            for x in clusters
+                if x["contract"]["cluster_id"] == cluster_id
+                    return x["name"]
+                end
+            end
+        catch e
+            logerror("get_active_sf_cluster $e")
+        end
+        sleep(60)
+    end
+end
+
 function start_sfcompute()
     image, entrypoint = get_gpu_args()
     yaml = read("entrypoint.yaml", String)
@@ -24,21 +44,26 @@ function start_sfcompute()
         write(f, yaml)
     end
     h = 0
-    runtime_mins = 150
+    runtime_mins = 240
     runtime_mins -= 60 - Dates.minute(Dates.now())
     while runtime_mins > 0
         runtime_mins -= 60
         h += 1
     end
     @assert h <= 5
-    # TODO get cluster programatically
-    cmds = [
-        "sf buy -d $(h)hr -n 8 -p 2.50",
-        "sf clusters users add --cluster alamo --user myuser",
-        "kubectl apply -f prod.yaml"
-    ]
-    cmd = join(cmds, " && ")
-    run("sh -c $cmd")
+    try
+        run(`sf buy -d $(h)hr -n 8 -p 3 -y`)
+        logtag("RUN", "started sfcompute")
+        cluster = get_active_sf_cluster()
+        @assert !isnothing(cluster)
+        run(`sf clusters users add --cluster $cluster --user myuser`)
+        run(`kubectl apply -f $fn`)
+        sleep(h * 3600)
+        return true
+    catch e
+        logerror("sfcompute error $e")
+        return false
+    end
 end
 
 function start_runpod(gpuname)
@@ -64,16 +89,8 @@ function start_runpod(gpuname)
     try
         run(`sh -c $cmd`)
         logtag("RUN", "started runpod with command $cmd")
-        cmd = "runpodctl get pod | grep -w $podname | grep -w RUNNING"
-        while true
-            try
-                run(`sh -c $cmd`)
-                logtag("RUN", "waiting for runpod to finish")
-                sleep(3600)
-            catch
-                break
-            end
-        end
+        runtime_mins = 240
+        sleep(runtime_mins * 60)
         return true
     catch
         return false
@@ -82,7 +99,10 @@ end
 
 function start_gpu()
     while true
-        # TODO reevaluate sfcompute
+        success = start_sfcompute()
+        if success
+            return
+        end
         gputypes = ["NVIDIA H100 80GB HBM3", "NVIDIA H100 NVL", "NVIDIA H100 PCIe", "NVIDIA H200"]
         for gpuname in gputypes
             success = start_runpod(gpuname)
@@ -100,11 +120,16 @@ function pretrain()
     run(`julia baseline.jl`)
     run(`julia -t auto bagofwords.jl --pretrain`)
     start_gpu()
-    cmd = replace(
-        "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}",
-        "{INPUT}" => "../../data/training/latest",
-        "{OUTPUT}" =>  "latest",
+    latest = read("../../data/training/latest", String)
+    success = read(
+        `rclone --retries=10 ls r2:rsys/database/training/$latest/bagofwords.1.drop.pt`,
+        String
     )
+    if isempty(success)
+        logerror("gpu training failed")
+        return
+    end
+    cmd = "rclone --retries=10 copyto ../../data/training/latest r2:rsys/database/training/latest"
     run(`sh -c $cmd`)
     cleanup = raw"rclone lsd r2:rsys/database/training/ | sort | head -n -2 | awk '{print $NF}' | xargs -I {} rclone purge r2:rsys/database/training/{}"
     run(`sh -c $cleanup`)

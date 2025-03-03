@@ -43,8 +43,13 @@ function embed_jl(basedir::String)
     end
     copy("notebooks/Finetune/embed.jl", app)
     copy("notebooks/Training/import_list.jl", app)
-    mediums = [0, 1]
-    files = ["manga.csv", "anime.csv"]
+    mediums = ["manga", "anime"]
+    sources = ["mal", "anilist", "kitsu", "animeplanet"]
+    files = vcat(
+        ["$m.csv" for m in mediums],
+        ["$(s)_$(m).csv" for s in sources for m in mediums],
+        ["model.registry.jld2"],
+    )
     for f in files
         copy("data/finetune/$f", app)
     end    

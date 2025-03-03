@@ -13,6 +13,7 @@ const FETCH_URL = ARGS[2]
 const MODEL_URL = ARGS[3]
 const datadir = "../../data/finetune"
 const registry = JLD2.load("../../data/finetune/model.registry.jld2")
+const planned_status = 3
 
 standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
 
@@ -20,6 +21,33 @@ standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
     datadir = "../../data/finetune"
     m = Dict(0 => "manga", 1 => "anime")[medium]
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
+end
+
+@memoize function get_media_info(source, medium)
+    df = CSV.read("$datadir/$(source)_$(medium).csv", DataFrames.DataFrame)
+    info = Dict()
+    for i = 1:DataFrames.nrow(df)
+        item = Dict{String, String}("title" => df.title[i], "source" => source)
+        info[string(df.itemid[i])] = item
+    end
+    info
+end
+
+@memoize function get_media_info(medium)
+    info = Dict()
+    m = Dict(0 => "manga", 1 => "anime")[medium]
+    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame)
+    for i = 1:DataFrames.nrow(df)
+        if df.matchedid[i] == 0 || df.matchedid[i] in keys(info)
+            continue
+        end
+        try
+            info[df.matchedid[i]] = get_media_info(df.source[i], m)[string(df.itemid[i])]
+        catch
+            logerror("get_media_info: invalid $((df.source[i], m, df.itemid[i]))")
+        end
+    end
+    info
 end
 
 Oxygen.@post "/embed_user" function embed_user(r::HTTP.Request)::HTTP.Response
@@ -81,7 +109,32 @@ function compute(state)
         x .+= sigmoid.(project(user, "$medium.drop")) * (-10)
         get(weight, "drop", 1) * get(weight, "total", 1)
     end
-    x
+    # constraints
+    for user in state["users"]
+        for (idx, status) in zip(user["$(medium)_idx"], user["$(medium)_status"])
+            if status != planned_status
+                x[idx+1] = -Inf
+            end
+        end
+        # TODO constrain cross-related series
+        # TODO constrain recaps
+        # TODO constrain sequels of unwatched series
+        # TODO constrain by source
+    end
+    info = get_media_info(medium)
+    ret = []
+    N = 1000
+    ids = sortperm(x, rev = true) .- 1
+    for i in ids
+        if length(ret) == N
+            break
+        end
+        if i ∉ keys(info)
+            continue
+        end
+        push!(ret, info[i])
+    end
+    ret
 end
 
 Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
@@ -136,6 +189,7 @@ function compile(port::Integer)
         end
         d = decode(r)
         state = d["state"]
+        state["medium"] = 1 - state["medium"] # TODO change state
     end
 end
 

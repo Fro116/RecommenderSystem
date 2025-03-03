@@ -66,8 +66,10 @@ class BagOfWordsDataset(IterableDataset):
             worker_id = worker_info.id
             num_workers = worker_info.num_workers
         fns = [x for i, x in enumerate(self.fns) if i % num_workers == worker_id]
+        if self.shuffle:
+            np.random.shuffle(fns)
         for fn in fns:
-            with h5py.File(fn, "r") as f:
+            with h5py.File(fn) as f:
                 d = {}
                 for m in [0, 1]:
                     for t in ["rating", "watch"]:
@@ -293,8 +295,7 @@ def upload(rank, logger):
     if rank != 0 or finetune is not None:
         return
     logger.info("uploading model")
-    template = "tag=`rclone lsd r2:rsys/database/{DB}/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/{DB}/$tag/{OUTPUT}"
-    template = template.replace("{DB}", "finetune" if finetune else "training")
+    template = "tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
     for suffix in ["pt", "csv"]:
         cmd = template.replace(
             "{INPUT}", f"{datadir}/bagofwords.{medium}.{metric}.{suffix}"
@@ -371,15 +372,13 @@ def train():
 
 
 def download():
-    template = "tag=`rclone lsd r2:rsys/database/{DB}/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto r2:rsys/database/{DB}/$tag"
-    template = template.replace("{DB}", "finetune" if finetune else "training")
+    assert finetune is None
+    template = "tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto r2:rsys/database/training/$tag"
     files = (
         ["bagofwords"] +
         [f"{m}.csv" for m in ["manga", "anime"]] +
         [f"baseline.{m}.msgpack" for m in [0, 1]]
     )
-    if finetune is not None:
-        files += [f"bagofwords.{m}.{metric}.pt" for m in [0, 1] for metric in ["rating", "watch", "plantowatch", "drop"]]
     for data in files:
         os.system(f"{template}/{data} {datadir}/{data}")
 
