@@ -23,231 +23,18 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
 
-cls_val = -1
-mask_val = -2
-reserved_vals = 2
-max_seq_len = 1024
-datadir = "../../data/training"
-ALL_MEDIUMS = [0, 1]
-ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
+with open("transformer.model.py") as f:
+    exec(f.read())
 
 
-class DiscreteEmbed(nn.Module):
-    def __init__(self, vocab_size, embed_size):
-        super(DiscreteEmbed, self).__init__()
-        self.reserved_vals = 2
-        self.embedding = nn.Sequential(
-            nn.Embedding(vocab_size + self.reserved_vals, embed_size),
-            nn.LayerNorm(embed_size),
-        )
-
-    def forward(self, x):
-        return self.embedding(x + self.reserved_vals)
-
-
-class ContinuousEmbed(nn.Module):
-    def __init__(self, embed_size, dropout):
-        super(ContinuousEmbed, self).__init__()
-        hidden_size = int(embed_size / 4)
-        self.embedding_with_weightdecay = nn.Sequential(
-            nn.Linear(1, hidden_size),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, embed_size),
-            nn.LayerNorm(embed_size),
-        )
-
-    def forward(self, x):
-        return self.embedding_with_weightdecay(x.reshape(*x.shape, 1))
-
-
-class CompositeEmbedding(nn.Module):
-    def __init__(self, embeddings, postprocessor):
-        super(CompositeEmbedding, self).__init__()
-        self.embeddings = nn.ModuleList(embeddings)
-        self.postprocessor = postprocessor
-
-    def forward(self, inputs):
-        embedding = sum(embed(x) for (embed, x) in zip(self.embeddings, inputs))
-        return self.postprocessor(embedding)
-
-
-class Bert(nn.Module):
-    def __init__(
-        self,
-        num_layers,
-        embed_size,
-        num_attention_heads,
-        intermediate_size,
-        activation,
-        dropout,
-    ):
-        super(Bert, self).__init__()
-        self.num_heads = num_attention_heads
-        self.encoder = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=embed_size,
-                nhead=num_attention_heads,
-                dim_feedforward=intermediate_size,
-                dropout=dropout,
-                activation=activation,
-                norm_first=True,
-                batch_first=True,
-            ),
-            num_layers=num_layers,
-        )
-
-    def forward(self, x, mask):
-        mask = torch.repeat_interleave(mask, self.num_heads, dim=0)
-        return self.encoder(x, mask=mask)
-
-
-class TransformerModel(nn.Module):
-    def __init__(self, config):
-        super(TransformerModel, self).__init__()
-        self.config = config
-
-        # create embeddings
-        embeddings = []
-        for size in config["vocab_sizes"]:
-            if size is not None:
-                embeddings.append(DiscreteEmbed(size, config["embed_size"]))
-            else:
-                embeddings.append(
-                    ContinuousEmbed(config["embed_size"], config["dropout"])
-                )
-        postprocessor = nn.Sequential(
-            nn.LayerNorm(config["embed_size"]), nn.Dropout(config["dropout"])
-        )
-        self.embed = CompositeEmbedding(embeddings, postprocessor)
-
-        # create transformers
-        self.transformers = Bert(
-            num_layers=config["num_layers"],
-            embed_size=config["embed_size"],
-            num_attention_heads=config["num_attention_heads"],
-            intermediate_size=config["intermediate_size"],
-            activation=config["activation"],
-            dropout=config["dropout"],
-        )
-
-        # create classifiers
-        metric_models = {
-            m: nn.Linear(
-                config["embed_size"],
-                config["embed_size"],
-            )
-            for m in ALL_METRICS
-        }
-        medium_models = {}
-        for i, m in enumerate(ALL_MEDIUMS):
-            linear = nn.Linear(
-                *reversed(self.embed.embeddings[i].embedding[0].weight.shape)
-            )
-            self.embed.embeddings[i].embedding[0].weight = linear.weight  # weight tying
-            medium_models[m] = linear
-
-        def create_head(medium, metric):
-            base = [
-                metric_models[metric],
-                medium_models[medium],
-            ]
-            if metric in ["watch", "plantowatch"]:
-                base.append(nn.LogSoftmax(dim=-1))
-            return nn.Sequential(*base)
-
-        self.classifier = nn.ModuleList(
-            [
-                create_head(medium, metric)
-                for medium in ALL_MEDIUMS
-                for metric in ALL_METRICS
-            ]
-        )
-
-        # create loss functions
-        lossfn_map = {
-            "rating": self.mse,
-            "watch": self.crossentropy,
-            "plantowatch": self.crossentropy,
-            "drop": self.binarycrossentropy,
-        }
-        self.lossfns = [
-            lossfn_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
-        ]
-        evaluate_map = {
-            "rating": self.moments,
-            "watch": self.crossentropy,
-            "plantowatch": self.crossentropy,
-            "drop": self.binarycrossentropy,
-        }
-        self.evaluatefns = [
-            evaluate_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
-        ]
-        self.names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
-
-    def mse(self, x, y, w):
-        return (torch.square(x - y) * w).sum() / w.sum()
-
-    def moments(self, x, y, w):
-        return [
-            (torch.square(x - y) * w).sum() / w.sum(),
-            (torch.square(0 * x - y) * w).sum() / w.sum(),
-            (torch.square(-1 * x - y) * w).sum() / w.sum(),
-        ]
-
-    def crossentropy(self, x, y, w):
-        return (-x * y * w).sum() / w.sum()
-
-    def binarycrossentropy(self, x, y, w):
-        return (
-            torch.nn.functional.binary_cross_entropy_with_logits(
-                input=x,
-                target=y,
-                weight=w,
-                reduction="sum",
-            )
-            / w.sum()
-        )
-
-    def forward(self, d, evaluate):
-        inputs = [d[k] for k in self.config["vocab_names"]]
-        mask = d["attn_mask"]
-        e = self.embed(inputs)
-        e = self.transformers(e, mask)
-        lossfns = self.evaluatefns if evaluate else self.lossfns
-        losses = []
-        for i in range(len(lossfns)):
-            k = self.names[i]
-            weights = d[f"{k}.weight"]
-            if not torch.is_nonzero(weights.sum()):
-                losses.append(
-                    torch.tensor(
-                        [0.0], device=e.get_device(), requires_grad=e.requires_grad
-                    )
-                )
-                continue
-            labels = d[f"{k}.label"]
-            positions = d[f"{k}.position"]
-            positions = positions.reshape(*positions.shape, 1)
-            classifier = self.classifier[i]
-            bp = torch.nonzero(weights, as_tuple=True)
-            embed = e[bp[0], bp[1], :]
-            labels = labels[bp[0], bp[1]]
-            positions = positions[bp[0], bp[1]]
-            weights = weights[bp[0], bp[1]]
-            preds = classifier(embed).gather(dim=-1, index=positions).reshape(-1)
-            losses.append(lossfns[i](preds, labels, weights))
-        return losses
-
-
-class TransformerDataset(IterableDataset):
+class PretrainDataset(IterableDataset):
     def __init__(
         self,
         datadir,
         rank,
         world_size,
-        mask_rate,
         batch_size,
+        mask_rate,
     ):
         self.datadir = datadir
         self.mask_rate = mask_rate
@@ -314,12 +101,81 @@ class TransformerDataset(IterableDataset):
                 yield ret
 
 
+class FinetuneDataset(IterableDataset):
+    def __init__(
+        self,
+        datadir,
+        rank,
+        world_size,
+        batch_size,
+        shuffle,
+    ):
+        self.datadir = datadir
+        self.batch_size = batch_size
+        shards = sorted(glob.glob(f"{self.datadir}/*/"))
+        assert len(shards) % world_size == 0
+        self.fns = []
+        for i, x in enumerate(shards):
+            if i % world_size == rank:
+                self.fns.extend(glob.glob(f"{x}/*.h5"))
+        self.sparse_fields = [
+            f"{m}.{metric}.{x}"
+            for x in ["label", "weight"]
+            for m in ALL_MEDIUMS
+            for metric in ALL_METRICS
+        ]
+        self.shuffle = shuffle
+
+    def load_sparse_matrix(self, f, name):
+        i = f[f"{name}_i"][:] - 1
+        j = f[f"{name}_j"][:] - 1
+        v = f[f"{name}_v"][:]
+        m, n = f[f"{name}_size"][:]
+        return scipy.sparse.coo_matrix((v, (j, i)), shape=(n, m)).tocsr()
+
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None:
+            worker_id = 0
+            num_workers = 1
+        else:
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
+        fns = [x for i, x in enumerate(self.fns) if i % num_workers == worker_id]
+        if self.shuffle:
+            np.random.shuffle(fns)
+        for fn in fns:
+            with h5py.File(fn, "r") as f:
+                d = {}
+                with h5py.File(fn) as f:
+                    for k in self.sparse_fields:
+                        d[k] = self.load_sparse_matrix(f, k)
+                    for k in f:
+                        if any(k.startswith(x) for x in self.sparse_fields):
+                            continue
+                        d[k] = f[k][:]
+            N = d["userid"].shape[0]
+            idxs = list(range(N))
+            if self.shuffle:
+                np.random.shuffle(idxs)
+                while len(idxs) % self.batch_size != 0:
+                    idxs.append(np.random.choice(idxs))
+            idxs = [
+                idxs[i : i + self.batch_size]
+                for i in range(0, len(idxs), self.batch_size)
+            ]
+            for idx in idxs:
+                yield {k: v[idx, :] for k, v in d.items()}
+
+
 def collate(data):
     assert len(data) == 1
     ret = {}
     for k, v in data[0].items():
         if k in ["mask_rate"]:
             ret[k] = v
+        elif scipy.sparse.issparse(v):
+            ret[k] = torch.sparse_csr_tensor(v.indptr, v.indices, v.data, v.shape)
         else:
             ret[k] = torch.tensor(v)
     return ret
@@ -331,32 +187,33 @@ def to_device(data, rank):
         if k == "mask_rate":
             mask_rate = data[k]
         else:
-            d[k] = data[k].to(rank)
-    mask = (torch.rand(data["userid"].shape, device=rank) < mask_rate) & (
-        d["position"] != cls_val
-    )
-    for m in [0, 1]:
-        for metric in ["rating", "watch", "plantowatch", "drop"]:
-            d[f"{m}.{metric}.position"] = torch.clone(d[f"{m}_matchedid"]).to(
-                torch.int64
-            )
-            d[f"{m}.{metric}.position"][~mask] = 0
-            d[f"{m}.{metric}.label"][~mask] = 0
-            d[f"{m}.{metric}.weight"][~mask] = 0
-    fields_to_mask = [
-        "status",
-        "rating",
-        "progress",
-        "0_matchedid",
-        "0_distinctid",
-        "1_matchedid",
-        "1_distinctid",
-        "source",
-    ]
-    for k in fields_to_mask:
-        d[k][mask] = mask_val
-    for k in d:
-        d[k] = d[k].reshape(-1, max_seq_len)
+            d[k] = data[k].to(rank).to_dense()
+    if finetune is None:
+        mask = (torch.rand(data["userid"].shape, device=rank) < mask_rate) & (
+            d["position"] != cls_val
+        )
+        for m in ALL_MEDIUMS:
+            for metric in ALL_METRICS:
+                d[f"{m}.{metric}.position"] = torch.clone(d[f"{m}_matchedid"]).to(
+                    torch.int64
+                )
+                d[f"{m}.{metric}.position"][~mask] = 0
+                d[f"{m}.{metric}.label"][~mask] = 0
+                d[f"{m}.{metric}.weight"][~mask] = 0
+        fields_to_mask = [
+            "status",
+            "rating",
+            "progress",
+            "0_matchedid",
+            "0_distinctid",
+            "1_matchedid",
+            "1_distinctid",
+            "source",
+        ]
+        for k in fields_to_mask:
+            d[k][mask] = mask_val
+        for k in d:
+            d[k] = d[k].reshape(-1, max_seq_len)
     userid = d["userid"]
     m, n = userid.shape
     attn_mask = userid.reshape(m, 1, n) != userid.reshape(m, n, 1)
@@ -466,12 +323,14 @@ def create_optimizer(model):
             {"params": should_decay[True], "weight_decay": 0.1},
             {"params": should_decay[False], "weight_decay": 0.0},
         ],
-        lr=2e-4,
+        lr=2e-4 if finetune is None else 1e-7,
         betas=(0.9, 0.95),
     )
 
 
 def create_learning_rate_schedule(optimizer, tokens_per_batch, epochs):
+    if finetune is not None:
+        return optim.lr_scheduler.LambdaLR(optimizer, lambda x: 1)
     with open(f"{datadir}/transformer/training/num_tokens.txt") as f:
         tokens_per_epoch = int(f.read())
     steps_per_epoch = int(tokens_per_epoch / tokens_per_batch)
@@ -519,10 +378,10 @@ def wsum(values, weights):
 
 def make_task_weights():
     # TODO can we set this programatically?
-    medium_weight = {
-        0: 1,
-        1: 2,
-    }
+    if finetune_medium is None:
+        medium_weight = {0: 1, 1: 2}
+    else:
+        medium_weight = {finetune_medium: 1, 1-finetune_medium: 0}
     metric_weight = {
         "rating": 1,
         "watch": 4,
@@ -565,6 +424,8 @@ def checkpoint_model(rank, model, save, loss, epoch):
     if rank != 0:
         return
     stem = f"{datadir}/transformer"
+    if finetune is not None:
+        stem = f"{stem}.{finetune_medium}.finetune"
     if save:
         torch.save(model.module._orig_mod.state_dict(), f"{stem}.pt")
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
@@ -577,7 +438,7 @@ def checkpoint_model(rank, model, save, loss, epoch):
 
 
 def upload(rank, logger):
-    if rank != 0:
+    if rank != 0 or finetune is not None:
         return
     logger.info("uploading model")
     template = "tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
@@ -600,18 +461,31 @@ def train():
     logger = get_logger(rank, "transformer")
     logger.setLevel(logging.DEBUG)
     logger.info(f"training")
-    batch_size = 2048
+    batch_size = 2048 if finetune is None else 64
     num_epochs = 64
     assert batch_size % world_size == 0
-    dataloaders = {
-        x: DataLoader(
-            TransformerDataset(
+
+    def TransformerDataset(x):
+        if finetune is None:
+            return PretrainDataset(
                 f"{datadir}/transformer/{x}",
                 rank,
                 world_size,
-                0.15,
                 batch_size // world_size,
-            ),
+                mask_rate=0.15,
+            )
+        else:
+            return FinetuneDataset(
+                f"{datadir}/transformer/{x}",
+                rank,
+                world_size,
+                batch_size // world_size,
+                shuffle=x == "training",
+            )
+
+    dataloaders = {
+        x: DataLoader(
+            TransformerDataset(x),
             batch_size=1,
             drop_last=False,
             num_workers=w,
@@ -648,8 +522,11 @@ def train():
             None,
         ],
         "num_attention_heads": 12,
+        "forward": "pretrain" if finetune is None else "finetune",
     }
     model = TransformerModel(config)
+    if finetune is not None:
+        model.load_state_dict(torch.load(finetune, weights_only=True))
     model = model.to(rank)
     model = torch.compile(model)
     model = DDP(
@@ -660,7 +537,11 @@ def train():
         optimizer, batch_size * max_seq_len, num_epochs
     )
     scaler = torch.amp.GradScaler(rank)
-    stopper = EarlyStopper(patience=float("inf"), rtol=0)
+    stopper = (
+        EarlyStopper(patience=float("inf"), rtol=0)
+        if finetune is None
+        else EarlyStopper(patience=1, rtol=0.001)
+    )
     task_weights = make_task_weights()
     get_loss = lambda x: evaluate_metrics(rank, x, dataloaders["test"])
     checkpoint = lambda m, s, l, e: checkpoint_model(rank, m, s, l, e)
@@ -703,8 +584,15 @@ def download():
 
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--datadir", type=str)
+parser.add_argument("--finetune", type=str, default=None)
+parser.add_argument("--finetune_medium", type=int, default=None)
 parser.add_argument("--download", action=argparse.BooleanOptionalAction)
 args = parser.parse_args()
+datadir = args.datadir
+finetune = args.finetune
+finetune_medium = args.finetune_medium
+
 
 if __name__ == "__main__":
     if args.download:

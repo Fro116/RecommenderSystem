@@ -1,9 +1,10 @@
 import JLD2
 import Glob
+import HDF5
 import NNlib: logsoftmax, sigmoid, softmax
 import Optim
-import ProgressMeter: @showprogress
 include("../julia_utils/http.jl")
+include("../julia_utils/stdout.jl")
 
 function start_server(port)
     t = Threads.@spawn run(
@@ -41,15 +42,25 @@ function get_users()
 end
 
 function get_registry()
-    registry_data = open("../../data/finetune/model.registry.msgpack") do f
-        MsgPack.unpack(read(f))
-    end
     registry = Dict()
-    @showprogress for d in registry_data
-        registry[d["name"]] = Dict(
-            "weight" => permutedims(convert.(Float32, reduce(hcat, d["weight"]))),
-            "bias" => convert.(Float32, d["bias"]),
-        )
+    HDF5.h5open("../../data/finetune/model.registry.h5", "r") do f
+        for k in keys(f)
+            v = read(f, k)
+            if endswith(k, ".bias")
+                name = k[1:end-length(".bias")]
+                part = "bias"
+            elseif endswith(k, ".weight")
+                name = k[1:end-length(".weight")]
+                part = "weight"
+                v = permutedims(v)
+            else
+                @assert false
+            end
+            if name ∉ keys(registry)
+                registry[name] = Dict()
+            end
+            registry[name][part] = v
+        end
     end
     registry
 end
@@ -121,7 +132,7 @@ function loss(users, models, medium, metric, weights)
 end
 
 function regress(users, medium, metric)
-    alphas = ["$x.$medium.$metric" for x in ["baseline", "bagofwords"]]
+    alphas = ["$x.$medium.$metric" for x in ["baseline", "bagofwords", "transformer"]]
     if metric == "rating"
         transform = identity
     elseif metric in ["watch", "plantowatch", "drop"]
@@ -142,18 +153,28 @@ function regress(users, medium, metric)
         ),
     )
     coefs = transform(Optim.minimizer(res))
-    Dict(alphas .=> coefs)
+    Dict(alphas .=> coefs), Optim.minimum(res)
 end
 
 function save_weights()
     ret = Dict()
+    losses = Dict()
     for medium in [0, 1]
         for metric in ["rating", "watch", "plantowatch", "drop"]
-            ret["$medium.$metric"] = regress(users, medium, metric)
+            coefs, loss = regress(users, medium, metric)
+            ret["$medium.$metric"] = coefs
+            losses["$medium.$metric"] = loss
         end
     end
     ret = merge(ret, registry)
     JLD2.save("../../data/finetune/model.registry.jld2", ret)
+    logtag("REGRESS", "$losses")
+    open("../../data/finetune/regress.csv", "w") do f
+        write(f, "task,loss\n")
+        for (k, v) in losses
+            write(f, "$k,$v\n")
+        end
+    end
 end
 
 const users = get_users()

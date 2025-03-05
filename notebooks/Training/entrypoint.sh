@@ -35,8 +35,8 @@ mv secrets RecommenderSystem/
 mkdir -p RecommenderSystem/data/training
 pip install h5py hdf5plugin msgpack pandas scipy tqdm
 cd RecommenderSystem/notebooks/Training/
-python transformer.py --download
-cmd="torchrun --standalone --nproc_per_node=8 transformer.py"
+python transformer.py --datadir ../../data/training --download
+cmd="torchrun --standalone --nproc_per_node=8 transformer.py --datadir ../../data/training"
 $cmd || (sleep 10 && $cmd) || (sleep 60 && $cmd)
 python bagofwords.py --datadir ../../data/training --download
 for m in 0 1; do

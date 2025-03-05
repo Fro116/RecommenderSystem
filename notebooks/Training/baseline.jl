@@ -297,5 +297,3 @@ end
 for m in keys(MEDIUM_MAP)
     save_model(m)
 end
-
-save_model(0)

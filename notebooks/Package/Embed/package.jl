@@ -21,6 +21,7 @@ function embed_py(basedir::String)
         rm(app; recursive = true)
     end
     copy("notebooks/Training/bagofwords.model.py", app)
+    copy("notebooks/Training/transformer.model.py", app)
     copy("notebooks/Finetune/embed.py", app)
     mediums = [0, 1]
     metrics = ["rating", "watch", "plantowatch", "drop"]
@@ -28,6 +29,7 @@ function embed_py(basedir::String)
         ["manga.csv", "anime.csv"],
         ["latest", "training_tag"],
         ["bagofwords.$m.$metric.finetune.pt" for m in mediums for metric in metrics],
+        ["transformer.$m.finetune.pt" for m in mediums],
         ["baseline.$m.msgpack" for m in mediums],
     )
     for f in files
@@ -63,19 +65,19 @@ function build(basedir::String, name::String, tag::String, args::String)
     project = read("secrets/gcp.project.txt", String)
     region = read("secrets/gcp.region.txt", String)
     run(`docker tag $name $repo/$name:$tag`)
-    run(`docker push $repo/$name:$tag`)
-    deploy = "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet && gcloud run deploy {app} --image={repo}/{app}:{tag} --set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --region={region} --project={project} {args} && gcloud auth revoke"
-    deploy = replace(
-        deploy,
-        "{repo}" => repo,
-        "{project}" => project,
-        "{region}" => region,
-        "{app}" => name,
-        "{tag}" => tag,
-        "{args}" => args,
-    )
-    run(`sh -c $deploy`)
-    run(`docker system prune -f`)
+    # run(`docker push $repo/$name:$tag`)
+    # deploy = "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet && gcloud run deploy {app} --image={repo}/{app}:{tag} --set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --region={region} --project={project} {args} && gcloud auth revoke"
+    # deploy = replace(
+    #     deploy,
+    #     "{repo}" => repo,
+    #     "{project}" => project,
+    #     "{region}" => region,
+    #     "{app}" => name,
+    #     "{tag}" => tag,
+    #     "{args}" => args,
+    # )
+    # run(`sh -c $deploy`)
+    # run(`docker system prune -f`)
 end
 
 cd("../../..")

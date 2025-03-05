@@ -18,7 +18,7 @@ end
 
 function get_active_sf_cluster()
     read_json(cmd) = JSON3.read(replace(read(cmd, String), r"(\w+): " => s"\"\1\": "))
-    for _ in 1:3
+    for _ = 1:3
         try
             contracts = read_json(`sf contracts list --json`)
             cluster_id = first(contracts)["cluster_id"]
@@ -43,14 +43,15 @@ function start_sfcompute()
     open(fn, "w") do f
         write(f, yaml)
     end
-    h = 0
-    runtime_mins = 240
-    runtime_mins -= 60 - Dates.minute(Dates.now())
-    while runtime_mins > 0
-        runtime_mins -= 60
-        h += 1
+    h = 12
+    try
+        if !isnothing(get_active_sf_cluster())
+            logerror("start_sfcompute already launched")
+            return false
+        end
+    catch e
+        logerror("start_sfcompute error $e")
     end
-    @assert h <= 5
     try
         run(`sf buy -d $(h)hr -n 8 -p 3 -y`)
         logtag("RUN", "started sfcompute")
@@ -61,7 +62,7 @@ function start_sfcompute()
         sleep(h * 3600)
         return true
     catch e
-        logerror("sfcompute error $e")
+        logerror("start_sfcompute error $e")
         return false
     end
 end
@@ -75,22 +76,17 @@ function start_runpod(gpuname)
         "--gpuType '$gpuname'",
         "--gpuCount 8",
         "--imageName '$image'",
-        "--containerDiskSize 128",
+        "--containerDiskSize 256",
         "--secureCloud",
         "--args 'bash -c \"$entrypoint\"'",
     ]
     create = join(create, " ")
-    cmds = [
-        create,
-        "sleep 300",
-        "runpodctl get pod | grep -w $podname | grep -w RUNNING",
-    ]
+    cmds = [create, "sleep 300", "runpodctl get pod | grep -w $podname | grep -w RUNNING"]
     cmd = join(cmds, " && ")
     try
         run(`sh -c $cmd`)
         logtag("RUN", "started runpod with command $cmd")
-        runtime_mins = 240
-        sleep(runtime_mins * 60)
+        sleep(12 * 3600)
         return true
     catch
         return false
@@ -98,16 +94,27 @@ function start_runpod(gpuname)
 end
 
 function start_gpu()
+    allow_sfcompute = true
+    allow_runpod = false
     while true
-        success = start_sfcompute()
-        if success
-            return
-        end
-        gputypes = ["NVIDIA H100 80GB HBM3", "NVIDIA H100 NVL", "NVIDIA H100 PCIe", "NVIDIA H200"]
-        for gpuname in gputypes
-            success = start_runpod(gpuname)
+        if allow_sfcompute
+            success = start_sfcompute()
             if success
                 return
+            end
+        end
+        if allow_runpod
+            gputypes = [
+                "NVIDIA H100 80GB HBM3",
+                "NVIDIA H100 NVL",
+                "NVIDIA H100 PCIe",
+                "NVIDIA H200",
+            ]
+            for gpuname in gputypes
+                success = start_runpod(gpuname)
+                if success
+                    return true
+                end
             end
         end
         logtag("RUN", "waiting for available gpus...")
@@ -123,7 +130,7 @@ function pretrain()
     latest = read("../../data/training/latest", String)
     success = read(
         `rclone --retries=10 ls r2:rsys/database/training/$latest/bagofwords.1.drop.pt`,
-        String
+        String,
     )
     if isempty(success)
         logerror("gpu training failed")
@@ -131,7 +138,8 @@ function pretrain()
     end
     cmd = "rclone --retries=10 copyto ../../data/training/latest r2:rsys/database/training/latest"
     run(`sh -c $cmd`)
-    cleanup = raw"rclone lsd r2:rsys/database/training/ | sort | head -n -2 | awk '{print $NF}' | xargs -I {} rclone purge r2:rsys/database/training/{}"
+    cleanup =
+        raw"rclone lsd r2:rsys/database/training/ | sort | head -n -2 | awk '{print $NF}' | xargs -I {} rclone purge r2:rsys/database/training/{}"
     run(`sh -c $cleanup`)
 end
 

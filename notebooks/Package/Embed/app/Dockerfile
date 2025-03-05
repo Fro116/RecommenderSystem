@@ -3,7 +3,7 @@ FROM ubuntu:24.04
 WORKDIR /usr/src/app
 
 # python
-RUN apt update && apt install gcc g++ curl python3.12 python3.12-venv supervisor -y
+RUN apt update && apt install gcc g++ curl python3.12 python3.12-dev python3.12-venv supervisor -y
 COPY requirements.txt .
 ENV VIRTUAL_ENV=/usr/src/app/venv
 RUN python3.12 -m venv $VIRTUAL_ENV

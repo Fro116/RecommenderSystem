@@ -8,7 +8,6 @@ import MsgPack
 import Memoize: @memoize
 import ProgressMeter: @showprogress
 import Random
-import SparseArrays
 
 const datadir = "../../data/training"
 const mediums = [0, 1]

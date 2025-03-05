@@ -24,7 +24,8 @@ function download_data()
         ["$m.csv" for m in ["manga", "anime"]],
         ["$(s)_$(m).csv" for s in ["mal", "anilist", "kitsu", "animeplanet"] for m in ["manga", "anime"]],
         ["baseline.$m.msgpack" for m in [0, 1]],
-        ["bagofwords.$m.$metric.pt" for m in [0, 1] for metric in METRICS],
+        ["bagofwords.$m.$metric.$stem" for m in [0, 1] for metric in METRICS for stem in ["csv", "pt"]],
+        ["transformer.$stem" for stem in ["csv", "pt"]],
     )
     for fn in files
         cmd = "$download/training/$tag/$fn $datadir/$fn"
