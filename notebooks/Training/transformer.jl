@@ -57,7 +57,7 @@ function get_data(data, userid)
     for x in data["items"]
         i += 1
         d["status"][i] = x["status"]
-        d["rating"][i] = x["rating"] / 10
+        d["rating"][i] = x["rating"]
         d["position"][i] = i % (max_seq_len - reserved_vals)
         d["progress"][i] = x["progress"]
         m = x["medium"]
