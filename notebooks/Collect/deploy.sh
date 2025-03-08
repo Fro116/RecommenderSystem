@@ -17,10 +17,10 @@ mkdir -p $logs && rm $logs/*.log
 (julia layer3.jl 4003 "http://localhost:4002" 1000 5 |& julia -t 1 logrotate.jl $logs/layer3.log) &
 
 (julia collect_single.jl mal_userids userid "http://localhost:4003/mal_username" 1 |& julia -t 1 logrotate.jl $logs/mal_userids.log) &
-(julia collect_junction.jl mal_users user mal_user_items items mal_userids userid username db_junction_last_changed_at "http://localhost:4003/mal_user" 100 |& julia -t 1 logrotate.jl $logs/mal_users.log) &
+(julia collect_junction.jl mal_users user mal_user_items items mal_userids userid username db_junction_last_changed_at "http://localhost:4003/mal_user" 150 |& julia -t 1 logrotate.jl $logs/mal_users.log) &
 (julia collect_junction.jl mal_media details mal_media_relations relations mal_user_items nothing medium,itemid db_primary_last_changed_at "http://localhost:4003/mal_media" 1 |& julia -t 1 logrotate.jl $logs/mal_media.log) &
 
-(julia collect_junction.jl anilist_users user anilist_user_items items nothing nothing userid db_junction_last_changed_at "http://localhost:4003/anilist_user" 20 |& julia -t 1 logrotate.jl $logs/anilist_users.log) &
+(julia collect_junction.jl anilist_users user anilist_user_items items nothing nothing userid db_junction_last_changed_at "http://localhost:4003/anilist_user" 30 |& julia -t 1 logrotate.jl $logs/anilist_users.log) &
 (julia collect_junction.jl anilist_media details anilist_media_relations relations anilist_user_items nothing medium,itemid db_primary_last_changed_at "http://localhost:4003/anilist_media" 1 |& julia -t 1 logrotate.jl $logs/anilist_media.log) &
 
 (julia collect_junction.jl kitsu_users user kitsu_user_items items nothing nothing userid db_junction_last_changed_at "http://localhost:4003/kitsu_user" 10 |& julia -t 1 logrotate.jl $logs/kitsu_users.log) &
