@@ -63,7 +63,7 @@ function build(basedir::String, name::String, tag::String, args::String)
         "{args}" => args,
     )
     run(`sh -c $deploy`)
-    run(`docker system prune -f`)
+    run(`docker system prune -af --filter until=24h`)
 end
 
 cd("../../..")
@@ -78,4 +78,4 @@ layer2(basedir)
 layer3(basedir)
 layer4(basedir)
 tag = Dates.format(Dates.today(), "yyyymmdd")
-build(basedir, "fetch", tag, "--max-instances=1")
+build(basedir, "fetch", tag, "--min=1 --max-instances=1")

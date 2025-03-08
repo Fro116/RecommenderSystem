@@ -7,7 +7,7 @@ include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
 
 function start_server(port)
-    t = Threads.@spawn run(
+    Threads.@spawn run(
         `uvicorn embed:app --host 0.0.0.0 --port $port --log-level warning`,
     )
     while true
@@ -28,17 +28,26 @@ function get_users()
     port = 3000
     start_server(port)
     fns = Glob.glob("../../data/finetune/users/test/*/*.msgpack")
-    users = Vector{Any}(undef, length(fns))
-    Threads.@threads for i = 1:length(fns)
-        data = open(fns[i]) do f
-            MsgPack.unpack(read(f))
+    nchunks = 64
+    chunks = Iterators.partition(fns, div(length(fns), nchunks))
+    tasks = map(chunks) do chunk
+        Threads.@spawn begin
+            users = []
+            for fn in chunk
+                data = open(fn) do f
+                    MsgPack.unpack(read(f))
+                end
+                ret =
+                    HTTP.post("http://localhost:$port/embed", encode(data, :msgpack)...)
+                data["embeds"] = decode(ret)
+                push!(users, data)
+            end
+            users
         end
-        ret = HTTP.post("http://localhost:$port/embed", encode(data, :msgpack)...)
-        data["embeds"] = decode(ret)
-        users[i] = data
     end
+    rets = reduce(vcat, fetch.(tasks))
     stop_server(port)
-    users
+    rets
 end
 
 function get_registry()
@@ -65,8 +74,8 @@ function get_registry()
     registry
 end
 
-function loss(users, models, medium, metric, weights)
-    @assert length(models) == length(weights)
+function loss(users, models, medium, metric, model_weights)
+    @assert length(models) == length(model_weights)
     planned_status = 3
     if metric == "rating"
         activation = identity
@@ -77,15 +86,15 @@ function loss(users, models, medium, metric, weights)
     else
         @assert false
     end
-    preds = sum([
+    model_preds = [
         activation(
             registry[kr]["weight"] *
             convert.(Float32, reduce(hcat, [x["embeds"][ke] for x in users])) .+
             registry[kr]["bias"],
-        ) * w for ((ke, kr), w) in zip(models, weights)
-    ])
-    losses = zero(eltype(weights))
-    weights = zero(eltype(weights))
+        ) for (ke, kr) in models
+    ]
+    losses = zero(eltype(model_weights))
+    weights = zero(eltype(model_weights))
     for i = 1:length(users)
         ys = []
         for x in users[i]["test_items"]
@@ -114,15 +123,19 @@ function loss(users, models, medium, metric, weights)
                 @assert false
             end
         end
+        if length(ys) == 0
+            continue
+        end
         w = 1 / length(ys)
         for (j, y) in ys
+            p = sum([mp[j, i] * mw for (mp, mw) in zip(model_preds, model_weights)])
             weights += w
             if metric == "rating"
-                losses += (preds[j, i] - y)^2 * w
+                losses += (p - y)^2 * w
             elseif metric in ["watch", "plantowatch"]
-                losses += -preds[j, i] * y * w
+                losses += -p * y * w
             elseif metric == "drop"
-                losses += -(y * log(preds[j, i]) + (1 - y) * log(1 - preds[j, i])) * w
+                losses += -(y * log(p) + (1 - y) * log(1 - p)) * w
             else
                 @assert false
             end

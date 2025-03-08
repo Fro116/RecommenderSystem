@@ -79,7 +79,6 @@ function with_db(f, conntype::Symbol, max_retries::Real=Inf)
                 logerror("with_db connection error $e")
                 LibPQ.reset!(db.conn; throw_error = false)
                 empty!(db.prepared_statements)
-                return :transaction_failed
             end
         end
         logerror("with_db max_retries exceeded")

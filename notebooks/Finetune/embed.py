@@ -301,7 +301,6 @@ def load_bagofwords_model(medium, metric):
     m.load_state_dict(torch.load(fn, weights_only=True, map_location=device))
     m = m.to(device)
     m.eval()
-    m = torch.compile(m)
     return m
 
 
@@ -342,10 +341,11 @@ def load_transformer_model(medium):
     m.load_state_dict(torch.load(fn, weights_only=True, map_location=device))
     m = m.to(device)
     m.eval()
-    m = torch.compile(m)
     return m
 
 
+logging.warning("STARTUP BEGIN")
+starttime = time.time()
 device = "cuda" if torch.cuda.is_available() else "cpu"
 mediums = [0, 1]
 metrics = ["rating", "watch", "plantowatch", "drop"]
@@ -363,7 +363,7 @@ num_items = {
 planned_status = 3
 baselines = get_baselines(device)
 request_buffer = RequestBuffer(
-    batch_size=256, timeout_seconds=0.001, max_queue_size=1024
+    batch_size=256, timeout_seconds=0.01, max_queue_size=1024
 )
 with open(f"{datadir}/latest") as f:
     version = f.read()
@@ -377,6 +377,8 @@ max_ts = int(
     .replace(tzinfo=datetime.timezone.utc)
     .timestamp()
 )
+predict([{"user": {"source": "mal"}, "items": []}])
+logging.warning(f"STARTUP END AFTER {time.time() - starttime}s")
 app = FastAPI()
 
 

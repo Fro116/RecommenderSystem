@@ -274,6 +274,19 @@ function save_fingerprints(source::String)
     rm("$datadir/$source.finished")
 end
 
+function run_sql(script)
+    for conn_str in conn_strs
+        try
+            cmd = """psql "$conn_str" -f $script"""
+            run(`sh -c $cmd`)
+            return true
+        catch
+             nothing
+        end
+    end
+    false
+end
+
 function upload_fingerprints()
     rm(datadir, force = true, recursive = true)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
@@ -292,12 +305,12 @@ function upload_fingerprints()
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/import/{OUTPUT}"
     cmd = replace(save_template, "{INPUT}" => "$datadir/fingerprints.csv", "{OUTPUT}" => "fingerprints.csv")
     run(`sh -c $cmd`)
+    @assert run_sql("startup.sql")
     script = "./import_csv.sh"
     cmd = "chmod +x $script && $script $datadir"
     run(`sh -c $cmd`)
-    conn_str = read("../../../secrets/db.inference.upload.txt", String)
-    cmd = """psql "$conn_str" -f import_csv.sql"""
-    run(`sh -c $cmd`)
+    conn_strs = readlines("../../../secrets/db.inference.txt")
+    @assert run_sql("import_csv.sql")
 end
 
 @scheduled "BACKUP" "2:00" @handle_errors upload_fingerprints()

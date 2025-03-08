@@ -94,8 +94,10 @@ def register():
     for medium in mediums:
         for metric in metrics:
             models.append(register_transformer(medium, metric))
-            models.append(register_bagofwords(medium, metric))
             models.append(register_baseline(medium, metric))
+        for metric in ["rating"]:
+            models.append(register_bagofwords(medium, metric))
+
     with h5py.File(f"{datadir}/model.registry.h5", "w") as hf:
         for x in models:
             hf.create_dataset(f'{x["name"]}.bias', data=x["bias"])

@@ -10,15 +10,16 @@ include("../julia_utils/multithreading.jl")
 
 const PORT = parse(Int, ARGS[1])
 const FETCH_URL = ARGS[2]
-const MODEL_URL = ARGS[3]
 const datadir = "../../data/finetune"
-const registry = JLD2.load("../../data/finetune/model.registry.jld2")
+const secretdir = "../../secrets"
+const bluegreen = read("$datadir/bluegreen", String)
+const MODEL_URL = read("$secretdir/url.embed.$bluegreen.txt", String)
+const registry = JLD2.load("$datadir/model.registry.jld2")
 const planned_status = 3
 
 standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
 
 @memoize function num_items(medium::Integer)
-    datadir = "../../data/finetune"
     m = Dict(0 => "manga", 1 => "anime")[medium]
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
 end
@@ -50,7 +51,7 @@ end
     info
 end
 
-Oxygen.@post "/embed_user" function embed_user(r::HTTP.Request)::HTTP.Response
+Oxygen.@post "/add_user" function add_user(r::HTTP.Request)::HTTP.Response
     d = decode(r)
     r_read = HTTP.post(
         "$FETCH_URL/read",
@@ -126,7 +127,7 @@ function compute(state)
     N = 1000
     ids = sortperm(x, rev = true) .- 1
     for i in ids
-        if length(ret) == N
+        if length(ret) == Nemb
             break
         end
         if i ∉ keys(info)
@@ -145,7 +146,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
         username = action["username"]
         source = action["source"]
         r_embed = HTTP.post(
-            "http://localhost:$PORT/embed_user",
+            "http://localhost:$PORT/add_user",
             encode(Dict("source" => source, "username" => username), :msgpack)...,
             status_exception = false,
         )
@@ -165,7 +166,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
 end
 
 function compile(port::Integer)
-    profiles = CSV.read("../../secrets/test.users.csv", DataFrames.DataFrame, stringtype = String)
+    profiles = CSV.read("$secretdir/test.users.csv", DataFrames.DataFrame, stringtype = String)
     while true
         try
             r = HTTP.get("$MODEL_URL/ready")

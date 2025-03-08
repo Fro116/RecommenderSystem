@@ -62,7 +62,7 @@ function gen_splits()
     recent_days = 7
     recent_items = 5
     min_items = 5
-    test_perc = 0.01
+    test_perc = 0.1
     max_ts = -Inf
     @showprogress for f in Glob.glob("$datadir/fingerprints_*.csv")
         df = read_csv(f)

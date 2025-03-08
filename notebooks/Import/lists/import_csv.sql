@@ -11,12 +11,3 @@ COMMIT;
 BEGIN;
     DELETE FROM inference_users WHERE db_refreshed_at < extract(epoch from NOW()) - 86400 * 30;
 COMMIT;
-
-CREATE TABLE collect_users_staging (
-    source TEXT,
-    username TEXT,
-    userid BIGINT,
-    fingerprint TEXT,
-    data BYTEA,
-    db_refreshed_at DOUBLE PRECISION
-);

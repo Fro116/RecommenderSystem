@@ -36,8 +36,8 @@ function build(basedir::String, name::String, tag::String, args::String)
     cmds = [
         "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet",
         "gcloud run deploy {app} --image={repo}/{app}:{tag} --region={region} --project={project} {args}",
-        "gcloud beta run services update embed-$bluegreen --scaling=auto --region $region",
-        "gcloud run services update embed-$bluegreen --min 1 --region $region",
+        "gcloud beta run services update {app} --scaling=auto --region {region}",
+        "gcloud run services update {app} --min 1 --region {region}",
         "gcloud auth revoke",
     ]
     deploy = replace(
@@ -63,4 +63,4 @@ cp("notebooks/Package/Embed/app", basedir, force = true)
 embed_py(basedir)
 const tag = read("data/finetune/latest", String)
 const bluegreen = read("data/finetune/bluegreen", String)
-build(basedir, "embed", tag, "--cpu=8 --memory=16Gi --min 1")
+build(basedir, "embed", tag, "--cpu=8 --memory=16Gi --min=1")
