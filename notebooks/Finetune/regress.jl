@@ -79,10 +79,10 @@ function loss(users, models, medium, metric, weights)
     end
     preds = sum([
         activation(
-            registry[k]["weight"] *
-            convert.(Float32, reduce(hcat, [x["embeds"][k] for x in users])) .+
-            registry[k]["bias"],
-        ) * w for (k, w) in zip(models, weights)
+            registry[kr]["weight"] *
+            convert.(Float32, reduce(hcat, [x["embeds"][ke] for x in users])) .+
+            registry[kr]["bias"],
+        ) * w for ((ke, kr), w) in zip(models, weights)
     ])
     losses = zero(eltype(weights))
     weights = zero(eltype(weights))
@@ -132,7 +132,13 @@ function loss(users, models, medium, metric, weights)
 end
 
 function regress(users, medium, metric)
-    alphas = ["$x.$medium.$metric" for x in ["baseline", "bagofwords", "transformer"]]
+    alphas = [
+        ("baseline.$medium.$metric", "baseline.$medium.$metric"),
+        ("transformer.$medium", "transformer.$medium.$metric"),
+    ]
+    if metric == "rating"
+        push!(alphas, ("bagofwords.$medium.$metric", "bagofwords.$medium.$metric"))
+    end
     if metric == "rating"
         transform = identity
     elseif metric in ["watch", "plantowatch", "drop"]

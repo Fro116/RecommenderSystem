@@ -91,8 +91,8 @@ end
 function compute(state)
     medium = state["medium"]
     project(user, name) = sum(
-        (registry[k]["weight"] * convert.(Float32, user[k]) .+ registry[k]["bias"]) *
-        registry[name][k] for (k, w) in registry[name]
+        (registry[kr]["weight"] * convert.(Float32, user[ke]) .+ registry[kr]["bias"]) *
+        registry[name][kr] for ((ke, kr), w) in registry[name]
     )
     log10(x) = log(x) / log(10)
     x = zeros(Float32, num_items(medium))

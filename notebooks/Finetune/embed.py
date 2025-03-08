@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import traceback
 import time
 from enum import Enum, auto
 
@@ -86,7 +87,7 @@ class RequestBuffer:
                         for i, request_id in enumerate(request_ids):
                             self.results[request_id] = (predictions[i], time.time())
             except Exception as e:
-                logging.error(f"Error in RequestBuffer: {e}")
+                logging.error(f"Error in RequestBuffer: {e} \n {traceback.format_exc()}")
                 with self.lock:
                     for request_id in request_ids:
                         self.results[request_id] = (
@@ -95,65 +96,76 @@ class RequestBuffer:
                         )
 
 
+def get_user_bias(data):
+    biases = {}
+    for m in mediums:
+        _, λ_u, _, λ_wu, λ_wa = baselines[m]["params"]
+        numer = 0
+        denom = np.exp(λ_u)
+        ucount = len([x for x in data["items"] if x["rating"] > 0 and x["medium"] == m])
+        for x in data["items"]:
+            if x["medium"] != m or x["rating"] == 0:
+                continue
+            acount = baselines[m]["item_counts"][x["matchedid"]]
+            w = ucount**λ_wu * acount**λ_wa
+            numer += (x["rating"] - baselines[m]["a"][x["matchedid"]]) * w
+            denom += w
+        biases[m] = float(numer / denom)
+    return biases
+
+
+def predict_baseline(users):
+    ret = []
+    for u in range(len(users)):
+        d = {}
+        biases = get_user_bias(users[u])
+        for m in mediums:
+            for metric in metrics:
+                if metric == "rating":
+                    d[f"baseline.{m}.{metric}"] = [biases[m]]
+                else:
+                    d[f"baseline.{m}.{metric}"] = [0]
+        ret.append(d)
+        for x in users[u]["items"]:
+            if x["rating"] > 0:
+                m = x["medium"]
+                bl = baselines[m]
+                rating_pred = (biases[m] + bl["a"][x["matchedid"]]) * bl["weight"]
+                x["rating.resid"] = x["rating"] - rating_pred
+            else:
+                x["rating.resid"] = 0
+    return ret
+
+
 def predict_bagofwords(users):
     X = {}
     for m in mediums:
-        for metric in metrics:
+        for metric in ["rating", "watch"]:
             X[f"{m}_{metric}"] = np.zeros((len(users), num_items[m]), dtype=np.float32)
     for i, u in enumerate(users):
         for x in u["items"]:
             m = x["medium"]
             idx = x["matchedid"]
+            X[f"{m}_rating"][i, idx] = x["rating.resid"]
             if x["rating"] > 0:
-                X[f"{m}_rating"][i, idx] = x["rating"]
+                X[f"{m}_rating"][i, idx] = x["rating.resid"]
             else:
                 X[f"{m}_rating"][i, idx] = 0
             if x["status"] > planned_status:
                 X[f"{m}_watch"][i, idx] = 1
             else:
                 X[f"{m}_watch"][i, idx] = 0
-            if x["status"] == planned_status:
-                X[f"{m}_plantowatch"][i, idx] = 1
-            else:
-                X[f"{m}_plantowatch"][i, idx] = 0
-            if x["status"] > 0 and x["status"] < planned_status:
-                X[f"{m}_drop"][i, idx] = 1
-            else:
-                X[f"{m}_drop"][i, idx] = 0
     data = {k: torch.tensor(v) for k, v in X.items()}
     ret = {}
     d = {}
-    for m in [0, 1]:
+    for m in mediums:
         d[f"X_{m}_rating"] = data[f"{m}_rating"].to(device).to_dense()
         d[f"X_{m}_watch"] = data[f"{m}_watch"].to(device).to_dense()
-        r = d[f"X_{m}_rating"]
-        _, λ_u, _, λ_wu, λ_wa = baselines[m]["params"]
-        user_count = (r != 0).sum(dim=1)
-        user_weights = user_count**λ_wu
-        user_weights[user_count == 0] = 0
-        item_count = (r != 0) * baselines[m]["item_counts"]
-        item_weights = item_count**λ_wa
-        item_weights[item_count == 0] = 0
-        weights = user_weights.reshape(-1, 1) * item_weights
-        user_baseline = ((r - baselines[m]["a"]) * weights).sum(dim=1) / (
-            weights.sum(dim=1) + np.exp(λ_u)
-        )
-        for metric in metrics:
-            if metric == "rating":
-                ret[f"baseline.{m}.{metric}"] = user_baseline.reshape(-1, 1)
-            elif metric in ["watch", "plantowatch", "drop"]:
-                ret[f"baseline.{m}.{metric}"] = 0 * user_baseline.reshape(-1, 1)
-            else:
-                assert False
-        pred = (
-            user_baseline.reshape(-1, 1) + baselines[m]["a"].reshape(1, -1)
-        ) * baselines[m]["weight"]
-        d[f"X_{m}_rating"] = (d[f"X_{m}_rating"] != 0) * (d[f"X_{m}_rating"] - pred)
     X = torch.cat(
         (d[f"X_0_rating"], d[f"X_0_watch"], d[f"X_1_rating"], d[f"X_1_watch"]), dim=1
     )
     for medium in mediums:
-        for metric in metrics:
+        for metric in bagofwords_metrics:
             k = f"bagofwords.{medium}.{metric}"
             with torch.no_grad():
                 context = (
@@ -184,11 +196,15 @@ def predict_transformer(users):
     input_fields = list(d.keys())
     d["userid"] = np.zeros((len(users), max_len), dtype=np.int32)
     d["mask_index"] = np.zeros((len(users), max_len), dtype=np.int32)
+    user_biases = []
     for u in range(len(users)):
+        biases = get_user_bias(users[u])
+        user_biases.append(biases)
         userid = u + 1
         for k in input_fields:
             d[k][u, 0] = cls_val
         d["userid"][u, 0] = userid
+        d["rating"][u, 0] = 0
         skipped = 0
         items = users[u]["items"]
         while len(items) > max_len - 2:
@@ -197,12 +213,12 @@ def predict_transformer(users):
         i = 0
         for x in items:
             i += 1
-            d["status"][u, i] = x["status"]
-            d["rating"][u, i] = x["rating"] / 10
-            d["position"][u, i] = (i + skipped) % (max_seq_len - reserved_vals)
-            d["progress"][u, i] = x["progress"]
             m = x["medium"]
             n = 1 - x["medium"]
+            d["status"][u, i] = x["status"]
+            d["rating"][u, i] = x["rating.resid"]
+            d["position"][u, i] = (i + skipped) % (max_seq_len - reserved_vals)
+            d["progress"][u, i] = x["progress"]
             d[f"{m}_matchedid"][u, i] = x["matchedid"]
             d[f"{m}_distinctid"][u, i] = x["distinctid"]
             d[f"{n}_matchedid"][u, i] = cls_val
@@ -220,6 +236,7 @@ def predict_transformer(users):
         d["updated_at"][u, i] = 1
         d["position"][u, i] = i % (max_seq_len - reserved_vals)
         d["mask_index"][u, i] = 1
+        d["rating"][u, i] = 0
     d = {k: torch.tensor(v).to(device) for k, v in d.items()}
     userid = d["userid"]
     m, n = userid.shape
@@ -236,8 +253,7 @@ def predict_transformer(users):
             )
             with context:
                 e = models[f"transformer.{medium}"](d).to("cpu")
-        for metric in metrics:
-            ret[f"transformer.{medium}.{metric}"] = e
+                ret[f"transformer.{medium}"] = e
     ret = [{k: v[i, :].tolist() for k, v in ret.items()} for i in range(len(users))]
     return ret
 
@@ -247,6 +263,8 @@ def predict(users):
         return [x | y for (x, y) in zip(X, Y)]
 
     ret = [{"version": version} for _ in users]
+    predict_baseline(users)
+    ret = merge(ret, predict_baseline(users))
     ret = merge(ret, predict_bagofwords(users))
     ret = merge(ret, predict_transformer(users))
     return ret
@@ -254,7 +272,7 @@ def predict(users):
 
 def get_baselines(rank):
     baselines = {}
-    for m in [0, 1]:
+    for m in mediums:
         with open(f"{datadir}/baseline.{m}.msgpack", "rb") as f:
             baseline = msgpack.unpackb(f.read(), strict_map_key=False)
             d = {}
@@ -331,11 +349,12 @@ def load_transformer_model(medium):
 device = "cuda" if torch.cuda.is_available() else "cpu"
 mediums = [0, 1]
 metrics = ["rating", "watch", "plantowatch", "drop"]
+bagofwords_metrics = ["rating"]
 datadir = "../../data/finetune"
 models = {}
 for medium in mediums:
     models[f"transformer.{medium}"] = load_transformer_model(medium)
-    for metric in metrics:
+    for metric in bagofwords_metrics:
         models[f"bagofwords.{medium}.{metric}"] = load_bagofwords_model(medium, metric)
 num_items = {
     m: pd.read_csv(f"{datadir}/{n}.csv").matchedid.max() + 1

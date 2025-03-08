@@ -16,22 +16,21 @@ function get_gpu_args()
     image, entrypoint
 end
 
+function has_active_sf_cluster()
+    read_json(cmd) = JSON3.read(replace(read(cmd, String), r"(\w+): " => s"\"\1\": "))
+    contracts = read_json(`sf contracts list --json`)
+    return !isempty(contracts)
+end
+
 function get_active_sf_cluster()
     read_json(cmd) = JSON3.read(replace(read(cmd, String), r"(\w+): " => s"\"\1\": "))
-    for _ = 1:3
-        try
-            contracts = read_json(`sf contracts list --json`)
-            cluster_id = first(contracts)["cluster_id"]
-            clusters = read_json(`sf clusters list --json`)
-            for x in clusters
-                if x["contract"]["cluster_id"] == cluster_id
-                    return x["name"]
-                end
-            end
-        catch e
-            logerror("get_active_sf_cluster $e")
+    contracts = read_json(`sf contracts list --json`)
+    cluster_id = first(contracts)["cluster_id"]
+    clusters = read_json(`sf clusters list --json`)
+    for x in clusters
+        if x["contract"]["cluster_id"] == cluster_id
+            return x["name"]
         end
-        sleep(60)
     end
 end
 
@@ -43,27 +42,26 @@ function start_sfcompute()
     open(fn, "w") do f
         write(f, yaml)
     end
-    h = 12
-    try
-        if !isnothing(get_active_sf_cluster())
-            logerror("start_sfcompute already launched")
-            return false
-        end
-    catch e
-        logerror("start_sfcompute error $e")
+    started_gpu = false
+    h = 8
+    if has_active_sf_cluster()
+        logerror("start_sfcompute already launched")
+        return false
     end
     try
         run(`sf buy -d $(h)hr -n 8 -p 3 -y`)
+        started_gpu = true
         logtag("RUN", "started sfcompute")
+        sleep(60)
         cluster = get_active_sf_cluster()
         @assert !isnothing(cluster)
         run(`sf clusters users add --cluster $cluster --user myuser`)
         run(`kubectl apply -f $fn`)
         sleep(h * 3600)
-        return true
+        return started_gpu
     catch e
         logerror("start_sfcompute error $e")
-        return false
+        return started_gpu
     end
 end
 
@@ -129,7 +127,7 @@ function pretrain()
     start_gpu()
     latest = read("../../data/training/latest", String)
     success = read(
-        `rclone --retries=10 ls r2:rsys/database/training/$latest/bagofwords.1.drop.pt`,
+        `rclone --retries=10 ls r2:rsys/database/training/$latest/bagofwords.1.rating.pt`,
         String,
     )
     if isempty(success)

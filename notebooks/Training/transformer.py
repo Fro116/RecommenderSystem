@@ -219,7 +219,7 @@ def to_device(data, rank, baselines):
         ]
         for k in fields_to_mask:
             d[k][mask] = mask_val
-        # residuliaze ratings
+        # residualize ratings
         rmask = d["rating"] > 0
         for m in ALL_MEDIUMS:
             _, λ_u, _, λ_wu, λ_wa = baselines[m]["params"]
@@ -448,7 +448,7 @@ def get_logger(rank, name):
     return logger
 
 
-def checkpoint_model(rank, model, save, loss, epoch):
+def checkpoint_model(rank, model, save, loss, epoch, task_weights):
     if rank != 0:
         return
     stem = f"{datadir}/transformer"
@@ -459,9 +459,9 @@ def checkpoint_model(rank, model, save, loss, epoch):
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
     if epoch < 0:
         with open(f"{stem}.csv", "w") as f:
-            f.write(",".join(["epoch"] + names) + "\n")
+            f.write(",".join(["epoch", "loss"] + names) + "\n")
     with open(f"{stem}.csv", "a") as f:
-        vals = [epoch] + loss
+        vals = [epoch, wsum(loss, task_weights)] + loss
         f.write(",".join([str(x) for x in vals]) + "\n")
 
 
@@ -573,7 +573,7 @@ def train():
     )
     task_weights = make_task_weights()
     get_loss = lambda x: evaluate_metrics(rank, x, dataloaders["test"], baselines)
-    checkpoint = lambda m, s, l, e: checkpoint_model(rank, m, s, l, e)
+    checkpoint = lambda m, s, l, e: checkpoint_model(rank, m, s, l, e, task_weights)
     initial_loss = get_loss(model)
     logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")
     stopper(wsum(initial_loss, task_weights))

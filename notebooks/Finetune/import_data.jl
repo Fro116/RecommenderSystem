@@ -13,6 +13,18 @@ const METRICS = ["rating", "watch", "plantowatch", "drop"]
 const SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
 const datadir = "../../data/finetune"
 
+function blue_green_tag(date::AbstractString)
+    # TODO programatically get the last deploy
+    date = Dates.Date(parse(Int, date[1:4]), parse(Int, date[5:6]), parse(Int, date[7:8]))
+    epoch_date = Dates.Date(2000, 1, 1)
+    days_since_epoch = Dates.value(date - epoch_date)
+    if iseven(days_since_epoch)
+        return "blue"
+    else
+        return "green"
+    end
+end
+
 function download_data()
     rm(datadir, force = true, recursive = true)
     mkpath(datadir)
@@ -24,7 +36,7 @@ function download_data()
         ["$m.csv" for m in ["manga", "anime"]],
         ["$(s)_$(m).csv" for s in ["mal", "anilist", "kitsu", "animeplanet"] for m in ["manga", "anime"]],
         ["baseline.$m.msgpack" for m in [0, 1]],
-        ["bagofwords.$m.$metric.$stem" for m in [0, 1] for metric in METRICS for stem in ["csv", "pt"]],
+        ["bagofwords.$m.$metric.$stem" for m in [0, 1] for metric in ["rating"] for stem in ["csv", "pt"]],
         ["transformer.$stem" for stem in ["csv", "pt"]],
     )
     for fn in files
@@ -40,6 +52,9 @@ function download_data()
     date = Dates.format(Dates.today(), "yyyymmdd")
     open("$datadir/latest", "w") do f
         write(f, date)
+    end
+    open("$datadir/bluegreen", "w") do f
+        write(f, blue_green_tag(date))
     end
 end
 

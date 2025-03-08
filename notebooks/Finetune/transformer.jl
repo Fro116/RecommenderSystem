@@ -27,7 +27,48 @@ const batch_size = 256 * max_seq_len
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
 end
 
+@memoize function get_baselines()
+    baselines = Dict()
+    for m in [0, 1]
+        b = open("$datadir/baseline.$m.msgpack") do f
+            MsgPack.unpack(read(f))
+        end
+        d = Dict()
+        d["params"] = convert.(Float32, b["params"]["λ"])
+        d["weight"] = convert(Float32, only(b["weight"]))
+        d["a"] = convert.(Float32, b["params"]["a"])
+        item_counts = b["params"]["item_counts"]
+        item_counts = Int32[get(item_counts, x, 1) for x = 0:length(b["params"]["a"])-1]
+        d["item_counts"] = item_counts
+        baselines[m] = d
+    end
+    baselines
+end
+
+function get_user_bias(data)
+    baselines = get_baselines()
+    biases = Dict()
+    for m in [0, 1]
+        _, λ_u, _, λ_wu, λ_wa = baselines[m]["params"]
+        numer = 0
+        denom = exp(λ_u)
+        ucount = length([x for x in data["items"] if x["rating"] > 0 && x["medium"] == m])
+        for x in data["items"]
+            if x["medium"] != m || x["rating"] == 0
+                continue
+            end
+            acount = baselines[m]["item_counts"][x["matchedid"]+1]
+            w = ucount^λ_wu * acount^λ_wa
+            numer += (x["rating"] - baselines[m]["a"][x["matchedid"]+1]) * w
+            denom += w
+        end
+        biases[m] = numer / denom
+    end
+    biases
+end
+
 function get_data(data, userid)
+    biases = get_user_bias(data)
     reserved_vals = 2
     cls_val = -1
     mask_val = -2
@@ -50,6 +91,7 @@ function get_data(data, userid)
         d[k][1] = cls_val
     end
     d["userid"][1] = userid
+    d["rating"][1] = 0
     skipped = 0
     items = data["items"]
     while length(items) > max_seq_len - 2
@@ -59,12 +101,18 @@ function get_data(data, userid)
     i = 1
     for x in items
         i += 1
-        d["status"][i] = x["status"]
-        d["rating"][i] = x["rating"] / 10
-        d["position"][i] = (i + skipped) % (max_seq_len - reserved_vals)
-        d["progress"][i] = x["progress"]
         m = x["medium"]
         n = 1 - x["medium"]
+        d["status"][i] = x["status"]
+        if x["rating"] > 0
+            bl = get_baselines()[m]
+            rating_pred = (biases[m] + bl["a"][x["matchedid"]+1]) * bl["weight"]
+            d["rating"][i] = x["rating"] - rating_pred
+        else
+            d["rating"][i] = 0
+        end
+        d["position"][i] = (i + skipped) % (max_seq_len - reserved_vals)
+        d["progress"][i] = x["progress"]
         d["$(m)_matchedid"][i] = x["matchedid"]
         d["$(m)_distinctid"][i] = x["distinctid"]
         d["$(n)_matchedid"][i] = cls_val
@@ -82,6 +130,7 @@ function get_data(data, userid)
     d["updated_at"][i] = 1
     d["position"][i] = i % (max_seq_len - reserved_vals)
     d["mask_index"][i] = 1
+    d["rating"][i] = 0
     Y = Dict()
     W = Dict()
     for m in mediums
@@ -94,7 +143,9 @@ function get_data(data, userid)
         m = x["medium"]
         idx = x["matchedid"] + 1
         if x["rating"] > 0
-            Y["$(m)_rating"][idx] = x["rating"]
+            bl = get_baselines()[m]
+            rating_pred = (biases[m] + bl["a"][idx]) * bl["weight"]
+            Y["$(m)_rating"][idx] = x["rating"] - rating_pred
             W["$(m)_rating"][idx] = 1
         else
             Y["$(m)_rating"][idx] = 0
