@@ -275,6 +275,7 @@ function save_fingerprints(source::String)
 end
 
 function run_sql(script)
+    conn_strs = readlines("../../../secrets/db.inference.txt")
     for conn_str in conn_strs
         try
             cmd = """psql "$conn_str" -f $script"""
@@ -309,7 +310,6 @@ function upload_fingerprints()
     script = "./import_csv.sh"
     cmd = "chmod +x $script && $script $datadir"
     run(`sh -c $cmd`)
-    conn_strs = readlines("../../../secrets/db.inference.txt")
     @assert run_sql("import_csv.sql")
 end
 

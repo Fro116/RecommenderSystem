@@ -52,9 +52,12 @@ function build(basedir::String, name::String, tag::String, args::String)
     region = read("secrets/gcp.region.txt", String)
     run(`docker tag $name $repo/$name:$tag`)
     run(`docker push $repo/$name:$tag`)
-    deploy = "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet && gcloud run deploy {app} --image={repo}/{app}:{tag} --set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --region={region} --project={project} {args} && gcloud auth revoke"
+    cmds = [
+        "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet",
+        "gcloud run deploy {app} --image={repo}/{app}:{tag} --region={region} --project={project} {args}",
+    ]
     deploy = replace(
-        deploy,
+        join(cmds, " && "),
         "{repo}" => repo,
         "{project}" => project,
         "{region}" => region,
@@ -78,4 +81,4 @@ layer2(basedir)
 layer3(basedir)
 layer4(basedir)
 tag = Dates.format(Dates.today(), "yyyymmdd")
-build(basedir, "fetch", tag, "--min=1 --max-instances=1")
+build(basedir, "fetch", tag, "--set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --cpu=2 --memory=2Gi --min=1 --max-instances=1")

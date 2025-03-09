@@ -38,7 +38,6 @@ function build(basedir::String, name::String, tag::String, args::String)
         "gcloud run deploy {app} --image={repo}/{app}:{tag} --region={region} --project={project} {args}",
         "gcloud beta run services update {app} --scaling=auto --region {region}",
         "gcloud run services update {app} --min 1 --region {region}",
-        "gcloud auth revoke",
     ]
     deploy = replace(
         join(cmds, " && "),

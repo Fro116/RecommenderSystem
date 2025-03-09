@@ -5,7 +5,7 @@ include("../julia_utils/scheduling.jl")
 include("../julia_utils/stdout.jl")
 
 function get_gpu_args()
-    image = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+    image = "us-docker.pkg.dev/deeplearning-platform-release/gcr.io/pytorch-cu124.2-4.py310"
     envvars = readlines("../../secrets/r2.auth.txt")
     script = [
         "wget https://github.com/Fro116/RecommenderSystem/raw/main/notebooks/Training/entrypoint.sh",
@@ -65,55 +65,11 @@ function start_sfcompute()
     end
 end
 
-function start_runpod(gpuname)
-    image, entrypoint = get_gpu_args()
-    podname = "prod_train"
-    create = [
-        "runpodctl create pod",
-        "--name $podname",
-        "--gpuType '$gpuname'",
-        "--gpuCount 8",
-        "--imageName '$image'",
-        "--containerDiskSize 256",
-        "--secureCloud",
-        "--args 'bash -c \"$entrypoint\"'",
-    ]
-    create = join(create, " ")
-    cmds = [create, "sleep 300", "runpodctl get pod | grep -w $podname | grep -w RUNNING"]
-    cmd = join(cmds, " && ")
-    try
-        run(`sh -c $cmd`)
-        logtag("RUN", "started runpod with command $cmd")
-        sleep(12 * 3600)
-        return true
-    catch
-        return false
-    end
-end
-
 function start_gpu()
-    allow_sfcompute = true
-    allow_runpod = false
     while true
-        if allow_sfcompute
-            success = start_sfcompute()
-            if success
-                return
-            end
-        end
-        if allow_runpod
-            gputypes = [
-                "NVIDIA H100 80GB HBM3",
-                "NVIDIA H100 NVL",
-                "NVIDIA H100 PCIe",
-                "NVIDIA H200",
-            ]
-            for gpuname in gputypes
-                success = start_runpod(gpuname)
-                if success
-                    return true
-                end
-            end
+        success = start_sfcompute()
+        if success
+            return
         end
         logtag("RUN", "waiting for available gpus...")
         sleep(600)

@@ -17,8 +17,6 @@ if [ -n "${RUNPOD_POD_ID+x}" ]; then
 else
     cd /data
 fi
-apt update
-apt install unzip git -y
 git clone https://github.com/Fro116/RecommenderSystem.git
 curl https://rclone.org/install.sh | bash
 mkdir -p ~/.config/rclone/
@@ -32,8 +30,7 @@ endpoint = https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com
 " > ~/.config/rclone/rclone.conf
 rclone --retries=10 -Pv copy r2:rsys/secrets secrets
 mv secrets RecommenderSystem/
-mkdir -p RecommenderSystem/data/training
-pip install h5py hdf5plugin msgpack pandas scipy tqdm
+pip install h5py hdf5plugin
 cd RecommenderSystem/notebooks/Training/
 python transformer.py --datadir ../../data/training --download
 cmd="torchrun --standalone --nproc_per_node=8 transformer.py --datadir ../../data/training"
@@ -42,7 +39,6 @@ python bagofwords.py --datadir ../../data/training --download
 for m in 0 1; do
 for metric in rating; do
     cmd="torchrun --standalone --nproc_per_node=8 bagofwords.py --datadir ../../data/training --medium $m --metric $metric"
-    # sleep to cleanup resources after torchrun exits
     $cmd || (sleep 10 && $cmd) || (sleep 60 && $cmd)
 done
 done

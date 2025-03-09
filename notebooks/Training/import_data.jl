@@ -19,6 +19,7 @@ function download_data()
     files = vcat(
         ["$m.groups.csv" for m in MEDIUMS],
         ["$(s)_$(m).csv" for s in SOURCES for m in MEDIUMS],
+        ["$(s)_media_relations.csv" for s in SOURCES],
         ["fingerprints.csv"],
     )
     for fn in files
