@@ -5,29 +5,39 @@ function copy(file::String, dst::String)
     cp(file, joinpath(dst, file))
 end
 
-function embed_py(basedir::String)
-    app = "$basedir/embed_py"
+function layer4(basedir::String)
+    app = "$basedir/layer4"
     if ispath(app)
         rm(app; recursive = true)
     end
-    copy("notebooks/Training/bagofwords.model.py", app)
-    copy("notebooks/Training/transformer.model.py", app)
-    copy("notebooks/Finetune/embed.py", app)
-    mediums = [0, 1]
+    copy("notebooks/Collect/layer4.jl", app)
+    copy("notebooks/julia_utils", app)
+    copy("secrets", app)
+end
+
+function compute(basedir::String)
+    app = "$basedir/compute"
+    if ispath(app)
+        rm(app; recursive = true)
+    end
+    copy("notebooks/Finetune/compute.jl", app)
+    copy("notebooks/Training/import_list.jl", app)
+    mediums = ["manga", "anime"]
+    sources = ["mal", "anilist", "kitsu", "animeplanet"]
     files = vcat(
-        ["manga.csv", "anime.csv"],
-        ["latest", "training_tag"],
-        ["bagofwords.$m.$metric.finetune.pt" for m in mediums for metric in ["rating"]],
-        ["transformer.$m.finetune.pt" for m in mediums],
-        ["baseline.$m.msgpack" for m in mediums],
+        ["$m.csv" for m in mediums],
+        ["$(s)_$(m).csv" for s in sources for m in mediums],
+        ["latest", "bluegreen", "model.registry.jld2"],
     )
     for f in files
         copy("data/finetune/$f", app)
-    end
+    end    
+    copy("notebooks/julia_utils", app)
+    copy("secrets", app)
 end
 
 function build(basedir::String, name::String, tag::String, args::String)
-    run(`docker build -t $name $basedir`)
+    run(`docker build --network host -t $name $basedir`)
     repo = read("secrets/gcp.docker.txt", String)
     project = read("secrets/gcp.project.txt", String)
     region = read("secrets/gcp.region.txt", String)
@@ -54,13 +64,14 @@ function build(basedir::String, name::String, tag::String, args::String)
 end
 
 cd("../../..")
-const basedir = "data/package/embed"
+basedir = "data/package/compute"
 if ispath(basedir)
     rm(basedir; recursive = true)
 end
 mkpath(basedir)
-cp("notebooks/Package/Embed/app", basedir, force = true)
-embed_py(basedir)
+cp("notebooks/Package/Compute/app", basedir, force = true)
+layer4(basedir)
+compute(basedir)
 const tag = read("data/finetune/latest", String)
 const bluegreen = read("data/finetune/bluegreen", String)
-build(basedir, "embed", tag, "--cpu=8 --memory=16Gi")
+build(basedir, "compute", tag, "--cpu=2 --memory=8Gi")

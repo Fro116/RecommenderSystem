@@ -10,6 +10,7 @@ function blue_green_deploy()
     cmds = [
         "gcloud auth login --cred-file=../../secrets/gcp.auth.json --quiet",
         "gcloud beta run services update embed-$disable --scaling=0 --region $region",
+        "gcloud beta run services update compute-$disable --scaling=0 --region $region",
         "gcloud auth revoke",
     ]
     cmd = join(cmds, " && ")

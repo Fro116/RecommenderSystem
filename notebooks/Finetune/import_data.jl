@@ -2,6 +2,7 @@ import CSV
 import DataFrames
 import Dates
 import Glob
+import HTTP
 import Memoize: @memoize
 import MsgPack
 import Random
@@ -13,16 +14,20 @@ const METRICS = ["rating", "watch", "plantowatch", "drop"]
 const SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
 const datadir = "../../data/finetune"
 
-function blue_green_tag(date::AbstractString)
-    # TODO programatically get the last deploy
-    date = Dates.Date(parse(Int, date[1:4]), parse(Int, date[5:6]), parse(Int, date[7:8]))
-    epoch_date = Dates.Date(2000, 1, 1)
-    days_since_epoch = Dates.value(date - epoch_date)
-    if iseven(days_since_epoch)
-        return "blue"
-    else
-        return "green"
+function blue_green_tag()
+    curtag = nothing
+    for x in ["blue", "green"]
+        url = read("../../secrets/url.compute.$x.txt", String)
+        r = HTTP.get("$url/ready", status_exception = false)
+        if !HTTP.iserror(r)
+            curtag = x
+            break
+        end
     end
+    if isnothing(curtag)
+        curtag = "blue"
+    end
+    Dict("blue" => "green", "green" => "blue")[curtag]
 end
 
 function download_data()
@@ -54,7 +59,7 @@ function download_data()
         write(f, date)
     end
     open("$datadir/bluegreen", "w") do f
-        write(f, blue_green_tag(date))
+        write(f, blue_green_tag())
     end
 end
 

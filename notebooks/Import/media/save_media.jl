@@ -21,6 +21,7 @@ function backup()
     mediums = ["manga", "anime"]
     files = vcat(
         ["$(source)_$(medium).csv" for source in sources for medium in mediums],
+        ["$(source)_media_relations.csv" for source in sources],
         ["$medium.groups.csv" for medium in mediums]
     )
     for fn in files

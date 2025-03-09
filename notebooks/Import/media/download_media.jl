@@ -151,7 +151,7 @@ function import_mal(medium)
         end
         r = get(typemap, x, missing)
         if ismissing(r)
-            logerror("import_mal: unknown relation $x")
+            logerror("import_mal: unknown mediatype $x")
         end
         r
     end
@@ -288,7 +288,7 @@ function import_anilist(medium)
         end
         r = get(typemap, x, missing)
         if ismissing(r)
-            logerror("import_anilist: unknown relation $x")
+            logerror("import_anilist: unknown mediatype $x")
         end
         r
     end
@@ -410,7 +410,7 @@ function import_kitsu(medium)
         end
         r = get(typemap, x, missing)
         if ismissing(r)
-            logerror("import_kitsu: unknown relation $x")
+            logerror("import_kitsu: unknown mediatype $x")
         end
         r
     end

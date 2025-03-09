@@ -93,7 +93,7 @@ function compute(state)
     medium = state["medium"]
     project(user, name) = sum(
         (registry[kr]["weight"] * convert.(Float32, user[ke]) .+ registry[kr]["bias"]) *
-        registry[name][kr] for ((ke, kr), w) in registry[name]
+        w for ((ke, kr), w) in registry[name]
     )
     log10(x) = log(x) / log(10)
     x = zeros(Float32, num_items(medium))
@@ -127,7 +127,7 @@ function compute(state)
     N = 1000
     ids = sortperm(x, rev = true) .- 1
     for i in ids
-        if length(ret) == Nemb
+        if length(ret) == N
             break
         end
         if i ∉ keys(info)

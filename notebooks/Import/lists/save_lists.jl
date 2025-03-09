@@ -10,7 +10,7 @@ include("../../julia_utils/database.jl")
 include("../../julia_utils/multithreading.jl")
 include("../../julia_utils/scheduling.jl")
 include("../../julia_utils/stdout.jl")
-const datadir = "../../../data/lists"
+const datadir = "../../../data/import/lists"
 const dbschema = "../../Collect/schema.txt"
 
 function download_users(source::String)
