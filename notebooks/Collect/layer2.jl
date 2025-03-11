@@ -1747,6 +1747,9 @@ function parse_animeplanet_response(resource::Resource, r::Response, found::Func
     if occursin("<title>Just a moment...</title>", text)
         return HTTP.Response(401, [])
     end
+    if r.status >= 400
+        return HTTP.Response(r.status, [])
+    end
     if !found(text)
         return HTTP.Response(404, [])
     end
@@ -2076,6 +2079,10 @@ function animeplanet_get_feed(
     medium::String,
     username::String,
 )
+    logged_in = false
+    if !logged_in
+        return HTTP.Response(200, encode(Dict(), :msgpack)...)
+    end
     params = Dict("type" => medium)
     url = string(
         HTTP.URI("https://www.anime-planet.com/users/$username/feed", query = params),
@@ -2083,7 +2090,7 @@ function animeplanet_get_feed(
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
     text = parse_animeplanet_response(resource, r, x -> !occursin("<h1>You searched for $username</h1>", x))
     if text isa HTTP.Response
-        logstatus("animeplanet_get_media", text, url)
+        logstatus("animeplanet_get_feed", text, url)
         return text
     end
     feed_entries = [x for x in split(text, "\n") if occursin("data-timestamp", x)]

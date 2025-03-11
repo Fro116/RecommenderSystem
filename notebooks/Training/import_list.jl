@@ -258,7 +258,7 @@ function import_animeplanet_user(data)
             "status" => STATUS_MAP[status_map[x["status"]]],
             "rating" => convert(Float32, something(x["score"], 0)) * 2,
             "updated_at" => something(x["updated_at"], 0),
-            "update_order" => convert(Int32, something(x["item_order"], 0)),
+            "update_order" => convert(Int32, something(x["item_order"], Inf)),
             "progress" => get_progress(
                 source,
                 x["medium"],
@@ -270,6 +270,12 @@ function import_animeplanet_user(data)
         )
         create_item!(source, x["medium"], x["itemid"], item)
         push!(items, item)
+    end
+    sort!(items, by=x -> (x["medium"], -x["update_order"]))
+    update_order = 1
+    for x in items
+        x["update_order"] = update_order
+        update_order += 1
     end
     sort!(items, by=x -> (x["updated_at"], x["update_order"]))
     Dict("user" => user, "items" => items)

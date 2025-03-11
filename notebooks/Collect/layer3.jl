@@ -23,8 +23,11 @@ function request(url::String, query::String, params::Dict)
     )
     for delay in delays
         r = HTTP.post(url, encode(params, :msgpack)..., status_exception = false)
-        if r.status < 400 || r.status in [400, 401, 403, 404]
-            # 400, 401 -> auth error
+        if r.status in [400, 401]
+            logerror("auth error for $url $params")
+            return r
+        end
+        if r.status < 400 || r.status in [403, 404]
             # 403 -> list is private
             # 404 -> invalid user
             return r
