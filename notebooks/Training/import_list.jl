@@ -258,7 +258,7 @@ function import_animeplanet_user(data)
             "status" => STATUS_MAP[status_map[x["status"]]],
             "rating" => convert(Float32, something(x["score"], 0)) * 2,
             "updated_at" => something(x["updated_at"], 0),
-            "update_order" => convert(Int32, something(x["item_order"], Inf)),
+            "update_order" => something(x["item_order"], Inf),
             "progress" => get_progress(
                 source,
                 x["medium"],
