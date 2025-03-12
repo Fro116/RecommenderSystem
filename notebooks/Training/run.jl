@@ -1,40 +1,35 @@
-import Dates
 import JSON3
-include("../julia_utils/multithreading.jl")
-include("../julia_utils/scheduling.jl")
 include("../julia_utils/stdout.jl")
 
 function get_gpu_args()
     image = "us-docker.pkg.dev/deeplearning-platform-release/gcr.io/pytorch-cu124.2-4.py310"
     envvars = readlines("../../secrets/r2.auth.txt")
     script = [
-        "wget https://github.com/Fro116/RecommenderSystem/raw/main/notebooks/Training/entrypoint.sh",
-        "chmod +x entrypoint.sh",
-        "./entrypoint.sh",
+        "wget https://github.com/Fro116/RecommenderSystem/raw/main/notebooks/Training/entrypoint.sh -O startup.sh",
+        "chmod +x startup.sh",
+        "./startup.sh",
     ]
     entrypoint = join(vcat(envvars, script), " && ")
     image, entrypoint
 end
 
-function has_active_sf_cluster()
-    read_json(cmd) = JSON3.read(replace(read(cmd, String), r"(\w+): " => s"\"\1\": "))
-    contracts = read_json(`sf contracts list --json`)
-    return !isempty(contracts)
-end
-
 function get_active_sf_cluster()
     read_json(cmd) = JSON3.read(replace(read(cmd, String), r"(\w+): " => s"\"\1\": "))
-    contracts = read_json(`sf contracts list --json`)
-    cluster_id = first(contracts)["cluster_id"]
-    clusters = read_json(`sf clusters list --json`)
-    for x in clusters
-        if x["contract"]["cluster_id"] == cluster_id
-            return x["name"]
+    try
+        contracts = read_json(`sf contracts list --json`)
+        cluster_id = first(contracts)["cluster_id"]
+        clusters = read_json(`sf clusters list --json`)
+        for x in clusters
+            if x["contract"]["cluster_id"] == cluster_id
+                return x["name"]
+            end
         end
+    catch e
+        return nothing
     end
 end
 
-function start_sfcompute()
+function start_sfcompute(gpuhour_price)
     image, entrypoint = get_gpu_args()
     yaml = read("entrypoint.yaml", String)
     yaml = replace(yaml, "{IMAGE}" => image, "{ENTRYPOINT}" => entrypoint)
@@ -42,33 +37,37 @@ function start_sfcompute()
     open(fn, "w") do f
         write(f, yaml)
     end
-    started_gpu = false
-    h = 8
-    if has_active_sf_cluster()
-        logerror("start_sfcompute already launched")
+    if !isnothing(get_active_sf_cluster())
+        logerror("start_sfcompute already launched cluster")
         return false
     end
+    should_retry = true
     try
-        run(`sf buy -d $(h)hr -n 8 -p 3 -y`)
-        started_gpu = true
+        h = 8
+        gpuhour_price = string(round(gpuhour_price, digits=2))
+        run(`sf buy -d $(h)hr -n 8 -p $gpuhour_price -y`)
         logtag("RUN", "started sfcompute")
         sleep(60)
         cluster = get_active_sf_cluster()
-        @assert !isnothing(cluster)
+        if isnothing(cluster)
+            return should_retry # order did not get filled
+        end
+        should_retry = false
         run(`sf clusters users add --cluster $cluster --user myuser`)
         run(`kubectl apply -f $fn`)
         sleep(h * 3600)
-        return started_gpu
+        return should_retry
     catch e
         logerror("start_sfcompute error $e")
-        return started_gpu
+        return should_retry
     end
 end
 
 function start_gpu()
+    price = 3
     while true
-        success = start_sfcompute()
-        if success
+        should_retry = start_sfcompute(price)
+        if !should_retry
             return
         end
         logtag("RUN", "waiting for available gpus...")
@@ -80,6 +79,7 @@ function pretrain()
     run(`julia import_data.jl`)
     run(`julia baseline.jl`)
     run(`julia -t auto bagofwords.jl --pretrain`)
+    run(`julia -t auto transformer.jl`)
     start_gpu()
     latest = read("../../data/training/latest", String)
     success = read(
@@ -97,12 +97,4 @@ function pretrain()
     run(`sh -c $cleanup`)
 end
 
-function train()
-    if Dates.dayofmonth(Dates.now()) in [1, 9, 15, 22]
-        pretrain()
-    end
-    cmd = "cd ../Finetune && julia run.jl"
-    run(`sh -c $cmd`)
-end
-
-@scheduled "TRAIN" "7:00" @handle_errors train()
+pretrain()

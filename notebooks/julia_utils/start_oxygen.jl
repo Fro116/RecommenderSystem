@@ -40,4 +40,15 @@ Oxygen.@get "/shutdown" function shutdown(req::HTTP.Request)
     Oxygen.terminate()
 end
 
-Oxygen.serveparallel(; host = "0.0.0.0", port = PORT, access_log = nothing, metrics=false, show_banner=false)
+if ! @isdefined MIDDLEWARE
+    MIDDLEWARE = []
+end
+Oxygen.serveparallel(;
+    host = "0.0.0.0",
+    port = PORT,
+    access_log = nothing,
+    metrics=false,
+    show_banner=false,
+    middleware=MIDDLEWARE,
+)
+

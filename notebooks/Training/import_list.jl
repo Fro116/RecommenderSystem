@@ -25,7 +25,7 @@ const SOURCE_MAP = Dict{String,Int32}(
     "animeplanet" => 3,
 )
 
-@memoize function get_media(medium)
+@memoize function get_media_progress(medium)
     df = CSV.read(
         "$datadir/$medium.csv",
         DataFrames.DataFrame,
@@ -70,7 +70,7 @@ function decompress(x::Vector)
 end
 
 function get_progress(source, medium, itemid, episodes, chapters, volumes)::Float32
-    df = get_media(medium)
+    df = get_media_progress(medium)
     k = (source, string(itemid))
     if k ∉ keys(df)
         return 0
@@ -115,7 +115,7 @@ function create_item!(source, medium, itemid, item)
         logerror("invalid progress for $item")
         item["progress"] = 0
     end
-    d = get(get_media(medium), (source, string(itemid)), Dict())
+    d = get(get_media_progress(medium), (source, string(itemid)), Dict())
     item["distinctid"] = get(d, "distinctid", 0)
     item["matchedid"] = get(d, "matchedid", 0)
 end

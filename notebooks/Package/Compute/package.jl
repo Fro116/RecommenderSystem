@@ -31,7 +31,7 @@ function compute(basedir::String)
     )
     for f in files
         copy("data/finetune/$f", app)
-    end    
+    end
     copy("notebooks/julia_utils", app)
     copy("secrets", app)
 end
@@ -45,7 +45,7 @@ function build(basedir::String, name::String, tag::String, args::String)
     run(`docker push $repo/$name-$bluegreen:$tag`)
     cmds = [
         "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet",
-        "gcloud run deploy {app} --image={repo}/{app}:{tag} --region={region} --project={project} {args}",
+        "gcloud run deploy {app} --image={repo}/{app}:{tag} --region={region} --project={project} $args",
         "gcloud beta run services update {app} --scaling=auto --region {region}",
         "gcloud run services update {app} --min 1 --region {region}",
     ]

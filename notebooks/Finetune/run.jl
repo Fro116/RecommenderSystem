@@ -30,8 +30,10 @@ function finetune()
     end
     run(`python register.py`)
     run(`julia regress.jl`)
-    cmd = "cd ../Package/Embed && julia package.jl"
-    run(`sh -c $cmd`)
+    for app in ["Embed", "Compute", "Api"]
+        cmd = "cd ../Package/$app && julia package.jl"
+        run(`sh -c $cmd`)
+    end
     blue_green_deploy()
 end
 

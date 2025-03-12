@@ -54,7 +54,7 @@ function build(basedir::String, name::String, tag::String, args::String)
     run(`docker push $repo/$name:$tag`)
     cmds = [
         "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet",
-        "gcloud run deploy {app} --image={repo}/{app}:{tag} --region={region} --project={project} {args}",
+        "gcloud run deploy {app} --image={repo}/{app}:{tag} --region={region} --project={project} $args",
     ]
     deploy = replace(
         join(cmds, " && "),
