@@ -1,0 +1,120 @@
+/* Global resets */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+}
+
+/* Container */
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* Header and search form */
+header {
+  padding: 20px;
+  text-align: center;
+  border-bottom: 1px solid #ccc;
+}
+
+header form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+header input {
+  padding: 10px;
+  width: 80%;
+  font-size: 16px;
+  text-align: center;
+  margin-bottom: 10px;
+}
+
+/* Source buttons */
+.source-buttons {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.source-buttons button {
+  padding: 10px 20px;
+  margin: 5px;
+  font-size: 16px;
+  cursor: pointer;
+  border: none;
+  border-radius: 4px;
+}
+
+/* Card type toggle */
+.card-toggle {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+}
+
+.card-toggle button {
+  padding: 8px 16px;
+  margin: 0 5px;
+  font-size: 14px;
+  cursor: pointer;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+/* Grid view for cards */
+.grid-view {
+  flex: 1;
+  overflow-y: auto;
+  width: 90%;
+  align-self: center;
+  margin-top: 20px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+/* Card styling */
+.card {
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background-color: #f9f9f9;
+}
+
+.card h4 {
+  margin: 0 0 5px 0;
+  font-size: 16px;
+}
+
+.card p {
+  margin: 2px 0;
+  line-height: 1.2;
+  font-size: 14px;
+}
+
+/* Mobile adjustments */
+@media (max-width: 600px) {
+  header input {
+    width: 90%;
+    font-size: 14px;
+  }
+  
+  .source-buttons button {
+    flex: 1 1 45%;
+    margin: 5px;
+    font-size: 14px;
+  }
+  
+  .card-toggle button {
+    font-size: 12px;
+    padding: 6px 12px;
+  }
+}

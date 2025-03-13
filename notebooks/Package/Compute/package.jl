@@ -24,7 +24,6 @@ function compute(basedir::String)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     files = vcat(
         ["$m.csv" for m in mediums],
-        ["$(s)_$(m).csv" for s in sources for m in mediums],
         ["latest", "bluegreen", "model.registry.jld2"],
     )
     for f in files

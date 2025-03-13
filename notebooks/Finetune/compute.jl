@@ -24,29 +24,15 @@ standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
 end
 
-@memoize function get_media_info(source, medium)
-    df = CSV.read("$datadir/$(source)_$(medium).csv", DataFrames.DataFrame)
-    info = Dict()
-    for i = 1:DataFrames.nrow(df)
-        item = Dict{String, String}("title" => df.title[i], "source" => source)
-        info[string(df.itemid[i])] = item
-    end
-    info
-end
-
 @memoize function get_media_info(medium)
     info = Dict()
     m = Dict(0 => "manga", 1 => "anime")[medium]
-    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame)
+    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String)
     for i = 1:DataFrames.nrow(df)
         if df.matchedid[i] == 0 || df.matchedid[i] in keys(info)
             continue
         end
-        try
-            info[df.matchedid[i]] = get_media_info(df.source[i], m)[string(df.itemid[i])]
-        catch
-            logerror("get_media_info: invalid $((df.source[i], m, df.itemid[i]))")
-        end
+        info[df.matchedid[i]] = Dict("title" => df.title[i], "source" => df.source[i])
     end
     info
 end
