@@ -17,7 +17,7 @@ const datadir = "../../data/finetune"
 function blue_green_tag()
     curtag = nothing
     for x in ["blue", "green"]
-        url = read("../../secrets/url.compute.$x.txt", String)
+        url = read("../../secrets/url.embed.$x.txt", String)
         r = HTTP.get("$url/ready", status_exception = false)
         if !HTTP.iserror(r)
             curtag = x

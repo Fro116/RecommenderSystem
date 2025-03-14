@@ -1,5 +1,6 @@
 module embed
 
+import Base64
 import Oxygen
 import JLD2
 import NNlib: logsoftmax, sigmoid
@@ -75,7 +76,7 @@ Oxygen.@post "/add_user" function add_user(r::HTTP.Request)::HTTP.Response
     HTTP.Response(200, encode(d_embed, :msgpack)...)
 end
 
-function compute(state)
+function compute(state, pagination)
     medium = state["medium"]
     project(user, name) = sum(
         (registry[kr]["weight"] * convert.(Float32, user[ke]) .+ registry[kr]["bias"]) *
@@ -109,24 +110,27 @@ function compute(state)
         # TODO constrain by source
     end
     info = get_media_info(medium)
-    ret = []
-    N = 1000
     ids = sortperm(x, rev = true) .- 1
-    for i in ids
-        if length(ret) == N
-            break
-        end
-        if i ∉ keys(info)
-            continue
-        end
-        push!(ret, info[i])
+    ids = [i for i in ids if i in keys(info) && x[i+1] > -Inf]
+    total = length(ids)
+    sidx = pagination["offset"] + 1
+    eidx = pagination["offset"] + pagination["limit"]
+    if sidx > total
+        view = []
+    else
+        view = [info[i] for i in ids[sidx:min(eidx, total)]]
     end
-    ret
+    view, total
 end
 
 Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     d = decode(r)
     state = d["state"]
+    if isempty(d["state"])
+        state = Dict{String, Any}("medium" => 1)
+    else
+        state = MsgPack.unpack(Base64.base64decode(d["state"]))
+    end
     action = d["action"]
     if action["type"] == "add_user"
         username = action["username"]
@@ -137,18 +141,30 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
             status_exception = false,
         )
         if HTTP.iserror(r_embed)
-            return HTTP.Response(r.status)
+            return HTTP.Response(r_embed.status)
         end
         d_embed = decode(r_embed)
         if "users" ∉ keys(state)
             state["users"] = []
         end
         push!(state["users"], d_embed)
+    elseif action["type"] == "set_media"
+        medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
+        state["medium"] = medium
     else
         @assert false
     end
-    ret = Dict("state" => state, "view" => compute(state))
-    HTTP.Response(200, encode(ret, :msgpack)...)
+    view, total = compute(state, d["pagination"])
+    ret = Dict(
+        "state" => Base64.base64encode(MsgPack.pack(state)),
+        "view" => view,
+        "total" => total,
+    )
+    encoding = nothing
+    if occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
+        encoding = :gzip
+    end
+    HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
 function compile(port::Integer)
@@ -162,23 +178,47 @@ function compile(port::Integer)
             sleep(1)
         end
     end
-    state = Dict("medium" => 0)
-    for (source, username) in zip(profiles.source, profiles.username)
-        action = Dict("type" => "add_user", "source" => source, "username" => username)
+    state = ""
+    pagination = Dict("offset" => 0,  "limit" => 50)
+    function apply_action(action)
         r = HTTP.post(
             "http://localhost:$PORT/update",
-            encode(Dict("state" => state, "action" => action), :msgpack)...,
+            encode(Dict("state" => state, "action" => action, "pagination" => pagination), :msgpack)...,
             status_exception = false,
         )
         if HTTP.iserror(r)
             logerror("error $(r.status)")
-            continue
+            return
         end
         d = decode(r)
         state = d["state"]
-        state["medium"] = 1 - state["medium"] # TODO change state
+    end
+    for (source, username) in zip(profiles.source, profiles.username)
+        apply_action(Dict("type" => "add_user", "source" => source, "username" => username))
+    end
+    for m in ["Manga", "Anime"]
+        apply_action(Dict("type" => "set_media", "medium" => m))
     end
 end
+
+const allowed_origins = [ "Access-Control-Allow-Origin" => "*" ]
+const cors_headers = [
+    allowed_origins...,
+    "Access-Control-Allow-Headers" => "*",
+    "Access-Control-Allow-Methods" => "GET, POST"
+]
+function CorsHandler(handle)
+    return function (req::HTTP.Request)
+        if HTTP.method(req) == "OPTIONS"
+            return HTTP.Response(200, cors_headers)
+        else
+            r = handle(req)
+            append!(r.headers, allowed_origins)
+            return r
+        end
+    end
+end
+const MIDDLEWARE = [CorsHandler]
 
 include("../julia_utils/start_oxygen.jl")
 

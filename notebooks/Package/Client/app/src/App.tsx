@@ -13,7 +13,7 @@ interface AddUserPayload {
   state: string;
   action: {
     type: 'add_user';
-    source: SourceType;
+    source: string;
     username: string;
   };
 }
@@ -28,18 +28,24 @@ interface MediaTypePayload {
 
 type Payload = AddUserPayload | MediaTypePayload;
 
+const LIMIT = 50;
+
 const App: React.FC = () => {
   const [query, setQuery] = useState<string>('');
   const [activeSource, setActiveSource] = useState<SourceType>('MyAnimeList');
   const [results, setResults] = useState<Result[]>([]);
+  const [totalResults, setTotalResults] = useState<number>(0);
   const [showButtons, setShowButtons] = useState<boolean>(true);
   const [cardType, setCardType] = useState<CardType>('Anime');
   const [apiState, setApiState] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [loadingMore, setLoadingMore] = useState<boolean>(false);
 
   const searchRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const buttonContainerRef = useRef<HTMLDivElement>(null);
+  const gridViewRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -54,20 +60,63 @@ const App: React.FC = () => {
         }
       }
     };
-
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
   }, [results]);
 
-  const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setQuery(e.target.value);
+  // IntersectionObserver for infinite scrolling with a threshold of 0.1.
+  useEffect(() => {
+    if (!loadMoreRef.current || results.length >= totalResults) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && !loadingMore) {
+            setLoadingMore(true);
+            const offset = results.length;
+            const payload = currentPayloadForPagination();
+            fetchResults(payload, offset, true).finally(() => setLoadingMore(false));
+          }
+        });
+      },
+      {
+        root: gridViewRef.current,
+        threshold: 0.1,
+      }
+    );
+    observer.observe(loadMoreRef.current);
+    return () => {
+      if (loadMoreRef.current) observer.unobserve(loadMoreRef.current);
+    };
+  }, [results, totalResults, loadingMore]);
+
+  // Build payload for paginated requests.
+  const currentPayloadForPagination = (): Payload => {
+    if (results.length > 0) {
+      return {
+        state: apiState,
+        action: {
+          type: 'set_media',
+          medium: cardType,
+        },
+      };
+    }
+    return {
+      state: '',
+      action: {
+        type: 'add_user',
+        source: activeSource,
+        username: query,
+      },
+    };
   };
 
-  const fetchResults = (payload: Payload) => {
-    return fetch('https://api-2ppiozhuba-uc.a.run.app/update', {
+  // Updated fetchResults now resets scroll and, for search actions, resets the media button.
+  const fetchResults = (payload: Payload, offset: number = 0, append: boolean = false) => {
+    const extendedPayload = { ...payload, pagination: { offset, limit: LIMIT } };
+    return fetch('https://api.recs.moe/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(extendedPayload),
     })
       .then((response) => {
         if (!response.ok) {
@@ -77,7 +126,20 @@ const App: React.FC = () => {
       })
       .then((data) => {
         setApiState(data.state);
-        setResults(data.view);
+        setTotalResults(data.total);
+        if (append) {
+          setResults((prev) => [...prev, ...data.view]);
+        } else {
+          setResults(data.view);
+          // Reset scroll position when a new view is loaded.
+          if (gridViewRef.current) {
+            gridViewRef.current.scrollTop = 0;
+          }
+          // If the action is an "add_user" (i.e. a new search), then reset media type button.
+          if (extendedPayload.action.type === 'add_user') {
+            setCardType('Anime');
+          }
+        }
         setErrorMessage('');
         return data;
       })
@@ -87,9 +149,12 @@ const App: React.FC = () => {
       });
   };
 
+  const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    setQuery(e.target.value);
+  };
+
   const handleSearch = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    // If query is empty, do nothing.
     if (!query.trim()) {
       return;
     }
@@ -105,17 +170,16 @@ const App: React.FC = () => {
       state: '',
       action: {
         type: 'add_user',
-        source: source_map[activeSource] as SourceType,
+        source: source_map[activeSource],
         username: currentQuery,
       },
     };
 
-    // Only clear the search text after results are fetched (cards are shown)
-    fetchResults(payload).then(() => {
+    // Trigger new search without immediately resetting the media type.
+    fetchResults(payload, 0, false).then(() => {
       setQuery('');
     });
     setShowButtons(false);
-
     if (inputRef.current) {
       inputRef.current.blur();
     }
@@ -134,7 +198,8 @@ const App: React.FC = () => {
         medium: type,
       },
     };
-    fetchResults(payload);
+    // Media type change: fetch new results.
+    fetchResults(payload, 0, false);
   };
 
   const sources: SourceType[] = ['MyAnimeList', 'AniList', 'Kitsu', 'Anime-Planet'];
@@ -213,37 +278,39 @@ const App: React.FC = () => {
       )}
 
       {results.length > 0 && (
-        <div className="card-toggle">
-          <button
-            onClick={() => handleMediaTypeChange('Anime')}
-            style={{
-              backgroundColor: cardType === 'Anime' ? '#007BFF' : '#fff',
-              color: cardType === 'Anime' ? '#fff' : '#000',
-            }}
-          >
-            Anime
-          </button>
-          <button
-            onClick={() => handleMediaTypeChange('Manga')}
-            style={{
-              backgroundColor: cardType === 'Manga' ? '#007BFF' : '#fff',
-              color: cardType === 'Manga' ? '#fff' : '#000',
-            }}
-          >
-            Manga
-          </button>
-        </div>
-      )}
-
-      {results.length > 0 && (
-        <div className="grid-view">
-          {results.map((item, index) => (
-            <div key={index} className="card">
-              <h4>{item.title}</h4>
-              <p>Source: {item.source}</p>
-            </div>
-          ))}
-        </div>
+        <>
+          <div className="card-toggle">
+            <button
+              onClick={() => handleMediaTypeChange('Anime')}
+              style={{
+                backgroundColor: cardType === 'Anime' ? '#007BFF' : '#fff',
+                color: cardType === 'Anime' ? '#fff' : '#000',
+              }}
+            >
+              Anime
+            </button>
+            <button
+              onClick={() => handleMediaTypeChange('Manga')}
+              style={{
+                backgroundColor: cardType === 'Manga' ? '#007BFF' : '#fff',
+                color: cardType === 'Manga' ? '#fff' : '#000',
+              }}
+            >
+              Manga
+            </button>
+          </div>
+          <div className="grid-view" ref={gridViewRef}>
+            {results.map((item, index) => (
+              <div key={index} className="card">
+                <h4>{item.title}</h4>
+                <p>Source: {item.source}</p>
+              </div>
+            ))}
+            {results.length < totalResults && (
+              <div ref={loadMoreRef} style={{ height: '20px' }}></div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );

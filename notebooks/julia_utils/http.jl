@@ -1,6 +1,7 @@
 import HTTP
 import JSON3
 import MsgPack
+import CodecZlib
 import CodecZstd
 
 function encode(d::Dict, content_type::Symbol, encoding::Union{Symbol, Nothing} = nothing)
@@ -16,6 +17,9 @@ function encode(d::Dict, content_type::Symbol, encoding::Union{Symbol, Nothing} 
     if encoding == :zstd
         headers["Content-Encoding"] = "zstd"
         body = CodecZstd.transcode(CodecZstd.ZstdCompressor, body)
+    elseif encoding == :gzip
+        headers["Content-Encoding"] = "gzip"
+        body = CodecZstd.transcode(CodecZlib.GzipCompressor, body)
     else
         @assert isnothing(encoding)
     end
@@ -26,6 +30,8 @@ function decode(r::HTTP.Message)::Dict
     body = r.body
     if HTTP.headercontains(r, "Content-Encoding", "zstd")
         body = CodecZstd.transcode(CodecZstd.ZstdDecompressor, body)
+    elseif HTTP.headercontains(r, "Content-Encoding", "gzip")
+        nothing # HTTP.jl automatically decompresses gzip
     else
         @assert !HTTP.hasheader(r, "Content-Encoding")
     end

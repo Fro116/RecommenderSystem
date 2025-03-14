@@ -38,8 +38,8 @@ function build(basedir::String, name::String, tag::String, args::String)
     repo = read("secrets/gcp.docker.txt", String)
     project = read("secrets/gcp.project.txt", String)
     region = read("secrets/gcp.region.txt", String)
-    run(`docker tag $name $repo/$name-$bluegreen:$tag`)
-    run(`docker push $repo/$name-$bluegreen:$tag`)
+    run(`docker tag $name $repo/$name:$tag`)
+    run(`docker push $repo/$name:$tag`)
     cmds = [
         "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet",
         "gcloud run deploy {app} --image={repo}/{app}:{tag} --region={region} --project={project} $args",
@@ -51,7 +51,7 @@ function build(basedir::String, name::String, tag::String, args::String)
         "{repo}" => repo,
         "{project}" => project,
         "{region}" => region,
-        "{app}" => "$name-$bluegreen",
+        "{app}" => name,
         "{tag}" => tag,
         "{args}" => args,
     )
@@ -69,5 +69,4 @@ cp("notebooks/Package/Compute/app", basedir, force = true)
 layer4(basedir)
 compute(basedir)
 const tag = read("data/finetune/latest", String)
-const bluegreen = read("data/finetune/bluegreen", String)
 build(basedir, "compute", tag, "--set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --cpu=2 --memory=8Gi")
