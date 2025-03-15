@@ -125,6 +125,12 @@ function import_mal(medium)
         end
         JSON3.write(titles)
     end
+    function english_title(x)
+        if ismissing(x)
+            return missing
+        end
+        get(JSON3.read(x), "en", missing)
+    end
     function mediatype(x)
         typemap = Dict(
             #anime
@@ -222,6 +228,7 @@ function import_mal(medium)
     ret[!, "itemid"] = df.itemid
     ret[!, "title"] = df.title
     ret[!, "alternative_titles"] = alternative_titles.(df.alternative_titles)
+    ret[!, "english_title"] = english_title.(df.alternative_titles)
     ret[!, "mediatype"] = mediatype.(df.media_type)
     ret[!, "startdate"] = df.start_date
     ret[!, "enddate"] = df.end_date
@@ -269,6 +276,14 @@ function import_anilist(medium)
         end
         r = [x for x in r if !isnothing(x)]
         JSON3.write(r)
+    end
+    function english_title(title, synonyms)
+        try
+            json = JSON3.read(title)
+            return something(get(json, "english", missing), missing)
+        catch
+            return missing
+        end
     end
     function mediatype(x)
         typemap = Dict(
@@ -361,6 +376,7 @@ function import_anilist(medium)
     ret[!, "title"] = title.(df.title)
     ret[!, "alternative_titles"] =
         [alternative_titles(x...) for x in zip(df.title, df.synonyms)]
+    ret[!, "english_title"] = english_title.(df.title)
     ret[!, "mediatype"] = mediatype.(df.mediatype)
     ret[!, "startdate"] = date.(df.startdate)
     ret[!, "enddate"] = date.(df.enddate)
@@ -384,7 +400,15 @@ function import_kitsu(medium)
     function alternative_titles(x)
         try
             json = JSON3.read(x)
-            JSON3.write([x for x in values(json) if !isempty(x)])
+            return JSON3.write([x for x in values(json) if !isempty(x)])
+        catch
+            return missing
+        end
+    end
+    function english_title(x)
+        try
+            json = JSON3.read(x)
+            return get(json, "en")
         catch
             return missing
         end
@@ -446,6 +470,7 @@ function import_kitsu(medium)
     ret[!, "itemid"] = df.itemid
     ret[!, "title"] = df.canonicaltitle
     ret[!, "alternative_titles"] = alternative_titles.(df.titles)
+    ret[!, "english_title"] = english_title.(df.titles)
     ret[!, "mediatype"] = mediatype.(df.subtype)
     ret[!, "startdate"] = date.(df.startdate)
     ret[!, "enddate"] = date.(df.enddate)
@@ -648,6 +673,7 @@ function import_animeplanet(medium)
     ret[!, "itemid"] = df.itemid
     ret[!, "title"] = mediatitle.(df.title)
     ret[!, "alternative_titles"] = alternative_titles.(df.alttitle)
+    ret[!, "english_title"] .= missing
     ret[!, "mediatype"] = mediatype.(df[:, mediatype_col[medium]], df.genres)
     ret[!, "startdate"] = startdate.(df.year)
     ret[!, "enddate"] = enddate.(df.year)
@@ -675,7 +701,7 @@ function save_media()
         import_mal(m)
         import_anilist(m)
         import_kitsu(m)
-        import_animeplanet(m)        
+        import_animeplanet(m)
     end
 end
 

@@ -25,15 +25,68 @@ standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
 end
 
+function get_url(source, medium, itemid)
+    medium_map = Dict(0 => "manga", 1 => "anime")
+    source_map = Dict(
+        "mal" => "https://myanimelist.net",
+        "anilist" => "https://anilist.co",
+        "kitsu" => "https://kitsu.app",
+        "animeplanet" => "https://anime-planet.com",
+    )
+    join([source_map[source], medium_map[medium], itemid], "/")
+end
+
 @memoize function get_media_info(medium)
     info = Dict()
     m = Dict(0 => "manga", 1 => "anime")[medium]
     df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String)
+    optint(x) = x != 0 ? x : missing
+    function studios(x)
+        if ismissing(x) || isempty(x)
+            return missing
+        end
+        join(JSON3.read(x), ", ")
+    end
+    function duration(x)
+        if ismissing(x) || round(x) == 0
+            return missing
+        end
+        d = []
+        if x > 60
+            hours = Int(div(x, 60))
+            push!(d, "$hours hr.")
+            x -= hours * 60
+        end
+        if x >= 1
+            minutes = Int(floor(x))
+            push!(d, "$minutes min.")
+            x -= minutes
+        end
+        if isempty(d)
+            seconds = Int(round(x * 60))
+            push!(d, "$seconds sec.")
+        end
+        join(d, " ")
+    end
     for i = 1:DataFrames.nrow(df)
         if df.matchedid[i] == 0 || df.matchedid[i] in keys(info)
             continue
         end
-        info[df.matchedid[i]] = Dict("title" => df.title[i], "source" => df.source[i])
+        info[df.matchedid[i]] = Dict(
+            "title" => df.title[i],
+            "url" => get_url(df.source[i], medium, df.itemid[i]),
+            "type" => df.mediatype[i],
+            "startdate" => df.startdate[i],
+            "enddate" => df.enddate[i],
+            "episodes" => optint(df.episodes[i]),
+            "duration" => duration(df.duration[i]),
+            "chapters" => optint(df.chapters[i]),
+            "volumes" => optint(df.volumes[i]),
+            "status" => df.status[i],
+            "season" => df.season[i],
+            "studios" => studios(df.studios[i]),
+            "source" => df.source_material[i],
+        )
     end
     info
 end

@@ -3,7 +3,18 @@ import './App.css';
 
 interface Result {
   title: string;
-  source: string;
+  url: string;
+  source: string | null;
+  type: string;
+  episodes?: number | null;
+  duration?: string | null;
+  volumes?: number | null;
+  chapters?: number | null;
+  status?: string;
+  season?: string;
+  startdate?: string;
+  enddate?: string;
+  studios?: string;
 }
 
 type SourceType = 'MyAnimeList' | 'AniList' | 'Kitsu' | 'Anime-Planet';
@@ -47,6 +58,13 @@ const App: React.FC = () => {
   const gridViewRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
+  const placeholders: Record<SourceType, string> = {
+    MyAnimeList: 'type a MyAnimeList username',
+    AniList: 'type an AniList username',
+    Kitsu: 'type a Kitsu username',
+    'Anime-Planet': 'type an Anime-Planet username',
+  };
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (results.length > 0) {
@@ -64,7 +82,7 @@ const App: React.FC = () => {
     return () => document.removeEventListener('click', handleClickOutside);
   }, [results]);
 
-  // IntersectionObserver for infinite scrolling with a threshold of 0.1.
+  // IntersectionObserver for infinite scrolling.
   useEffect(() => {
     if (!loadMoreRef.current || results.length >= totalResults) return;
     const observer = new IntersectionObserver(
@@ -89,7 +107,6 @@ const App: React.FC = () => {
     };
   }, [results, totalResults, loadingMore]);
 
-  // Build payload for paginated requests.
   const currentPayloadForPagination = (): Payload => {
     if (results.length > 0) {
       return {
@@ -110,7 +127,6 @@ const App: React.FC = () => {
     };
   };
 
-  // Updated fetchResults now resets scroll and, for search actions, resets the media button.
   const fetchResults = (payload: Payload, offset: number = 0, append: boolean = false) => {
     const extendedPayload = { ...payload, pagination: { offset, limit: LIMIT } };
     return fetch('https://api.recs.moe/update', {
@@ -131,11 +147,9 @@ const App: React.FC = () => {
           setResults((prev) => [...prev, ...data.view]);
         } else {
           setResults(data.view);
-          // Reset scroll position when a new view is loaded.
           if (gridViewRef.current) {
             gridViewRef.current.scrollTop = 0;
           }
-          // If the action is an "add_user" (i.e. a new search), then reset media type button.
           if (extendedPayload.action.type === 'add_user') {
             setCardType('Anime');
           }
@@ -175,7 +189,6 @@ const App: React.FC = () => {
       },
     };
 
-    // Trigger new search without immediately resetting the media type.
     fetchResults(payload, 0, false).then(() => {
       setQuery('');
     });
@@ -198,16 +211,7 @@ const App: React.FC = () => {
         medium: type,
       },
     };
-    // Media type change: fetch new results.
     fetchResults(payload, 0, false);
-  };
-
-  const sources: SourceType[] = ['MyAnimeList', 'AniList', 'Kitsu', 'Anime-Planet'];
-  const placeholders: Record<SourceType, string> = {
-    MyAnimeList: 'type a MyAnimeList username',
-    AniList: 'type an AniList username',
-    Kitsu: 'type a Kitsu username',
-    'Anime-Planet': 'type an Anime-Planet username',
   };
 
   return (
@@ -228,47 +232,22 @@ const App: React.FC = () => {
         </form>
       </header>
 
-      {/* Styled error banner */}
       {errorMessage && (
-        <div
-          style={{
-            backgroundColor: '#fdecea',
-            color: '#611a15',
-            padding: '10px 20px',
-            borderRadius: '5px',
-            margin: '10px auto',
-            maxWidth: '600px',
-            border: '1px solid #f5c6cb',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
+        <div className="error-banner">
           <span>{errorMessage}</span>
-          <button
-            onClick={() => setErrorMessage('')}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              fontSize: '20px',
-              cursor: 'pointer',
-              color: '#611a15',
-            }}
-          >
-            &times;
-          </button>
+          <button onClick={() => setErrorMessage('')}>&times;</button>
         </div>
       )}
 
       {showButtons && (
         <div className="source-buttons" ref={buttonContainerRef}>
-          {sources.map((source) => (
+          {(['MyAnimeList', 'AniList', 'Kitsu', 'Anime-Planet'] as SourceType[]).map((source) => (
             <button
               key={source}
               onClick={() => handleButtonClick(source)}
               style={{
                 backgroundColor: activeSource === source ? '#007BFF' : '#e0e0e0',
-                color: activeSource === source ? '#fff' : '#000',
+                color: activeSource === source ? '#fff' : '#333',
               }}
             >
               {source}
@@ -283,8 +262,8 @@ const App: React.FC = () => {
             <button
               onClick={() => handleMediaTypeChange('Anime')}
               style={{
-                backgroundColor: cardType === 'Anime' ? '#007BFF' : '#fff',
-                color: cardType === 'Anime' ? '#fff' : '#000',
+                backgroundColor: cardType === 'Anime' ? '#007BFF' : '#e0e0e0',
+                color: cardType === 'Anime' ? '#fff' : '#333',
               }}
             >
               Anime
@@ -292,8 +271,8 @@ const App: React.FC = () => {
             <button
               onClick={() => handleMediaTypeChange('Manga')}
               style={{
-                backgroundColor: cardType === 'Manga' ? '#007BFF' : '#fff',
-                color: cardType === 'Manga' ? '#fff' : '#000',
+                backgroundColor: cardType === 'Manga' ? '#007BFF' : '#e0e0e0',
+                color: cardType === 'Manga' ? '#fff' : '#333',
               }}
             >
               Manga
@@ -301,9 +280,34 @@ const App: React.FC = () => {
           </div>
           <div className="grid-view" ref={gridViewRef}>
             {results.map((item, index) => (
-              <div key={index} className="card">
-                <h4>{item.title}</h4>
-                <p>Source: {item.source}</p>
+              <div
+                key={index}
+                className="card"
+                onClick={() => window.open(item.url, '_blank', 'noopener,noreferrer')}
+                title={`Open ${item.title}`}
+              >
+                <div className="card-title">
+                  <h4>{item.title}</h4>
+                </div>
+                <div className="card-contents">
+                  <div className="card-details">
+                    <p><strong>Type:</strong> {item.type}</p>
+                    {item.source && <p><strong>Source:</strong> {item.source}</p>}
+                    {item.status && <p><strong>Status:</strong> {item.status}</p>}
+                    {item.episodes != null && <p><strong>Episodes:</strong> {item.episodes}</p>}
+                    {item.duration && <p><strong>Duration:</strong> {item.duration}</p>}
+                    {item.season && <p><strong>Season:</strong> {item.season}</p>}
+                    {item.startdate && <p><strong>Start:</strong> {item.startdate}</p>}
+                    {item.enddate && <p><strong>End:</strong> {item.enddate}</p>}
+                    {item.studios && <p><strong>Studios:</strong> {item.studios}</p>}
+                    {(item.volumes != null || item.chapters != null) && (
+                      <p>
+                        {item.volumes != null && <span><strong>Volumes:</strong> {item.volumes} </span>}
+                        {item.chapters != null && <span><strong>Chapters:</strong> {item.chapters}</span>}
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             ))}
             {results.length < totalResults && (

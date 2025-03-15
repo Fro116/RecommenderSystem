@@ -5,7 +5,8 @@
 
 body {
   margin: 0;
-  font-family: Arial, sans-serif;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f2f4f8;
 }
 
 /* Container */
@@ -19,7 +20,8 @@ body {
 header {
   padding: 20px;
   text-align: center;
-  border-bottom: 1px solid #ccc;
+  border-bottom: 1px solid #d0d5dd;
+  background-color: #ffffff;
 }
 
 header form {
@@ -29,11 +31,26 @@ header form {
 }
 
 header input {
-  padding: 10px;
+  padding: 12px 16px;
   width: 80%;
   font-size: 16px;
   text-align: center;
   margin-bottom: 10px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  transition: border 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Visual effect on hover over the search bar */
+header input:hover {
+  border-color: #007BFF;
+  box-shadow: 0 0 6px rgba(0, 123, 255, 0.2);
+}
+
+header input:focus {
+  outline: none;
+  border-color: #007BFF;
+  box-shadow: 0 0 8px rgba(0, 123, 255, 0.3);
 }
 
 /* Source buttons */
@@ -45,15 +62,24 @@ header input {
 }
 
 .source-buttons button {
-  padding: 10px 20px;
-  margin: 5px;
+  padding: 10px 24px;
+  margin: 6px;
   font-size: 16px;
+  font-weight: 500;
   cursor: pointer;
-  border: none;
-  border-radius: 4px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background-color: #e0e0e0;
+  color: #333333;
+  transition: background 0.3s ease, transform 0.2s ease;
 }
 
-/* Card type toggle */
+.source-buttons button:hover {
+  background-color: #f7f7f7;
+  transform: translateY(-2px);
+}
+
+/* Card type toggle buttons */
 .card-toggle {
   display: flex;
   justify-content: center;
@@ -61,12 +87,22 @@ header input {
 }
 
 .card-toggle button {
-  padding: 8px 16px;
-  margin: 0 5px;
+  padding: 8px 20px;
+  margin: 0 6px;
   font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
   border: 1px solid #ccc;
-  border-radius: 4px;
+  border-radius: 8px;
+  background-color: #e0e0e0;
+  color: #333333;
+  transition: background-color 0.3s ease, color 0.3s ease, transform 0.2s ease;
+}
+
+.card-toggle button:hover {
+  background-color: #007BFF;
+  color: #ffffff;
+  transform: translateY(-2px);
 }
 
 /* Grid view for cards */
@@ -77,27 +113,79 @@ header input {
   align-self: center;
   margin-top: 20px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  scrollbar-width: none;
 }
 
-/* Card styling */
+.grid-view::-webkit-scrollbar {
+  display: none;
+}
+
+/* Card styling with refreshed design */
 .card {
-  padding: 10px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  background-color: #f9f9f9;
+  padding: 16px;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  background: #ffffff;
+  transition: box-shadow 0.3s ease, background-color 0.3s ease, border-color 0.3s ease;
+  cursor: pointer;
 }
 
-.card h4 {
-  margin: 0 0 5px 0;
-  font-size: 16px;
+.card:hover {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  background-color: #fefefe;
+  border-color: #007BFF;
 }
 
-.card p {
-  margin: 2px 0;
-  line-height: 1.2;
+/* Separate card title and contents */
+.card-title {
+  margin-bottom: 8px;
+}
+
+.card-contents {
+  border-top: 1px solid #e0e0e0;
+  padding-top: 8px;
+}
+
+/* Center card titles with refined typography */
+.card-title h4 {
+  margin: 0;
+  font-size: 18px;
+  text-align: center;
+  font-weight: 600;
+  color: #333;
+}
+
+/* Card details styling */
+.card-details p {
+  margin: 4px 0;
+  line-height: 1.5;
   font-size: 14px;
+  color: #555;
+}
+
+/* Styled error banner */
+.error-banner {
+  background-color: #fdecea;
+  color: #611a15;
+  padding: 10px 20px;
+  border-radius: 8px;
+  margin: 12px auto;
+  max-width: 600px;
+  border: 1px solid #f5c6cb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.error-banner button {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  cursor: pointer;
+  color: #611a15;
+  line-height: 1;
 }
 
 /* Mobile adjustments */
@@ -109,7 +197,7 @@ header input {
   
   .source-buttons button {
     flex: 1 1 45%;
-    margin: 5px;
+    margin: 6px;
     font-size: 14px;
   }
   
