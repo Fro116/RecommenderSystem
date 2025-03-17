@@ -207,7 +207,7 @@ Oxygen.@post "/refresh" function refresh_user(r::HTTP.Request)::HTTP.Response
         encode(data, :msgpack)...,
         status_exception = false,
     )
-    if HTTP.iserror(r_fetch)
+    if HTTP.iserror(r_write)
         return HTTP.Response(r_write.status, [])
     end
     HTTP.Response(200, encode(Dict("refresh" => true), :msgpack)...)

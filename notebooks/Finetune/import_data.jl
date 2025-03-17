@@ -39,7 +39,7 @@ function download_data()
     tag = read("$datadir/training_tag", String)
     files = vcat(
         ["$m.csv" for m in ["manga", "anime"]],
-        ["$(s)_$(m).csv" for s in ["mal", "anilist", "kitsu", "animeplanet"] for m in ["manga", "anime"]],
+        ["media_relations.$m.jld2" for m in [0, 1]],
         ["baseline.$m.msgpack" for m in [0, 1]],
         ["bagofwords.$m.$metric.$stem" for m in [0, 1] for metric in ["rating"] for stem in ["csv", "pt"]],
         ["transformer.$stem" for stem in ["csv", "pt"]],

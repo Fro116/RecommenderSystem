@@ -4,19 +4,23 @@ import Base64
 import Oxygen
 import JLD2
 import NNlib: logsoftmax, sigmoid
+import SparseArrays
 include("../Training/import_list.jl")
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
 
 const PORT = parse(Int, ARGS[1])
-const FETCH_URL = ARGS[2]
+const READ_URL = ARGS[2]
+const FETCH_URL = ARGS[3]
 const datadir = "../../data/finetune"
 const secretdir = "../../secrets"
 const bluegreen = read("$datadir/bluegreen", String)
 const MODEL_URL = read("$secretdir/url.embed.$bluegreen.txt", String)
 const registry = JLD2.load("$datadir/model.registry.jld2")
+const relations = merge([JLD2.load("$datadir/media_relations.$m.jld2") for m in [0, 1]]...)
 const planned_status = 3
+const watching_status = 5
 
 standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
 
@@ -94,7 +98,7 @@ end
 Oxygen.@post "/add_user" function add_user(r::HTTP.Request)::HTTP.Response
     d = decode(r)
     r_read = HTTP.post(
-        "$FETCH_URL/read",
+        "$READ_URL/read",
         encode(Dict("source" => d["source"], "username" => d["username"]), :msgpack)...,
         status_exception = false,
     )
@@ -135,7 +139,6 @@ function compute(state, pagination)
         (registry[kr]["weight"] * convert.(Float32, user[ke]) .+ registry[kr]["bias"]) *
         w for ((ke, kr), w) in registry[name]
     )
-    log10(x) = log(x) / log(10)
     x = zeros(Float32, num_items(medium))
     for user in state["users"]
         weight = user["weights"]
@@ -143,23 +146,58 @@ function compute(state, pagination)
             project(user, "$medium.rating") *
             get(weight, "rating", 1) *
             get(weight, "total", 1)
-        x .+= logsoftmax(project(user, "$medium.watch")) * (1 / log(10))
-        get(weight, "watch", 1) * get(weight, "total", 1)
-        x .+= logsoftmax(project(user, "$medium.plantowatch")) * (0.1 / log(10))
-        get(weight, "plantowatch", 1) * get(weight, "total", 1)
-        x .+= sigmoid.(project(user, "$medium.drop")) * (-10)
-        get(weight, "drop", 1) * get(weight, "total", 1)
+        x .+= logsoftmax(project(user, "$medium.watch")) * (1 / log(4)) * get(weight, "watch", 1) * get(weight, "total", 1)
+        x .+= logsoftmax(project(user, "$medium.plantowatch")) * (0 / log(4)) * get(weight, "plantowatch", 1) * get(weight, "total", 1)
+        x .+= sigmoid.(project(user, "$medium.drop")) * (0) * get(weight, "drop", 1) * get(weight, "total", 1)
     end
     # constraints
-    for user in state["users"]
-        for (idx, status) in zip(user["$(medium)_idx"], user["$(medium)_status"])
-            if status != planned_status
-                x[idx+1] = -Inf
+    function get_watched(user, m, status_filter = x -> x != planned_status)
+        v = zeros(Float32, num_items(m))
+        for (idx, status) in zip(user["$(m)_idx"], user["$(m)_status"])
+            if status_filter(status)
+                v[idx+1] = 1
             end
         end
-        # TODO constrain cross-related series
-        # TODO constrain recaps
-        # TODO constrain sequels of unwatched series
+        v
+    end
+    for user in state["users"]
+        w = get_watched(user, medium)
+        # seen
+        for i in 1:length(x)
+            if w[i] > 0
+                x[i] = -Inf
+            end
+        end
+        # adaptations
+        v1 = relations["$(medium).adaptations"] * get_watched(user, 1 - medium)
+        v2 = relations["$(medium).dependencies"] * w
+        for i in 1:length(x)
+            if v1[i] != 0 && v2[i] == 0
+                x[i] = -Inf
+            end
+        end
+        # recaps
+        v = relations["$(medium).recaps"] * w
+        for i in 1:length(x)
+            if v[i] != 0
+                x[i] = -Inf
+            end
+        end
+        # dependencies
+        v1 = relations["$(medium).dependencies"] * w
+        v2 = relations["$(medium).dependencies"] * ones(Float32, num_items(medium))
+        for i in 1:length(x)
+            if v2[i] != 0 && v1[i] == 0
+                x[i] = -Inf
+            end
+        end
+        # sequels to currently watching / dropped
+        v = relations["$(medium).dependencies"] * get_watched(user, medium, x -> x == watching_status || x > 0 && x < planned_status)
+        for i in 1:length(x)
+            if v[i] != 0
+                x[i] = -Inf
+            end
+        end
         # TODO constrain by source
     end
     info = get_media_info(medium)
@@ -176,6 +214,19 @@ function compute(state, pagination)
     view, total
 end
 
+function refresh_user(source, username)
+    r_read = HTTP.post(
+        "$FETCH_URL/refresh",
+        encode(Dict("source" => source, "username" => username), :msgpack)...,
+        status_exception = false,
+    )
+    if HTTP.iserror(r_read)
+        return false
+    end
+    d = decode(r_read)
+    d["refresh"]
+end
+
 Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     d = decode(r)
     state = d["state"]
@@ -188,11 +239,19 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     if action["type"] == "add_user"
         username = action["username"]
         source = action["source"]
+        background_task = Threads.@spawn refresh_user(source, username)
         r_embed = HTTP.post(
             "http://localhost:$PORT/add_user",
             encode(Dict("source" => source, "username" => username), :msgpack)...,
             status_exception = false,
         )
+        if fetch(background_task)
+            r_embed = HTTP.post(
+                "http://localhost:$PORT/add_user",
+                encode(Dict("source" => source, "username" => username), :msgpack)...,
+                status_exception = false,
+            )
+        end
         if HTTP.iserror(r_embed)
             return HTTP.Response(r_embed.status)
         end
@@ -236,7 +295,7 @@ function compile(port::Integer)
     function apply_action(action)
         r = HTTP.post(
             "http://localhost:$PORT/update",
-            encode(Dict("state" => state, "action" => action, "pagination" => pagination), :msgpack)...,
+            encode(Dict("state" => state, "action" => action, "pagination" => pagination), :json)...,
             status_exception = false,
         )
         if HTTP.iserror(r)

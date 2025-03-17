@@ -6,11 +6,12 @@
 body {
   margin: 0;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  background-color: #f2f4f8;
+  background-color: #fafafa;
 }
 
 /* Container */
 .container {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -20,8 +21,10 @@ body {
 header {
   padding: 20px;
   text-align: center;
-  border-bottom: 1px solid #d0d5dd;
-  background-color: #ffffff;
+  border-bottom: 1px solid #e0e0e0;
+  background: linear-gradient(135deg, #ffffff, #f7f7f7);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  color: #333;
 }
 
 header form {
@@ -36,21 +39,18 @@ header input {
   font-size: 16px;
   text-align: center;
   margin-bottom: 10px;
-  border: 1px solid #d0d5dd;
+  border: 1px solid #e0e0e0;
   border-radius: 8px;
+  background-color: #fff;
+  color: #333;
   transition: border 0.3s ease, box-shadow 0.3s ease;
 }
 
-/* Visual effect on hover over the search bar */
+header input:focus,
 header input:hover {
-  border-color: #007BFF;
-  box-shadow: 0 0 6px rgba(0, 123, 255, 0.2);
-}
-
-header input:focus {
   outline: none;
-  border-color: #007BFF;
-  box-shadow: 0 0 8px rgba(0, 123, 255, 0.3);
+  border-color: #FB8C00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
 /* Source buttons */
@@ -61,7 +61,7 @@ header input:focus {
   margin-top: 20px;
 }
 
-.source-buttons button {
+.source-button {
   padding: 10px 24px;
   margin: 6px;
   font-size: 16px;
@@ -71,12 +71,23 @@ header input:focus {
   border-radius: 8px;
   background-color: #e0e0e0;
   color: #333333;
-  transition: background 0.3s ease, transform 0.2s ease;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
-.source-buttons button:hover {
-  background-color: #f7f7f7;
-  transform: translateY(-2px);
+.source-button:hover {
+  border-color: #FB8C00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+}
+
+.source-button.selected {
+  background-color: #F48FB1;
+  color: #fff;
+  border-color: #ccc; /* Default border for selected state without hover */
+}
+
+.source-button.selected:hover {
+  border-color: #FB8C00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
 /* Card type toggle buttons */
@@ -86,7 +97,7 @@ header input:focus {
   margin-top: 20px;
 }
 
-.card-toggle button {
+.toggle-button {
   padding: 8px 20px;
   margin: 0 6px;
   font-size: 14px;
@@ -96,13 +107,23 @@ header input:focus {
   border-radius: 8px;
   background-color: #e0e0e0;
   color: #333333;
-  transition: background-color 0.3s ease, color 0.3s ease, transform 0.2s ease;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
-.card-toggle button:hover {
-  background-color: #007BFF;
-  color: #ffffff;
-  transform: translateY(-2px);
+.toggle-button:hover {
+  border-color: #FB8C00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+}
+
+.toggle-button.selected {
+  background-color: #F48FB1;
+  color: #fff;
+  border-color: #ccc;
+}
+
+.toggle-button.selected:hover {
+  border-color: #FB8C00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
 /* Grid view for cards */
@@ -135,7 +156,7 @@ header input:focus {
 .card:hover {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
   background-color: #fefefe;
-  border-color: #007BFF;
+  border-color: #FB8C00;
 }
 
 /* Separate card title and contents */
@@ -163,6 +184,19 @@ header input:focus {
   line-height: 1.5;
   font-size: 14px;
   color: #555;
+}
+
+/* Home overlay shown when no cards are displayed */
+.home-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 20px;
+  background-color: rgba(250, 250, 250, 0.95);
+  text-align: center;
+  font-size: 16px;
+  color: #333;
 }
 
 /* Styled error banner */
@@ -195,13 +229,13 @@ header input:focus {
     font-size: 14px;
   }
   
-  .source-buttons button {
+  .source-button {
     flex: 1 1 45%;
     margin: 6px;
     font-size: 14px;
   }
   
-  .card-toggle button {
+  .toggle-button {
     font-size: 12px;
     padding: 6px 12px;
   }

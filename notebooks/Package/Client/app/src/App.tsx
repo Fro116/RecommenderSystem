@@ -59,10 +59,10 @@ const App: React.FC = () => {
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
   const placeholders: Record<SourceType, string> = {
-    MyAnimeList: 'type a MyAnimeList username',
-    AniList: 'type an AniList username',
-    Kitsu: 'type a Kitsu username',
-    'Anime-Planet': 'type an Anime-Planet username',
+    MyAnimeList: 'Type a MyAnimeList username',
+    AniList: 'Type an AniList username',
+    Kitsu: 'Type a Kitsu username',
+    'Anime-Planet': 'Type an Anime-Planet username',
   };
 
   useEffect(() => {
@@ -169,9 +169,7 @@ const App: React.FC = () => {
 
   const handleSearch = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!query.trim()) {
-      return;
-    }
+    if (!query.trim()) return;
     const currentQuery = query;
     const source_map: Record<SourceType, string> = {
       MyAnimeList: 'mal',
@@ -244,11 +242,8 @@ const App: React.FC = () => {
           {(['MyAnimeList', 'AniList', 'Kitsu', 'Anime-Planet'] as SourceType[]).map((source) => (
             <button
               key={source}
+              className={`source-button ${activeSource === source ? 'selected' : ''}`}
               onClick={() => handleButtonClick(source)}
-              style={{
-                backgroundColor: activeSource === source ? '#007BFF' : '#e0e0e0',
-                color: activeSource === source ? '#fff' : '#333',
-              }}
             >
               {source}
             </button>
@@ -256,24 +251,18 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {results.length > 0 && (
+      {results.length > 0 ? (
         <>
           <div className="card-toggle">
             <button
+              className={`toggle-button ${cardType === 'Anime' ? 'selected' : ''}`}
               onClick={() => handleMediaTypeChange('Anime')}
-              style={{
-                backgroundColor: cardType === 'Anime' ? '#007BFF' : '#e0e0e0',
-                color: cardType === 'Anime' ? '#fff' : '#333',
-              }}
             >
               Anime
             </button>
             <button
+              className={`toggle-button ${cardType === 'Manga' ? 'selected' : ''}`}
               onClick={() => handleMediaTypeChange('Manga')}
-              style={{
-                backgroundColor: cardType === 'Manga' ? '#007BFF' : '#e0e0e0',
-                color: cardType === 'Manga' ? '#fff' : '#333',
-              }}
             >
               Manga
             </button>
@@ -291,20 +280,29 @@ const App: React.FC = () => {
                 </div>
                 <div className="card-contents">
                   <div className="card-details">
-                    <p><strong>Type:</strong> {item.type}</p>
-                    {item.source && <p><strong>Source:</strong> {item.source}</p>}
-                    {item.status && <p><strong>Status:</strong> {item.status}</p>}
-                    {item.episodes != null && <p><strong>Episodes:</strong> {item.episodes}</p>}
-                    {item.duration && <p><strong>Duration:</strong> {item.duration}</p>}
-                    {item.season && <p><strong>Season:</strong> {item.season}</p>}
-                    {item.startdate && <p><strong>Start:</strong> {item.startdate}</p>}
-                    {item.enddate && <p><strong>End:</strong> {item.enddate}</p>}
-                    {item.studios && <p><strong>Studios:</strong> {item.studios}</p>}
-                    {(item.volumes != null || item.chapters != null) && (
-                      <p>
-                        {item.volumes != null && <span><strong>Volumes:</strong> {item.volumes} </span>}
-                        {item.chapters != null && <span><strong>Chapters:</strong> {item.chapters}</span>}
-                      </p>
+                    {cardType === 'Anime' ? (
+                      <>
+                        {item.type && <p><strong>Medium:</strong> {item.type}</p>}
+                        {item.season && <p><strong>Season:</strong> {item.season}</p>}
+                        {item.episodes != null && <p><strong>Episodes:</strong> {item.episodes}</p>}
+                        {item.status && <p><strong>Status:</strong> {item.status}</p>}
+                        {item.startdate && <p><strong>Start Date:</strong> {item.startdate}</p>}
+                        {item.enddate && <p><strong>End Date:</strong> {item.enddate}</p>}
+                        {item.source && <p><strong>Source Material:</strong> {item.source}</p>}
+                        {item.duration && <p><strong>Duration:</strong> {item.duration}</p>}
+                        {item.studios && <p><strong>Studio:</strong> {item.studios}</p>}
+                      </>
+                    ) : (
+                      <>
+                        {item.type && <p><strong>Medium:</strong> {item.type}</p>}
+                        {item.status && <p><strong>Status:</strong> {item.status}</p>}
+                        {item.startdate && <p><strong>Start Date:</strong> {item.startdate}</p>}
+                        {item.enddate && <p><strong>End Date:</strong> {item.enddate}</p>}
+                        {item.volumes != null && <p><strong>Volumes:</strong> {item.volumes}</p>}
+                        {item.chapters != null && <p><strong>Chapters:</strong> {item.chapters}</p>}
+                        {item.source && <p><strong>Source Material:</strong> {item.source}</p>}
+                        {item.studios && <p><strong>Studio:</strong> {item.studios}</p>}
+                      </>
                     )}
                   </div>
                 </div>
@@ -315,6 +313,10 @@ const App: React.FC = () => {
             )}
           </div>
         </>
+      ) : (
+        <div className="home-overlay">
+          Recs☆Moe is a recommender system for anime and manga
+        </div>
       )}
     </div>
   );

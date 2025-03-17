@@ -77,6 +77,9 @@ end
 
 function pretrain()
     run(`julia import_data.jl`)
+    for m in [0, 1]
+        run(`julia media_relations.jl $m`)
+    end
     run(`julia baseline.jl`)
     run(`julia -t auto bagofwords.jl --pretrain`)
     run(`julia -t auto transformer.jl`)
