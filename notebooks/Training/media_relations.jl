@@ -4,7 +4,7 @@ import Glob
 import JLD2
 import Memoize: @memoize
 import MsgPack
-import ProgressMeter: @showprogress, next!
+import ProgressMeter: @showprogress
 import SparseArrays;
 const datadir = "../../data/training"
 
@@ -162,59 +162,59 @@ function save_adaptations(medium)
     get_relations(medium, cross_medium, Set(["adaptation", "source"]))
 end
 
-# @memoize function get_user_histories(medium)
-#     outdirs = Glob.glob("$datadir/users/training/*/")
-#     rets = []
-#     @showprogress for outdir in outdirs
-#         users = Glob.glob("$outdir/*.msgpack")
-#         histories = [Int32[] for _ = 1:length(users)]
-#         Threads.@threads for t = 1:length(users)
-#             user = MsgPack.unpack(read(users[t]))
-#             for x in user["items"]
-#                 if x["medium"] != medium
-#                     continue
-#                 end
-#                 push!(histories[t], x["matchedid"])
-#             end
-#         end
-#         push!(rets, histories)
-#     end
-#     reduce(vcat, rets)
-# end;
+@memoize function get_user_histories(medium)
+    outdirs = Glob.glob("$datadir/users/training/*/")
+    rets = []
+    @showprogress for outdir in outdirs
+        users = Glob.glob("$outdir/*.msgpack")
+        histories = [Int32[] for _ = 1:length(users)]
+        Threads.@threads for t = 1:length(users)
+            user = MsgPack.unpack(read(users[t]))
+            for x in user["items"]
+                if x["medium"] != medium
+                    continue
+                end
+                push!(histories[t], x["matchedid"])
+            end
+        end
+        push!(rets, histories)
+    end
+    reduce(vcat, rets)
+end;
 
-# @memoize function index_histories(histories, medium)
-#     item_to_histories = Dict(a => Int64[] for a = 1:num_items(medium))
-#     @showprogress for i = 1:length(histories)
-#         for a in histories[i]
-#             if a == 0
-#                 continue
-#             end
-#             push!(item_to_histories[a], i)
-#         end
-#     end
-#     Dict(k => Set(v) for (k, v) in item_to_histories)
-# end;
+@memoize function get_item_to_histories(medium)
+    histories = get_user_histories(medium)
+    item_to_histories = Dict(a => Int64[] for a = 1:num_items(medium))
+    @showprogress for i = 1:length(histories)
+        for a in histories[i]
+            if a == 0
+                continue
+            end
+            push!(item_to_histories[a], i)
+        end
+    end
+    Dict(k => Set(v) for (k, v) in item_to_histories)
+end;
 
-# function is_watched_after(medium, cutoff, a1, a2)
-#     histories = get_user_histories(medium)
-#     item_to_histories = index_histories(histories, medium)
-#     idxs = collect(intersect(item_to_histories[a1], item_to_histories[a2]))
-#     if isempty(idxs)
-#         return false
-#     end
-#     counts = fill(false, length(idxs))
-#     Threads.@threads for i = 1:length(idxs)
-#         for a in histories[idxs[i]]
-#             if a == a2
-#                 counts[i] = true
-#                 break
-#             elseif a == a1
-#                 break
-#             end
-#         end
-#     end
-#     sum(counts) / length(idxs) > cutoff
-# end
+function is_watched_after(medium, cutoff, a1, a2)
+    item_to_histories = get_item_to_histories(medium)
+    idxs = collect(intersect(item_to_histories[a1], item_to_histories[a2]))
+    if isempty(idxs)
+        return false
+    end
+    counts = fill(false, length(idxs))
+    Threads.@threads for i = 1:length(idxs)
+        for a in histories[idxs[i]]
+            if a == a2
+                counts[i] = true
+                break
+            elseif a == a1
+                break
+            end
+        end
+    end
+    sum(counts) / length(idxs) > cutoff
+end
 
 function save_data(m::Int)
     d = Dict()

@@ -72,6 +72,13 @@ end
         end
         join(d, " ")
     end
+    function season(x)
+        if ismissing(x)
+            return missing
+        end
+        season_str, year = split(x, "-")
+        uppercasefirst(season_str) * " " * year
+    end
     for i = 1:DataFrames.nrow(df)
         if df.matchedid[i] == 0 || df.matchedid[i] in keys(info)
             continue
@@ -87,7 +94,7 @@ end
             "chapters" => optint(df.chapters[i]),
             "volumes" => optint(df.volumes[i]),
             "status" => df.status[i],
-            "season" => df.season[i],
+            "season" => season.(df.season[i]),
             "studios" => studios(df.studios[i]),
             "source" => df.source_material[i],
         )
@@ -120,6 +127,7 @@ Oxygen.@post "/add_user" function add_user(r::HTTP.Request)::HTTP.Response
     end
     d_embed = decode(r_embed)
     d_embed["source"] = d["source"]
+    d_embed["username"] = d["username"]
     d_embed["weights"] = Dict()
     for m in [0, 1]
         d_embed["$(m)_idx"] = []
@@ -228,6 +236,10 @@ function refresh_user(source, username)
 end
 
 Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
+    encoding = nothing
+    if occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
+        encoding = :gzip
+    end
     d = decode(r)
     state = d["state"]
     if isempty(d["state"])
@@ -236,22 +248,15 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
         state = MsgPack.unpack(Base64.base64decode(d["state"]))
     end
     action = d["action"]
+    followup_action = nothing
     if action["type"] == "add_user"
         username = action["username"]
         source = action["source"]
-        background_task = Threads.@spawn refresh_user(source, username)
         r_embed = HTTP.post(
             "http://localhost:$PORT/add_user",
             encode(Dict("source" => source, "username" => username), :msgpack)...,
             status_exception = false,
         )
-        if fetch(background_task)
-            r_embed = HTTP.post(
-                "http://localhost:$PORT/add_user",
-                encode(Dict("source" => source, "username" => username), :msgpack)...,
-                status_exception = false,
-            )
-        end
         if HTTP.iserror(r_embed)
             return HTTP.Response(r_embed.status)
         end
@@ -260,6 +265,30 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
             state["users"] = []
         end
         push!(state["users"], d_embed)
+        followup_action = Dict("type" => "refresh_user", "source" => source, "username" => username)
+    elseif action["type"] == "refresh_user"
+        username = action["username"]
+        source = action["source"]
+        idx = nothing
+        for (i, x) in Iterators.enumerate(state["users"])
+            if x["username"] == username && x["source"] == source
+                idx = i
+                break
+            end
+        end
+        if isnothing(idx) || !refresh_user(source, username)
+            return HTTP.Response(200, encode(Dict(), :json, encoding)...)
+        end
+        r_embed = HTTP.post(
+            "http://localhost:$PORT/add_user",
+            encode(Dict("source" => source, "username" => username), :msgpack)...,
+            status_exception = false,
+        )
+        if HTTP.iserror(r_embed)
+            return HTTP.Response(r_embed.status)
+        end
+        d_embed = decode(r_embed)
+        state["users"][idx] = d_embed
     elseif action["type"] == "set_media"
         medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
         state["medium"] = medium
@@ -271,11 +300,9 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
         "state" => Base64.base64encode(MsgPack.pack(state)),
         "view" => view,
         "total" => total,
+        "medium" => Dict(0 => "Manga", 1 => "Anime")[state["medium"]],
+        "followup_action" => followup_action,
     )
-    encoding = nothing
-    if occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
-        encoding = :gzip
-    end
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
@@ -295,18 +322,23 @@ function compile(port::Integer)
     function apply_action(action)
         r = HTTP.post(
             "http://localhost:$PORT/update",
-            encode(Dict("state" => state, "action" => action, "pagination" => pagination), :json)...,
+            encode(Dict("state" => state, "action" => action, "pagination" => pagination), :json, :gzip)...,
             status_exception = false,
+            decompress = false,
         )
         if HTTP.iserror(r)
             logerror("error $(r.status)")
             return
         end
         d = decode(r)
+        if isempty(d)
+            return
+        end
         state = d["state"]
     end
     for (source, username) in zip(profiles.source, profiles.username)
         apply_action(Dict("type" => "add_user", "source" => source, "username" => username))
+        apply_action(Dict("type" => "refresh_user", "source" => source, "username" => username))
     end
     for m in ["Manga", "Anime"]
         apply_action(Dict("type" => "set_media", "medium" => m))

@@ -31,7 +31,7 @@ function decode(r::HTTP.Message)::Dict
     if HTTP.headercontains(r, "Content-Encoding", "zstd")
         body = CodecZstd.transcode(CodecZstd.ZstdDecompressor, body)
     elseif HTTP.headercontains(r, "Content-Encoding", "gzip")
-        nothing # HTTP.jl automatically decompresses gzip
+        body = CodecZlib.transcode(CodecZlib.GzipDecompressor, body)
     else
         @assert !HTTP.hasheader(r, "Content-Encoding")
     end

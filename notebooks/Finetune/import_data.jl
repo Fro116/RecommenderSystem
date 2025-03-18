@@ -64,7 +64,6 @@ function download_data()
 end
 
 function gen_splits()
-    recent_days = 7
     recent_items = 5
     min_items = 5
     test_perc = 0.1
@@ -74,7 +73,6 @@ function gen_splits()
         max_df_ts = maximum(parse.(Float64, filter(x -> !ismissing(x), df.db_refreshed_at)))
         max_ts = max(max_ts, max_df_ts)
     end
-    recent_ts = max_ts - 86400 * recent_days
     rm("$datadir/users", recursive = true, force = true)
     @showprogress for (idx, f) in
                       Iterators.enumerate(Glob.glob("$datadir/fingerprints_*.csv"))
@@ -87,6 +85,14 @@ function gen_splits()
             if length(user["items"]) < min_items
                 continue
             end
+            if rand() < test_perc
+                recent_days = 1
+                outdir = test_dir
+            else
+                recent_days = 7
+                outdir = train_dir
+            end
+            recent_ts = max_ts - 86400 * recent_days
             old_items = []
             new_items = []
             for x in reverse(user["items"])
@@ -101,7 +107,6 @@ function gen_splits()
             end
             user["items"] = reverse(old_items)
             user["test_items"] = reverse(new_items)
-            outdir = rand() < test_perc ? test_dir : train_dir
             open("$outdir/$i.msgpack", "w") do g
                 write(g, MsgPack.pack(user))
             end

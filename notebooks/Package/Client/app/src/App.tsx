@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, FormEvent, ChangeEvent } from 'react';
+import pako from 'pako';
 import './App.css';
 
 interface Result {
@@ -40,6 +41,7 @@ interface MediaTypePayload {
 type Payload = AddUserPayload | MediaTypePayload;
 
 const LIMIT = 50;
+const UPDATE_URL = 'https://api.recs.moe/update';
 
 const App: React.FC = () => {
   const [query, setQuery] = useState<string>('');
@@ -129,10 +131,16 @@ const App: React.FC = () => {
 
   const fetchResults = (payload: Payload, offset: number = 0, append: boolean = false) => {
     const extendedPayload = { ...payload, pagination: { offset, limit: LIMIT } };
-    return fetch('https://api.recs.moe/update', {
+    const payloadString = JSON.stringify(extendedPayload);
+    const compressedPayload = pako.gzip(payloadString);
+
+    return fetch(UPDATE_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(extendedPayload),
+      headers: { 
+        'Content-Type': 'application/json',
+        'Content-Encoding': 'gzip'
+      },
+      body: compressedPayload,
     })
       .then((response) => {
         if (!response.ok) {
@@ -155,6 +163,49 @@ const App: React.FC = () => {
           }
         }
         setErrorMessage('');
+
+        // Process followup action if present using the same pagination options.
+        if (data.followup_action) {
+          const followupPayload = {
+            state: data.state,
+            action: data.followup_action,
+            pagination: extendedPayload.pagination,
+          };
+          const followupString = JSON.stringify(followupPayload);
+          const compressedFollowup = pako.gzip(followupString);
+
+          fetch(UPDATE_URL, {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json',
+              'Content-Encoding': 'gzip'
+            },
+            body: compressedFollowup,
+          })
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error('Failed to fetch followup action results.');
+              }
+              return response.json();
+            })
+            .then((followupData) => {
+              // If the followupData is empty, do nothing.
+              if (!followupData || Object.keys(followupData).length === 0) {
+                return;
+              }
+              setApiState(followupData.state);
+              setTotalResults(followupData.total);
+              setResults(followupData.view);
+              // Set cardType based on the returned medium value.
+              if (followupData.medium === 'Anime' || followupData.medium === 'Manga') {
+                setCardType(followupData.medium);
+              }
+            })
+            .catch((error) => {
+              console.error('Error during followup action:', error);
+              // Followup action error is logged but not shown to the user.
+            });
+        }
         return data;
       })
       .catch((error) => {
