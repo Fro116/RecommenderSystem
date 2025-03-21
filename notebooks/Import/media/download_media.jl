@@ -223,6 +223,13 @@ function import_mal(medium)
         end
         x / 60
     end
+    function genre(x)
+        if ismissing(x)
+            return missing
+        end
+        json = JSON3.read(x)
+        JSON3.write([x["name"] for x in json])
+    end
     ret = DataFrames.DataFrame()
     ret[!, "medium"] = df.medium
     ret[!, "itemid"] = df.itemid
@@ -242,6 +249,8 @@ function import_mal(medium)
     ret[!, "studios"] = df.studios
     ret[!, "malid"] = df.itemid
     ret[!, "anilistid"] .= missing
+    ret[!, "synopsis"] = df.synopsis
+    ret[!, "genres"] = genre.(df.genres)
     CSV.write("$datadir/$(source)_$(medium).csv", ret)
 end
 
@@ -277,7 +286,7 @@ function import_anilist(medium)
         r = [x for x in r if !isnothing(x)]
         JSON3.write(r)
     end
-    function english_title(title, synonyms)
+    function english_title(title)
         try
             json = JSON3.read(title)
             return something(get(json, "english", missing), missing)
@@ -390,6 +399,8 @@ function import_anilist(medium)
     ret[!, "studios"] = df.studios
     ret[!, "malid"] = df.malid
     ret[!, "anilistid"] = df.itemid
+    ret[!, "synopsis"] = df.summary
+    ret[!, "genres"] = df.genres
     CSV.write("$datadir/$(source)_$(medium).csv", ret)
 end
 
@@ -408,7 +419,7 @@ function import_kitsu(medium)
     function english_title(x)
         try
             json = JSON3.read(x)
-            return get(json, "en")
+            return something(get(json, "en"), missing)
         catch
             return missing
         end
@@ -484,6 +495,8 @@ function import_kitsu(medium)
     ret[!, "studios"] .= missing
     ret[!, "malid"] = df.malid
     ret[!, "anilistid"] = df.anilistid
+    ret[!, "synopsis"] = df.synopsis
+    ret[!, "genres"] = df.genres
     CSV.write("$datadir/$(source)_$(medium).csv", ret)
 end
 
@@ -687,6 +700,8 @@ function import_animeplanet(medium)
     ret[!, "studios"] .= df.studios
     ret[!, "malid"] .= missing
     ret[!, "anilistid"] .= missing
+    ret[!, "synopsis"] = df.summary
+    ret[!, "genres"] = df.genres
     CSV.write("$datadir/$(source)_$(medium).csv", ret)
 end
 

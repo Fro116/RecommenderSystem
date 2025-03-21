@@ -34,7 +34,7 @@ end
 
 function get_media(source, medium::String)
     fn = "$datadir/$(source)_$(medium).csv"
-    df = CSV.read(fn, DataFrames.DataFrame)
+    df = CSV.read(fn, DataFrames.DataFrame, ntasks=1)
     parseint(x::Missing) = missing
     parseint(x::Real) = x
     parseint(x::AbstractString) = parse(Int, replace(x, "+" => ""))
@@ -64,7 +64,7 @@ end
 
 function get_media_groups(medium::AbstractString)
     fn = "$datadir/$medium.groups.csv"
-    groups = CSV.read(fn, DataFrames.DataFrame, types = Dict("itemid" => String))
+    groups = CSV.read(fn, DataFrames.DataFrame, types = Dict("itemid" => String), ntasks=1)
     media = get_media(medium)
     df = DataFrames.innerjoin(groups, media, on = [:source, :itemid])
     for c in [:episodes, :chapters, :volumes]
@@ -97,7 +97,7 @@ end
 
 function get_idmaps()
     media = Dict(
-        k => CSV.read("$datadir/$m.csv", DataFrames.DataFrame) for
+        k => CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1) for
         (k, m) in [(0, "manga"), (1, "anime")]
     )
     matched2source = Dict()
@@ -122,7 +122,7 @@ end
 function get_media_details()
     d = Dict()
     for medium in ["manga", "anime"]
-        df = CSV.read("$datadir/$medium.csv", DataFrames.DataFrame)
+        df = CSV.read("$datadir/$medium.csv", DataFrames.DataFrame, ntasks=1)
         for i = 1:DataFrames.nrow(df)
             k = (df.medium[i], df.matchedid[i])
             d[k] = Dict("mediatype" => df.mediatype[i])
@@ -136,7 +136,7 @@ function get_relations()
     medium_map = Dict("manga" => 0, "anime" => 1)
     relations = []
     for s in ["mal", "anilist", "kitsu", "animeplanet"]
-        df = CSV.read("$datadir/$(s)_media_relations.csv", DataFrames.DataFrame)
+        df = CSV.read("$datadir/$(s)_media_relations.csv", DataFrames.DataFrame, ntasks=1)
         for i = 1:DataFrames.nrow(df)
             skey = (medium_map[df.medium[i]], s, string(df.itemid[i]))
             tkey = (medium_map[df.target_medium[i]], s, string(df.target_id[i]))

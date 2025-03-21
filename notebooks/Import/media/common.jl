@@ -4,7 +4,7 @@ import Memoize: @memoize
 const datadir = "../../../data/import/media"
 
 @memoize function get_valid_ids(source::String, medium::String)
-    df = CSV.read("$datadir/$(source)_$(medium).csv", DataFrames.DataFrame)
+    df = CSV.read("$datadir/$(source)_$(medium).csv", DataFrames.DataFrame, ntasks=1)
     Set(df.itemid)
 end
 

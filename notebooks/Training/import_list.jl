@@ -30,6 +30,7 @@ const SOURCE_MAP = Dict{String,Int32}(
         "$datadir/$medium.csv",
         DataFrames.DataFrame,
         types = Dict("itemid" => String),
+        ntasks=1,
     )
     d = Dict()
     for i = 1:DataFrames.nrow(df)

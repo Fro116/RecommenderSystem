@@ -165,6 +165,7 @@ function match_media()
         download_items(s)
     end
     for m in ["manga", "anime"]
+        logtag("MATCH_MEDIA", "matching $m")
         vs = get_graph(sources, edgetypes, m)
         save_graph(vs, m)
     end

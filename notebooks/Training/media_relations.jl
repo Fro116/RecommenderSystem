@@ -11,11 +11,11 @@ const datadir = "../../data/training"
 @memoize function num_items(medium::Int)
     medium_map = Dict(0 => "manga", 1 => "anime")
     m = medium_map[medium]
-    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
+    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1).matchedid) + 1
 end
 
 function get_relations(source_medium::Int, target_medium::Int, relations)
-    df = CSV.read("$datadir/media_relations.csv", DataFrames.DataFrame)
+    df = CSV.read("$datadir/media_relations.csv", DataFrames.DataFrame, ntasks=1)
     df = filter(
         x ->
             x.source_medium == source_medium &&
@@ -64,7 +64,7 @@ end
 @memoize function get_media_df(medium::Int)
     medium_map = Dict(0 => "manga", 1 => "anime")
     m = medium_map[medium]
-    CSV.read("$datadir/$m.csv", DataFrames.DataFrame; types = Dict(:startdate => String))
+    CSV.read("$datadir/$m.csv", DataFrames.DataFrame; types = Dict(:startdate => String), ntasks=1)
 end
 
 function is_more_popular(medium::Int, cutoff, a1, a2)

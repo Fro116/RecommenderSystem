@@ -30,4 +30,4 @@ function backup()
     end
 end
 
-@scheduled "BACKUP" "22:00" @handle_errors backup()
+backup()

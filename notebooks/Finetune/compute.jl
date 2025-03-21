@@ -26,7 +26,7 @@ standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
 
 @memoize function num_items(medium::Integer)
     m = Dict(0 => "manga", 1 => "anime")[medium]
-    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
+    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1).matchedid) + 1
 end
 
 function get_url(source, medium, itemid)
@@ -43,7 +43,7 @@ end
 @memoize function get_media_info(medium)
     info = Dict()
     m = Dict(0 => "manga", 1 => "anime")[medium]
-    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String)
+    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String, ntasks=1)
     optint(x) = x != 0 ? x : missing
     function studios(x)
         if ismissing(x) || isempty(x)
@@ -307,7 +307,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
 end
 
 function compile(port::Integer)
-    profiles = CSV.read("$secretdir/test.users.csv", DataFrames.DataFrame, stringtype = String)
+    profiles = CSV.read("$secretdir/test.users.csv", DataFrames.DataFrame, stringtype = String, ntasks=1)
     while true
         try
             r = HTTP.get("$MODEL_URL/ready")

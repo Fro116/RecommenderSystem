@@ -16,7 +16,7 @@ const MEDIUM_MAP = Dict(0 => "manga", 1 => "anime")
 
 @memoize function num_items(medium::Int)
     m = MEDIUM_MAP[medium]
-    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
+    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1).matchedid) + 1
 end
 
 function loss(x, y, w, metric)

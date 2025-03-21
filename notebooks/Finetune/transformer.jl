@@ -24,7 +24,7 @@ const batch_size = 256 * max_seq_len
 
 @memoize function num_items(medium::Int)
     m = medium_map[medium]
-    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame).matchedid) + 1
+    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1).matchedid) + 1
 end
 
 @memoize function get_baselines()
