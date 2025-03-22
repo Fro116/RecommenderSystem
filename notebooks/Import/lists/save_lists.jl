@@ -313,4 +313,4 @@ function upload_fingerprints()
     @assert run_sql("import_csv.sql")
 end
 
-@scheduled "BACKUP" "2:00" @handle_errors upload_fingerprints()
+upload_fingerprints()
