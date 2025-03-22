@@ -609,6 +609,8 @@ Oxygen.@post "/malweb" function malweb_api(r::HTTP.Request)::HTTP.Response
             return malweb_get_username(resource, data["userid"])
         elseif endpoint == "user"
             return malweb_get_user(resource, data["username"])
+        elseif endpoint == "image"
+            return malweb_get_image(resource, data["url"])
         else
             logerror("malweb_api invalid endpoint $endpoint")
             return HTTP.Response(500, [])
@@ -817,6 +819,16 @@ function malweb_get_user(resource::Resource, username::String)
         "manga_count" => item_counts("mangalist"),
         "anime_count" => item_counts("animelist"),
     )
+    HTTP.Response(200, encode(ret, :msgpack)...)
+end
+
+function malweb_get_image(resource::Resource, url::String)
+    r = request(resource, "GET", url, Dict("impersonate" => true))
+    if r.status >= 400
+        logstatus("malweb_get_image", r, url)
+        return HTTP.Response(r)
+    end
+    ret = Dict("url" => url, "image" => r.body)
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 

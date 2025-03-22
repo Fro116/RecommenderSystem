@@ -182,6 +182,39 @@ function get_malweb_username(userid::Integer)
     end
 end
 
+Oxygen.@post "/mal_image" function mal_image(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    url = data["url"]
+    data = @retry get_malweb_image(url)
+    if isa(data, Errors)
+        return HTTP.Response(Int(data), [])
+    end
+    HTTP.Response(200, encode(data, :msgpack)...)
+end
+
+function get_malweb_image(url::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "malweb", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAILABLE::Errors
+    end
+    token = decode(r)
+    try
+        s = request(
+            "malweb",
+            Dict("token" => token, "endpoint" => "image", "url" => url),
+        )
+        if s.status >= 400
+            return NOT_FOUND::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
 Oxygen.@post "/mal_user" function mal_user(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     username = data["username"]
