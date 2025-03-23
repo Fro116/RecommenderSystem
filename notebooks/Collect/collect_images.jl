@@ -122,7 +122,7 @@ end
 function get_urls()
     df = reduce(
         vcat,
-        [get_mal_urls(), get_anilist_urls(), get_kitsu_urls(), get_animeplanet_urls()],
+        Random.shuffle.([get_mal_urls(), get_anilist_urls(), get_kitsu_urls(), get_animeplanet_urls()]),
     )
     df[!, "savepath"] .= ""
     for i = 1:DataFrames.nrow(df)
@@ -146,6 +146,7 @@ function save_image(source, url, fn)
     )
     if HTTP.iserror(r)
         logerror("failed to fetch $url")
+        return
     end
     data = decode(r)
     open("$fn~", "w") do f
@@ -162,7 +163,7 @@ function save_new_images(df)
         end
     end
     logtag("IMAGES", "colling $(length(idxs)) new images")
-    for i in Random.shuffle(idxs)
+    for i in idxs
         save_image(df.source[i], df.imageurl[i], df.savepath[i])
     end
 end

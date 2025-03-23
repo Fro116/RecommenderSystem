@@ -172,6 +172,9 @@ function import_mal(medium)
             "finished_airing" => "Finished",
             "currently_airing" => "Releasing",
             "not_yet_aired" => ismissing(startdate) ? "TBA" : "Upcoming",
+            "finished" => "Finished",
+            "currently_publishing" => "Releasing",
+            "not_yet_published" => ismissing(startdate) ? "TBA" : "Upcoming",
         )
         if ismissing(x)
             return missing

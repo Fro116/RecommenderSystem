@@ -527,9 +527,9 @@ function mal_get_media(resource::Resource, medium::String, itemid::Integer)
             "pictures",
             "background",
             "recommendations",
+            "status",
         ],
         "anime" => [
-            "status",
             "num_episodes",
             "start_season",
             "broadcast",
@@ -538,7 +538,7 @@ function mal_get_media(resource::Resource, medium::String, itemid::Integer)
             "rating",
             "studios",
         ],
-        "manga" => ["finished", "num_volumes", "num_chapters", "authors"],
+        "manga" => ["num_volumes", "num_chapters", "authors", "serialization"],
     )
     params = Dict("fields" => join(vcat(fields["common"], fields[medium]), ","))
     url = string(HTTP.URI("https://api.myanimelist.net/v2/$medium/$itemid"; query = params))
@@ -581,7 +581,9 @@ function mal_get_media(resource::Resource, medium::String, itemid::Integer)
         "average_episode_duration" => optget(json, "average_episode_duration"),
         "rating" => optget(json, "rating"),
         "studios" =>
-            "studios" in keys(json) ? [x["name"] for x in json["studios"]] : nothing,
+            "studios" in keys(json) ? [x["name"] for x in json["studios"]] :
+            "serialization" in keys(json) ? [x["node"]["name"] for x in json["serialization"]] :
+            nothing,
         "num_volumes" => optget(json, "num_volumes"),
         "num_chapters" => optget(json, "num_chapters"),
         "authors" =>
@@ -1100,7 +1102,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
                     }
                     relationType(version: 2)
                 }
-            }    
+            }
             characters(sort: RELEVANCE) {
                 edges {
                     role
@@ -1110,7 +1112,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
                         }
                     }
                 }
-            }    
+            }
             staff(sort: RELEVANCE) {
                 edges {
                     role
@@ -1120,7 +1122,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
                         }
                     }
                 }
-            }    
+            }
             studios(sort: FAVOURITES_DESC) {
                 nodes {
                     name

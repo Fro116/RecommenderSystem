@@ -45,7 +45,7 @@ end
     m = Dict(0 => "manga", 1 => "anime")[medium]
     df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String, ntasks=1)
     optint(x) = x != 0 ? x : missing
-    function studios(x)
+    function jsonlist(x)
         if ismissing(x) || isempty(x)
             return missing
         end
@@ -95,8 +95,10 @@ end
             "volumes" => optint(df.volumes[i]),
             "status" => df.status[i],
             "season" => season.(df.season[i]),
-            "studios" => studios(df.studios[i]),
+            "studios" => jsonlist(df.studios[i]),
             "source" => df.source_material[i],
+            "genres" => jsonlist(df.genres[i]),
+            "synopsis" => df.synopsis[i],
         )
     end
     info
