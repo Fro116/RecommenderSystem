@@ -574,6 +574,43 @@ function get_anilist_media(medium::String, itemid::Integer)
     end
 end
 
+Oxygen.@post "/anilist_image" function anilist_image(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    url = data["url"]
+    data = @retry get_anilist_image(url)
+    if isa(data, Errors)
+        return HTTP.Response(Int(data), [])
+    end
+    HTTP.Response(200, encode(data, :msgpack)...)
+end
+
+function get_anilist_image(url::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "anilist", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAILABLE::Errors
+    end
+    token = decode(r)
+    try
+        s = request(
+            "anilist",
+            Dict(
+                "token" => token,
+                "endpoint" => "image",
+                "url" => url,
+            ),
+        )
+        if s.status >= 400
+            return NOT_FOUND::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
 Oxygen.@post "/anilist_userid" function anilist_userid(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     username = data["username"]
@@ -796,6 +833,51 @@ Oxygen.@post "/kitsu_userid" function kitsu_userid(r::HTTP.Request)::HTTP.Respon
         return HTTP.Response(Int(data), [])
     end
     HTTP.Response(200, encode(data, :msgpack)...)
+end
+
+Oxygen.@post "/kitsu_image" function kitsu_image(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    url = data["url"]
+    data = @retry get_kitsu_image(url)
+    if isa(data, Errors)
+        return HTTP.Response(Int(data), [])
+    end
+    HTTP.Response(200, encode(data, :msgpack)...)
+end
+
+function get_kitsu_image(url::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "kitsu", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAILABLE::Errors
+    end
+    token = decode(r)
+    try
+        auth = get_session(token)
+        if isa(auth, Errors)
+            return auth
+        end
+        s = request(
+            "kitsu",
+            Dict(
+                "token" => token,
+                "auth" => auth,
+                "endpoint" => "image",
+                "url" => url,
+            ),
+        )
+        if s.status in [400, 401]
+            invalidate_session(token)
+            return INVALID_SESSION::Errors
+        elseif s.status >= 400
+            return NOT_FOUND::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
 end
 
 Oxygen.@post "/animeplanet_username" function animeplanet_username(
@@ -1132,6 +1214,48 @@ function get_userid(source::String, username::String)
     try
         s = request(source, args)
         if s.status >= 400
+            return NOT_FOUND::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+Oxygen.@post "/animeplanet_image" function animeplanet_image(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    url = data["url"]
+    data = @retry get_animeplanet_image(url)
+    if isa(data, Errors)
+        return HTTP.Response(Int(data), [])
+    end
+    HTTP.Response(200, encode(data, :msgpack)...)
+end
+
+function get_animeplanet_image(url::String)
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAILABLE::Errors
+    end
+    token = decode(r)
+    try
+        sessionid = get_session(token)
+        s = request(
+            "animeplanet",
+            Dict(
+                "token" => token,
+                "sessionid" => sessionid,
+                "endpoint" => "image",
+                "url" => url,
+            ),
+        )
+        if s.status == 401
+            invalidate_session(token)
+            return INVALID_SESSION::Errors
+        elseif s.status >= 400
             return NOT_FOUND::Errors
         end
         return decode(s)

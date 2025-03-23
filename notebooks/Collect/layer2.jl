@@ -828,7 +828,7 @@ function malweb_get_image(resource::Resource, url::String)
         logstatus("malweb_get_image", r, url)
         return HTTP.Response(r)
     end
-    ret = Dict("url" => url, "image" => r.body)
+    ret = Dict("version" => API_VERSION, "url" => url, "image" => r.body)
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
@@ -852,6 +852,8 @@ Oxygen.@post "/anilist" function anilist_api(r::HTTP.Request)::HTTP.Response
             return anilist_get_userid(resource, data["username"])
         elseif endpoint == "user"
             return anilist_get_user(resource, data["userid"])
+        elseif endpoint == "image"
+            return anilist_get_image(resource, data["url"])
         else
             logerror("anilist_api invalid endpoint $endpoint")
             return HTTP.Response(500, [])
@@ -1389,6 +1391,16 @@ function anilist_get_user(resource::Resource, userid::Integer)
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
+function anilist_get_image(resource::Resource, url::String)
+    r = request(resource, "GET", url, Dict("impersonate" => true))
+    if r.status >= 400
+        logstatus("anilist_get_image", r, url)
+        return HTTP.Response(r)
+    end
+    ret = Dict("version" => API_VERSION, "url" => url, "image" => r.body)
+    HTTP.Response(200, encode(ret, :msgpack)...)
+end
+
 Oxygen.@post "/kitsu" function kitsu_api(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     endpoint = data["endpoint"]
@@ -1409,6 +1421,8 @@ Oxygen.@post "/kitsu" function kitsu_api(r::HTTP.Request)::HTTP.Response
             return kitsu_get_userid(resource, data["auth"], data["username"], data["key"])
         elseif endpoint == "user"
             return kitsu_get_user(resource, data["auth"], data["userid"])
+        elseif endpoint == "image"
+            return kitsu_get_image(resource, data["url"])
         elseif endpoint == "token"
             return kitsu_get_token(resource)
         else
@@ -1698,6 +1712,16 @@ function kitsu_get_user(resource::Resource, auth::String, userid::Integer)
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
+function kitsu_get_image(resource::Resource, url::String)
+    r = request(resource, "GET", url, Dict("impersonate" => true))
+    if r.status >= 400
+        logstatus("kitsu_get_image", r, url)
+        return HTTP.Response(r)
+    end
+    ret = Dict("version" => API_VERSION, "url" => url, "image" => r.body)
+    HTTP.Response(200, encode(ret, :msgpack)...)
+end
+
 Oxygen.@post "/animeplanet" function animeplanet_api(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     endpoint = data["endpoint"]
@@ -1743,6 +1767,8 @@ Oxygen.@post "/animeplanet" function animeplanet_api(r::HTTP.Request)::HTTP.Resp
                 data["medium"],
                 data["username"],
             )
+        elseif endpoint == "image"
+            return animeplanet_get_image(resource, sessionid, data["url"])
         else
             logerror("animeplanet_api invalid endpoint $endpoint")
             return HTTP.Response(500, [])
@@ -2138,6 +2164,16 @@ function animeplanet_get_username(resource::Resource, sessionid::String, userid:
         "userid" => userid,
         "username" => username,
     )
+    HTTP.Response(200, encode(ret, :msgpack)...)
+end
+
+function animeplanet_get_image(resource::Resource, sessionid::String, url::String)
+    r = request(resource, "GET", url, Dict("sessionid" => sessionid))
+    if r.status >= 400
+        logstatus("animeplanet_get_image", r, url)
+        return HTTP.Response(r)
+    end
+    ret = Dict("version" => API_VERSION, "url" => url, "image" => r.body)
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
