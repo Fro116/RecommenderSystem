@@ -29,6 +29,30 @@ standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1).matchedid) + 1
 end
 
+@memoize function get_images()
+    df = CSV.read("$datadir/images.csv", DataFrames.DataFrame, ntasks=1)
+    d = Dict()
+    medium_map = Dict("manga" => 0, "anime" => 1)
+    for i in 1:DataFrames.nrow(df)
+        if !df.saved[i]
+            continue
+        end
+        key = (df.source[i], medium_map[df.medium[i]], df.itemid[i])
+        if key ∉ keys(d)
+            d[key] = []
+        end
+        push!(d[key], "https://cdn.recs.moe/images/cards/$(df.filename[i])")
+    end
+    d
+end
+
+@memoize function get_missing_images()
+    [
+        "https://cdn.recs.moe/images/error/404.$i.webp"
+        for i in 1:2
+    ]
+end
+
 function get_url(source, medium, itemid)
     medium_map = Dict(0 => "manga", 1 => "anime")
     source_map = Dict(
@@ -38,6 +62,28 @@ function get_url(source, medium, itemid)
         "animeplanet" => "https://anime-planet.com",
     )
     join([source_map[source], medium_map[medium], itemid], "/")
+end
+
+function get_images(source, medium, itemid)
+    images = get_images()
+    key = (source, medium, itemid)
+    if key ∉ keys(images)
+        return nothing
+    end
+    images[key]
+end
+
+function select_images(d)
+    d = copy(d)
+    for k in ["image", "missing_image"]
+        if isnothing(d["$(k)s"])
+            d[k] = nothing
+        else
+            d[k] = rand(d["$(k)s"])
+        end
+        delete!(d, "$(k)s")
+    end
+    d
 end
 
 @memoize function get_media_info(medium)
@@ -79,12 +125,19 @@ end
         season_str, year = split(x, "-")
         uppercasefirst(season_str) * " " * year
     end
+    function english_title(title, engtitle)
+        if ismissing(engtitle) || lowercase(title) == lowercase(engtitle)
+            return missing
+        end
+        engtitle
+    end
     for i = 1:DataFrames.nrow(df)
         if df.matchedid[i] == 0 || df.matchedid[i] in keys(info)
             continue
         end
-        info[df.matchedid[i]] = Dict(
+        info[df.matchedid[i]] = Dict{String, Any}(
             "title" => df.title[i],
+            "english_title" => english_title(df.title[i], df.english_title[i]),
             "url" => get_url(df.source[i], medium, df.itemid[i]),
             "type" => df.mediatype[i],
             "startdate" => df.startdate[i],
@@ -99,6 +152,8 @@ end
             "source" => df.source_material[i],
             "genres" => jsonlist(df.genres[i]),
             "synopsis" => df.synopsis[i],
+            "images" => get_images(df.source[i], medium, df.itemid[i]),
+            "missing_images" => get_missing_images(),
         )
     end
     info
@@ -219,7 +274,7 @@ function compute(state, pagination)
     if sidx > total
         view = []
     else
-        view = [info[i] for i in ids[sidx:min(eidx, total)]]
+        view = [select_images(info[i]) for i in ids[sidx:min(eidx, total)]]
     end
     view, total
 end
@@ -237,6 +292,10 @@ function refresh_user(source, username)
     d["refresh"]
 end
 
+function sanitize(x)
+    strip(x)
+end
+
 Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     encoding = nothing
     if occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
@@ -252,7 +311,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     action = d["action"]
     followup_action = nothing
     if action["type"] == "add_user"
-        username = action["username"]
+        username = sanitize(action["username"])
         source = action["source"]
         r_embed = HTTP.post(
             "http://localhost:$PORT/add_user",
@@ -269,7 +328,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
         push!(state["users"], d_embed)
         followup_action = Dict("type" => "refresh_user", "source" => source, "username" => username)
     elseif action["type"] == "refresh_user"
-        username = action["username"]
+        username = sanitize(action["username"])
         source = action["source"]
         idx = nothing
         for (i, x) in Iterators.enumerate(state["users"])
@@ -320,7 +379,7 @@ function compile(port::Integer)
         end
     end
     state = ""
-    pagination = Dict("offset" => 0,  "limit" => 50)
+    pagination = Dict("offset" => 0,  "limit" => 25)
     function apply_action(action)
         r = HTTP.post(
             "http://localhost:$PORT/update",

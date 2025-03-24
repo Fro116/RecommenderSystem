@@ -25,7 +25,7 @@ function compute(basedir::String)
     files = vcat(
         ["$m.csv" for m in mediums],
         ["media_relations.$m.jld2" for m in [0, 1]],
-        ["latest", "bluegreen", "model.registry.jld2"],
+        ["latest", "bluegreen", "model.registry.jld2", "images.csv"],
     )
     for f in files
         copy("data/finetune/$f", app)

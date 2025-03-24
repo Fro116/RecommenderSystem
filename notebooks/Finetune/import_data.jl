@@ -43,6 +43,7 @@ function download_data()
         ["baseline.$m.msgpack" for m in [0, 1]],
         ["bagofwords.$m.$metric.$stem" for m in [0, 1] for metric in ["rating"] for stem in ["csv", "pt"]],
         ["transformer.$stem" for stem in ["csv", "pt"]],
+        ["images.csv"],
     )
     for fn in files
         cmd = "$download/training/$tag/$fn $datadir/$fn"

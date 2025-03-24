@@ -20,7 +20,7 @@ function download_data()
         ["$m.groups.csv" for m in MEDIUMS],
         ["$(s)_$(m).csv" for s in SOURCES for m in MEDIUMS],
         ["$(s)_media_relations.csv" for s in SOURCES],
-        ["fingerprints.csv"],
+        ["fingerprints.csv", "images.csv"],
     )
     for fn in files
         cmd = "$retrieval/$fn $datadir/$fn"
@@ -210,7 +210,10 @@ function import_data()
         write(f, date)
     end
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}"
-    files = ["$m.csv" for m in MEDIUMS]
+    files = vcat(
+        ["$m.csv" for m in MEDIUMS],
+        ["images.csv"],
+    )
     for f in files
         cmd = replace(
             save_template,
