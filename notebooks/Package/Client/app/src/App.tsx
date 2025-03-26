@@ -2,10 +2,20 @@ import React, { useState, useEffect, useRef, FormEvent, ChangeEvent } from 'reac
 import pako from 'pako';
 import './App.css';
 
+// Helper function to pick the biggest image URL from an array of image objects.
+const getBiggestImageUrl = (images: any): string => {
+  if (Array.isArray(images) && images.length > 0) {
+    return images.reduce((prev: any, curr: any) => {
+      return (prev.width * prev.height) >= (curr.width * curr.height) ? prev : curr;
+    }).url;
+  }
+  return images || '';
+};
+
 interface Result {
   title: string;
   english_title?: string;
-  missing_image?: string;
+  missing_image: any;
   url: string;
   source: string | null;
   type: string;
@@ -20,7 +30,7 @@ interface Result {
   studios?: string;
   genres?: string;
   synopsis?: string;
-  image: string | null;
+  image: any;
 }
 
 type SourceType = 'MyAnimeList' | 'AniList' | 'Kitsu' | 'Anime-Planet';
@@ -47,15 +57,61 @@ type Payload = AddUserPayload | MediaTypePayload;
 
 const UPDATE_URL = 'https://api.recs.moe/update';
 
-// Component to handle image loading and fallback
-const CardImage: React.FC<{ item: Result; onClick: () => void }> = ({ item, onClick }) => {
-  const [src, setSrc] = useState<string>(item.image || item.missing_image || '');
-  const [isFallback, setIsFallback] = useState<boolean>(!item.image);
+// ManualScrollDiv remains unchanged.
+const ManualScrollDiv: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ children, ...props }) => {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const startY = useRef<number>(0);
+  const startScrollTop = useRef<number>(0);
 
   useEffect(() => {
-    const newSrc = item.image || item.missing_image || '';
+    const el = scrollRef.current;
+    if (!el) return;
+    const handleTouchStart = (e: TouchEvent) => {
+      startY.current = e.touches[0].clientY;
+      startScrollTop.current = el.scrollTop;
+      e.stopPropagation();
+    };
+    const handleTouchMove = (e: TouchEvent) => {
+      const deltaY = e.touches[0].clientY - startY.current;
+      const newScrollTop = startScrollTop.current - deltaY;
+      const maxScrollTop = el.scrollHeight - el.clientHeight;
+      if (newScrollTop > 0 && newScrollTop < maxScrollTop) {
+        el.scrollTop = newScrollTop;
+        e.preventDefault();
+        e.stopPropagation();
+      } else {
+        if (newScrollTop < 0) {
+          el.scrollTop = 0;
+        } else if (newScrollTop > maxScrollTop) {
+          el.scrollTop = maxScrollTop;
+        }
+      }
+    };
+    el.addEventListener('touchstart', handleTouchStart, { passive: false });
+    el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    return () => {
+      el.removeEventListener('touchstart', handleTouchStart);
+      el.removeEventListener('touchmove', handleTouchMove);
+    };
+  }, []);
+  return (
+    <div ref={scrollRef} {...props}>
+      {children}
+    </div>
+  );
+};
+
+// Updated CardImage component to use the biggest image URL.
+const CardImage: React.FC<{ item: Result; onClick: () => void }> = ({ item, onClick }) => {
+  const initialImageUrl = getBiggestImageUrl(item.image);
+  const initialMissingImageUrl = getBiggestImageUrl(item.missing_image);
+  const [src, setSrc] = useState<string>(initialImageUrl || initialMissingImageUrl || '');
+  const [isFallback, setIsFallback] = useState<boolean>(!initialImageUrl);
+
+  useEffect(() => {
+    const newSrc = getBiggestImageUrl(item.image) || getBiggestImageUrl(item.missing_image);
     setSrc(newSrc);
-    setIsFallback(!item.image);
+    setIsFallback(!getBiggestImageUrl(item.image));
   }, [item.image, item.missing_image]);
 
   return (
@@ -67,7 +123,7 @@ const CardImage: React.FC<{ item: Result; onClick: () => void }> = ({ item, onCl
         loading="lazy"
         onError={(e) => {
           e.currentTarget.onerror = null;
-          setSrc(item.missing_image || '');
+          setSrc(initialMissingImageUrl || '');
           setIsFallback(true);
         }}
       />
@@ -91,9 +147,7 @@ const App: React.FC = () => {
   const [showSynopsis, setShowSynopsis] = useState<{ [index: number]: boolean }>({});
   const [hasSearched, setHasSearched] = useState<boolean>(false);
   const [isMobile, setIsMobile] = useState<boolean>(false);
-  // Use cumulative rotation (in degrees) for flipping
   const [cardRotation, setCardRotation] = useState<{ [index: number]: number }>({});
-  // Track whether the flip button is active (disabling hover behavior)
   const [flipActive, setFlipActive] = useState<boolean>(false);
 
   const searchRef = useRef<HTMLDivElement>(null);
@@ -110,6 +164,8 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    const vh = window.innerHeight * 0.01;
+    document.documentElement.style.setProperty('--vh', `${vh}px`);
     setIsMobile(window.matchMedia && window.matchMedia('(hover: none)').matches);
   }, []);
 
@@ -143,10 +199,7 @@ const App: React.FC = () => {
           }
         });
       },
-      {
-        root: gridViewRef.current,
-        threshold: 0.1,
-      }
+      { root: gridViewRef.current, threshold: 0.1 }
     );
     observer.observe(loadMoreRef.current);
     return () => {
@@ -156,25 +209,11 @@ const App: React.FC = () => {
 
   const currentPayloadForPagination = (): Payload => {
     if (results.length > 0) {
-      return {
-        state: apiState,
-        action: {
-          type: 'set_media',
-          medium: cardType,
-        },
-      };
+      return { state: apiState, action: { type: 'set_media', medium: cardType } };
     }
-    return {
-      state: '',
-      action: {
-        type: 'add_user',
-        source: activeSource,
-        username: query,
-      },
-    };
+    return { state: '', action: { type: 'add_user', source: activeSource, username: query } };
   };
 
-  // Reset rotation, synopsis state, and flip button when a new user is added
   const resetCardStates = () => {
     setCardRotation({});
     setShowSynopsis({});
@@ -186,71 +225,44 @@ const App: React.FC = () => {
     const extendedPayload = { ...payload, pagination: { offset, limit } };
     const payloadString = JSON.stringify(extendedPayload);
     const compressedPayload = pako.gzip(payloadString);
-
     return fetch(UPDATE_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Encoding': 'gzip'
-      },
+      headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' },
       body: compressedPayload,
     })
       .then((response) => {
-        if (!response.ok) {
-          throw new Error('Failed to fetch results.');
-        }
+        if (!response.ok) throw new Error('Failed to fetch results.');
         return response.json();
       })
       .then((data) => {
         setApiState(data.state);
         setTotalResults(data.total);
         if (append) {
-          setResults((prev) => [...prev, ...data.view]);
+          setResults(prev => [...prev, ...data.view]);
         } else {
           setResults(data.view);
-          if (gridViewRef.current) {
-            gridViewRef.current.scrollTop = 0;
-          }
-          if (extendedPayload.action.type === 'add_user') {
-            setCardType('Anime');
-          }
+          if (gridViewRef.current) gridViewRef.current.scrollTop = 0;
+          if (extendedPayload.action.type === 'add_user') setCardType('Anime');
         }
         setErrorMessage('');
         setHasSearched(true);
-        if (extendedPayload.action.type === 'add_user') {
-          resetCardStates();
-        }
-        if (extendedPayload.action.type === 'set_media') {
-          setShowSynopsis({});
-        }
-
+        if (extendedPayload.action.type === 'add_user') resetCardStates();
+        if (extendedPayload.action.type === 'set_media') setShowSynopsis({});
         if (data.followup_action) {
-          const followupPayload = {
-            state: data.state,
-            action: data.followup_action,
-            pagination: extendedPayload.pagination,
-          };
+          const followupPayload = { state: data.state, action: data.followup_action, pagination: extendedPayload.pagination };
           const followupString = JSON.stringify(followupPayload);
           const compressedFollowup = pako.gzip(followupString);
-
           fetch(UPDATE_URL, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Content-Encoding': 'gzip'
-            },
+            headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' },
             body: compressedFollowup,
           })
             .then((response) => {
-              if (!response.ok) {
-                throw new Error('Failed to fetch followup action results.');
-              }
+              if (!response.ok) throw new Error('Failed to fetch followup action results.');
               return response.json();
             })
             .then((followupData) => {
-              if (!followupData || Object.keys(followupData).length === 0) {
-                return;
-              }
+              if (!followupData || Object.keys(followupData).length === 0) return;
               setApiState(followupData.state);
               setTotalResults(followupData.total);
               setResults(followupData.view);
@@ -259,9 +271,7 @@ const App: React.FC = () => {
               }
               setShowSynopsis({});
             })
-            .catch((error) => {
-              console.error('Error during followup action:', error);
-            });
+            .catch((error) => console.error('Error during followup action:', error));
         }
         return data;
       })
@@ -271,10 +281,7 @@ const App: React.FC = () => {
       });
   };
 
-  const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setQuery(e.target.value);
-  };
-
+  const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => setQuery(e.target.value);
   const handleSearch = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!query.trim()) return;
@@ -285,43 +292,20 @@ const App: React.FC = () => {
       Kitsu: 'kitsu',
       'Anime-Planet': 'animeplanet',
     };
-
-    const payload: AddUserPayload = {
-      state: '',
-      action: {
-        type: 'add_user',
-        source: source_map[activeSource],
-        username: currentQuery,
-      },
-    };
-
-    fetchResults(payload, 0, false).then(() => {
-      setQuery('');
-    });
+    const payload: AddUserPayload = { state: '', action: { type: 'add_user', source: source_map[activeSource], username: currentQuery } };
+    fetchResults(payload, 0, false).then(() => setQuery(''));
     setShowButtons(false);
-    if (inputRef.current) {
-      inputRef.current.blur();
-    }
+    if (inputRef.current) inputRef.current.blur();
   };
 
-  const handleButtonClick = (source: SourceType) => {
-    setActiveSource(source);
-  };
-
+  const handleButtonClick = (source: SourceType) => setActiveSource(source);
   const handleMediaTypeChange = (type: CardType) => {
     setCardType(type);
-    const payload: MediaTypePayload = {
-      state: apiState,
-      action: {
-        type: 'set_media',
-        medium: type,
-      },
-    };
+    const payload: MediaTypePayload = { state: apiState, action: { type: 'set_media', medium: type } };
     setShowSynopsis({});
     fetchResults(payload, 0, false);
   };
 
-  // Flip button toggle handler that updates flipActive and rotates cards accordingly.
   const handleFlipToggle = (e: React.MouseEvent<HTMLButtonElement>) => {
     const newFlipActive = !flipActive;
     setFlipActive(newFlipActive);
@@ -329,32 +313,30 @@ const App: React.FC = () => {
       const newMapping: { [index: number]: number } = {};
       for (let i = 0; i < results.length; i++) {
         const currentRotation = prev[i] || 0;
-        if (newFlipActive) {
-          // Activating flip: if card is showing its front, rotate by +180° to show the back.
-          newMapping[i] = (currentRotation % 360 === 0) ? currentRotation + 180 : currentRotation;
-        } else {
-          // Deactivating flip: if card is showing its back, rotate by +180° to show the front.
-          newMapping[i] = (currentRotation % 360 === 180) ? currentRotation + 180 : currentRotation;
-        }
+        newMapping[i] = newFlipActive
+          ? (currentRotation % 360 === 0 ? currentRotation + 180 : currentRotation)
+          : (currentRotation % 360 === 180 ? currentRotation + 180 : currentRotation);
       }
       return newMapping;
     });
     e.currentTarget.blur();
   };
 
-  // For mobile: clicking the card front rotates it by 180°
-  const handleCardFrontClick = (index: number, item: Result) => {
+  const handleCardFrontClick = (index: number) => {
     if (isMobile) {
       setCardRotation(prev => ({ ...prev, [index]: (prev[index] || 0) + 180 }));
-    } else {
-      // On desktop, clicking the card front opens the URL.
-      window.open(item.url, '_blank', 'noopener,noreferrer');
     }
   };
 
-  // On mobile, clicking the card back when synopsis is shown rotates it by 180°
   const handleCardBackClick = (index: number) => {
-    if (isMobile && showSynopsis[index]) {
+    if (isMobile && !flipActive && showSynopsis[index]) {
+      setCardRotation(prev => ({ ...prev, [index]: (prev[index] || 0) + 180 }));
+      setTimeout(() => {
+        setShowSynopsis(prev => ({ ...prev, [index]: false }));
+      }, 300);
+    } else if (isMobile && flipActive && showSynopsis[index]) {
+      setShowSynopsis(prev => ({ ...prev, [index]: false }));
+    } else if (isMobile && showSynopsis[index]) {
       setCardRotation(prev => ({ ...prev, [index]: (prev[index] || 0) + 180 }));
       setShowSynopsis(prev => ({ ...prev, [index]: false }));
     } else {
@@ -362,41 +344,26 @@ const App: React.FC = () => {
     }
   };
 
+  // When no results, disable scrolling using dynamic viewport height.
+  const containerStyle: React.CSSProperties = results.length === 0
+    ? { height: 'calc(var(--vh, 1vh) * 100)', overflowY: 'hidden' }
+    : {};
+
   return (
-    <div className="container">
+    <div className={`container ${results.length === 0 ? 'homepage' : ''}`} style={containerStyle}>
       <header ref={searchRef} className={hasSearched ? 'header--toggle' : ''}>
         {hasSearched ? (
           <div className="header-toggle">
-            <button
-              className={`header-toggle-button ${cardType === 'Anime' ? 'selected' : ''}`}
-              onClick={() => handleMediaTypeChange('Anime')}
-            >
-              Anime
-            </button>
-            <button
-              className={`header-toggle-button ${cardType === 'Manga' ? 'selected' : ''}`}
-              onClick={() => handleMediaTypeChange('Manga')}
-            >
-              Manga
-            </button>
-            <button className={`flip-all-button ${flipActive ? 'selected' : ''}`} onClick={handleFlipToggle}>
-              ⇄
-            </button>
+            <button className={`header-toggle-button ${cardType === 'Anime' ? 'selected' : ''}`}
+              onClick={() => handleMediaTypeChange('Anime')}>Anime</button>
+            <button className={`header-toggle-button ${cardType === 'Manga' ? 'selected' : ''}`}
+              onClick={() => handleMediaTypeChange('Manga')}>Manga</button>
+            <button className={`flip-all-button ${flipActive ? 'selected' : ''}`} onClick={handleFlipToggle}>⇄</button>
           </div>
         ) : (
           <form onSubmit={handleSearch}>
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder={showButtons ? placeholders[activeSource] : ''}
-              value={query}
-              onChange={handleInputChange}
-              onFocus={() => {
-                setShowButtons(true);
-                setErrorMessage('');
-                setHasSearched(false);
-              }}
-            />
+            <input ref={inputRef} type="text" placeholder={showButtons ? placeholders[activeSource] : ''}
+              value={query} onChange={handleInputChange} onFocus={() => { setShowButtons(true); setErrorMessage(''); setHasSearched(false); }} />
           </form>
         )}
       </header>
@@ -410,12 +377,9 @@ const App: React.FC = () => {
 
       {showButtons && !hasSearched && (
         <div className="source-buttons" ref={buttonContainerRef}>
-          {(['MyAnimeList', 'AniList', 'Kitsu', 'Anime-Planet'] as SourceType[]).map((source) => (
-            <button
-              key={source}
-              className={`source-button ${activeSource === source ? 'selected' : ''}`}
-              onClick={() => handleButtonClick(source)}
-            >
+          {(['MyAnimeList', 'AniList', 'Kitsu', 'Anime-Planet'] as SourceType[]).map(source => (
+            <button key={source} className={`source-button ${activeSource === source ? 'selected' : ''}`}
+              onClick={() => handleButtonClick(source)}>
               {source}
             </button>
           ))}
@@ -426,107 +390,84 @@ const App: React.FC = () => {
         <>
           {!hasSearched && (
             <div className="card-toggle">
-              <button
-                className={`toggle-button ${cardType === 'Anime' ? 'selected' : ''}`}
-                onClick={() => handleMediaTypeChange('Anime')}
-              >
-                Anime
-              </button>
-              <button
-                className={`toggle-button ${cardType === 'Manga' ? 'selected' : ''}`}
-                onClick={() => handleMediaTypeChange('Manga')}
-              >
-                Manga
-              </button>
+              <button className={`toggle-button ${cardType === 'Anime' ? 'selected' : ''}`}
+                onClick={() => handleMediaTypeChange('Anime')}>Anime</button>
+              <button className={`toggle-button ${cardType === 'Manga' ? 'selected' : ''}`}
+                onClick={() => handleMediaTypeChange('Manga')}>Manga</button>
             </div>
           )}
           <div className="grid-view" ref={gridViewRef}>
-            {results.map((item, index) => (
-              <div
-                key={index}
-                className="card"
-                // For desktop and when flip button is not active, use hover events.
-                onMouseEnter={
-                  !isMobile && !flipActive
-                    ? () => {
-                        const currentRotation = cardRotation[index] || 0;
-                        if (currentRotation % 360 === 0) {
-                          setCardRotation(prev => ({ ...prev, [index]: currentRotation + 180 }));
-                        }
-                      }
-                    : undefined
-                }
-                onMouseLeave={
-                  !isMobile && !flipActive
-                    ? () => {
-                        const currentRotation = cardRotation[index] || 0;
-                        // On hover off, rotate in the opposite direction (-180) instead of adding +180.
-                        if (currentRotation % 360 === 180) {
-                          setCardRotation(prev => ({ ...prev, [index]: currentRotation - 180 }));
-                        }
-                      }
-                    : undefined
-                }
-              >
-                <div
-                  className="card-inner"
-                  style={cardRotation.hasOwnProperty(index) ? { transform: `rotateY(${cardRotation[index]}deg)` } : {}}
+            {results.map((item, index) => {
+              const currentRotation = cardRotation.hasOwnProperty(index)
+                ? cardRotation[index]
+                : (flipActive ? 180 : 0);
+              return (
+                <div key={index} className="card"
+                  onMouseEnter={!isMobile && !flipActive ? () => {
+                    const r = cardRotation[index] || 0;
+                    if (r % 360 === 0) setCardRotation(prev => ({ ...prev, [index]: r + 180 }));
+                  } : undefined}
+                  onMouseLeave={!isMobile && !flipActive ? () => {
+                    const r = cardRotation[index] || 0;
+                    if (r % 360 === 180) setCardRotation(prev => ({ ...prev, [index]: r - 180 }));
+                  } : undefined}
                 >
-                  <CardImage item={item} onClick={() => handleCardFrontClick(index, item)} />
-                  <div className="card-back" onClick={() => handleCardBackClick(index)}>
-                    <div className="card-back-bg" style={{ backgroundImage: `url(${item.image || item.missing_image || ''})` }}></div>
-                    <div className="card-back-container">
-                      <div
-                        className="card-back-header"
-                        onClick={(e) => {
+                  <div className="card-inner" style={{ transform: `rotateY(${currentRotation}deg)` }}>
+                    <CardImage item={item} onClick={() => handleCardFrontClick(index)} />
+                    <div className="card-back" onClick={() => handleCardBackClick(index)}>
+                      <div className="card-back-bg" style={{ backgroundImage: `url(${getBiggestImageUrl(item.image) || getBiggestImageUrl(item.missing_image)})` }}></div>
+                      <div className="card-back-container">
+                        <div className="card-back-header" onClick={(e) => {
                           e.stopPropagation();
                           window.open(item.url, '_blank', 'noopener,noreferrer');
-                        }}
-                      >
-                        <div>{item.title}</div>
-                        {item.english_title && (
-                          <div className="card-back-english-title">{item.english_title}</div>
-                        )}
-                      </div>
-                      <div className="card-back-body">
-                        {showSynopsis[index] ? (
-                          <p style={{ whiteSpace: 'pre-line' }}>{item.synopsis}</p>
-                        ) : (
-                          <div className="card-details">
-                            {cardType === 'Anime' ? (
-                              <>
-                                {item.type && <p><strong>Medium:</strong> {item.type}</p>}
-                                {item.season && <p><strong>Season:</strong> {item.season}</p>}
-                                {item.episodes != null && <p><strong>Episodes:</strong> {item.episodes}</p>}
-                                {item.status && <p><strong>Status:</strong> {item.status}</p>}
-                                {item.startdate && <p><strong>Start Date:</strong> {item.startdate}</p>}
-                                {item.enddate && <p><strong>End Date:</strong> {item.enddate}</p>}
-                                {item.source && <p><strong>Source:</strong> {item.source}</p>}
-                                {item.duration && <p><strong>Duration:</strong> {item.duration}</p>}
-                                {item.studios && <p><strong>Studio:</strong> {item.studios}</p>}
-                                {item.genres && <p><strong>Genres:</strong> {item.genres}</p>}
-                              </>
-                            ) : (
-                              <>
-                                {item.type && <p><strong>Medium:</strong> {item.type}</p>}
-                                {item.status && <p><strong>Status:</strong> {item.status}</p>}
-                                {item.startdate && <p><strong>Start Date:</strong> {item.startdate}</p>}
-                                {item.enddate && <p><strong>End Date:</strong> {item.enddate}</p>}
-                                {item.volumes != null && <p><strong>Volumes:</strong> {item.volumes}</p>}
-                                {item.chapters != null && <p><strong>Chapters:</strong> {item.chapters}</p>}
-                                {item.source && <p><strong>Source:</strong> {item.source}</p>}
-                                {item.studios && <p><strong>Studio:</strong> {item.studios}</p>}
-                                {item.genres && <p><strong>Genres:</strong> {item.genres}</p>}
-                              </>
-                            )}
-                          </div>
-                        )}
+                        }}>
+                          <div>{item.title}</div>
+                          {item.english_title && (<div className="card-back-english-title">{item.english_title}</div>)}
+                        </div>
+                        <ManualScrollDiv className="card-back-body">
+                          {showSynopsis[index] ? (
+                            <p style={{ whiteSpace: 'pre-line' }}>{item.synopsis}</p>
+                          ) : (
+                            <div className="card-details">
+                              {cardType === 'Anime' ? (
+                                <table>
+                                  <tbody>
+                                    {item.type && (<tr><td><strong>Medium:</strong></td><td>{item.type}</td></tr>)}
+                                    {item.season && (<tr><td><strong>Season:</strong></td><td>{item.season}</td></tr>)}
+                                    {item.episodes != null && (<tr><td><strong>Episodes:</strong></td><td>{item.episodes}</td></tr>)}
+                                    {item.status && (<tr><td><strong>Status:</strong></td><td>{item.status}</td></tr>)}
+                                    {item.startdate && (<tr><td><strong>Start&nbsp;Date:</strong></td><td>{item.startdate}</td></tr>)}
+                                    {item.enddate && (<tr><td><strong>End Date:</strong></td><td>{item.enddate}</td></tr>)}
+                                    {item.source && (<tr><td><strong>Source:</strong></td><td>{item.source}</td></tr>)}
+                                    {item.duration && (<tr><td><strong>Duration:</strong></td><td>{item.duration}</td></tr>)}
+                                    {item.studios && (<tr><td><strong>Studio:</strong></td><td>{item.studios}</td></tr>)}
+                                    {item.genres && (<tr><td><strong>Genres:</strong></td><td>{item.genres}</td></tr>)}
+                                  </tbody>
+                                </table>
+                              ) : (
+                                <table>
+                                  <tbody>
+                                    {item.type && (<tr><td><strong>Medium:</strong></td><td>{item.type}</td></tr>)}
+                                    {item.status && (<tr><td><strong>Status:</strong></td><td>{item.status}</td></tr>)}
+                                    {item.startdate && (<tr><td><strong>Start&nbsp;Date:</strong></td><td>{item.startdate}</td></tr>)}
+                                    {item.enddate && (<tr><td><strong>End Date:</strong></td><td>{item.enddate}</td></tr>)}
+                                    {item.volumes != null && (<tr><td><strong>Volumes:</strong></td><td>{item.volumes}</td></tr>)}
+                                    {item.chapters != null && (<tr><td><strong>Chapters:</strong></td><td>{item.chapters}</td></tr>)}
+                                    {item.source && (<tr><td><strong>Source:</strong></td><td>{item.source}</td></tr>)}
+                                    {item.studios && (<tr><td><strong>Studio:</strong></td><td>{item.studios}</td></tr>)}
+                                    {item.genres && (<tr><td><strong>Genres:</strong></td><td>{item.genres}</td></tr>)}
+                                  </tbody>
+                                </table>
+                              )}
+                            </div>
+                          )}
+                        </ManualScrollDiv>
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             <div ref={loadMoreRef} style={{ height: '1px' }}></div>
           </div>
         </>

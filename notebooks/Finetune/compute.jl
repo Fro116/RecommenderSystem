@@ -34,23 +34,53 @@ end
     d = Dict()
     medium_map = Dict("manga" => 0, "anime" => 1)
     for i in 1:DataFrames.nrow(df)
-        if !df.saved[i]
+        if df.width[i] >= df.height[i]
             continue
         end
         key = (df.source[i], medium_map[df.medium[i]], df.itemid[i])
         if key ∉ keys(d)
-            d[key] = []
+            d[key] = Dict()
         end
-        push!(d[key], "https://cdn.recs.moe/images/cards/$(df.filename[i])")
+        imageid = df.imageid[i]
+        if imageid ∉ keys(d[key])
+            d[key][imageid] = []
+        end
+        val = Dict(
+            "url" => "https://cdn.recs.moe/images/cards/$(df.filename[i])",
+            "width" => df.width[i],
+            "height" => df.height[i],
+        )
+        push!(d[key][imageid], val)
+    end
+    for k in keys(d)
+        d[k] = collect(values(d[k]))
     end
     d
 end
 
 @memoize function get_missing_images()
-    [
-        "https://cdn.recs.moe/images/error/404.$i.webp"
-        for i in 1:2
+    error_images = [
+        (1, "404.1.medium.webp", 1174, 1702),
+        (1, "404.1.large.webp", 2348, 3404),
+        (2, "404.2.medium.webp", 798, 1156),
+        (2, "404.2.large.webp", 1596, 2312),
     ]
+    groups = Dict()
+    for x in error_images
+        id, url, width, height = x
+        if id ∉ keys(groups)
+            groups[id] = []
+        end
+        push!(
+            groups[id],
+            Dict(
+                "url" => "https://cdn.recs.moe/images/error/$url",
+                "width" => width,
+                "height" => height
+            )
+        )
+    end
+    collect(values(groups))
 end
 
 function get_url(source, medium, itemid)

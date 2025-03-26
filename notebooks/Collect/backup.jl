@@ -50,8 +50,7 @@ end
 function backup_images()
     logtag("BACKUP", "IMAGES")
     datadir = "../../data/collect"
-    run(`rclone --retries=10 sync $datadir/images r2:cdn/images/cards --exclude '*~'`)
-    run(`rclone --retries=10 copyto $datadir/images.csv r2:rsys/database/import/images.csv`)
+    run(`rclone --retries=10 copyto $datadir/images.tar r2:rsys/database/import/images.tar`)
 end
 
 function backup()

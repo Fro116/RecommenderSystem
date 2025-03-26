@@ -154,15 +154,18 @@ function save_image(source, url, fn)
     open("$datadir/$fn~", "w") do f
         write(f, data["image"])
     end
-    if ispath("$datadir/$fn") && read("$datadir/$fn") == read("$datadir/$fn~")
-        rm("$datadir/$fn~")
-    else
-        mv("$datadir/$fn~", "$datadir/$fn", force = true)
-    end
+    mv("$datadir/$fn~", "$datadir/$fn", force = true)
     true
 end
 
-write_df(df) = CSV.write("$datadir/../images.csv", sort(df))
+function write_df(df)
+    CSV.write("$datadir/../images.csv", sort(df))
+    for f in Glob.glob("$datadir/*~")
+        rm(f)
+    end
+    cmd = "cd $datadir/.. && tar cf images.tar images images.csv"
+    run(`sh -c $cmd`)
+end
 
 function save_new_images(df)
     logtag("IMAGES", "collecting $(sum(.!df.saved)) new images")

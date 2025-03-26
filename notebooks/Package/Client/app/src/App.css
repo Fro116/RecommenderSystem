@@ -17,17 +17,22 @@ body {
   height: 100vh;
 }
 
+/* When on the homepage, force container to fill visible viewport */
+.container.homepage {
+  height: calc(var(--vh, 1vh) * 100);
+  overflow-y: hidden;
+}
+
 /* Header and search form */
 header {
   padding: 20px;
   text-align: center;
   border-bottom: 1px solid #e0e0e0;
-  background: #f7f7f7;  /* Solid darker color */
+  background: #f7f7f7;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
   color: #333;
 }
 
-/* Reduced header size when toggle buttons are shown; bottom padding removed */
 header.header--toggle {
   padding: 10px 20px 0;
 }
@@ -64,7 +69,7 @@ header input:hover {
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
-/* Header toggle section with all three buttons centered */
+/* Header toggle section */
 .header-toggle {
   display: flex;
   width: 100%;
@@ -75,8 +80,7 @@ header input:hover {
   margin-bottom: 10px;
 }
 
-/* Anime/Manga and Flip buttons styling */
-/* Anime/Manga buttons use flex: 2, flip button uses flex: 0.5 */
+/* Anime/Manga and Flip buttons */
 .header-toggle-button {
   flex: 2;
   padding: 12px 16px;
@@ -111,14 +115,12 @@ header input:hover {
   line-height: 1;
 }
 
-/* Only apply glow on hover */
 .header-toggle-button:hover,
 .flip-all-button:hover {
   border-color: #FB8C00;
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
-/* Remove focus glow */
 .header-toggle-button:focus,
 .flip-all-button:focus {
   outline: none;
@@ -219,7 +221,8 @@ header input:hover {
   align-self: center;
   padding-top: 16px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  /* Increased min width to 300px for larger cards */
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 16px;
   scrollbar-width: none;
 }
@@ -233,7 +236,7 @@ header input:hover {
   perspective: 1000px;
   position: relative;
   height: 0;
-  padding-bottom: 145%;
+  padding-bottom: 142%;
   border: 2px solid #ccc;
   border-radius: 12px;
   overflow: hidden;
@@ -246,7 +249,7 @@ header input:hover {
   backdrop-filter: blur(2px);
 }
 
-/* Card inner with slower flip transition */
+/* Card inner */
 .card-inner {
   position: absolute;
   top: 0;
@@ -257,12 +260,7 @@ header input:hover {
   transform-style: preserve-3d;
 }
 
-/* Removed the old hover rule to avoid conflict with state-based cumulative rotation. */
-/* .card:hover .card-inner {
-  transform: rotateY(180deg);
-} */
-
-/* Card front and back styling */
+/* Card front and back */
 .card-front,
 .card-back {
   position: absolute;
@@ -287,6 +285,8 @@ header input:hover {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: optimizeQuality;
 }
 
 /* Card back background */
@@ -303,7 +303,7 @@ header input:hover {
   z-index: 1;
 }
 
-/* Container for card back content */
+/* Card back container */
 .card-back-container {
   position: relative;
   z-index: 2;
@@ -336,7 +336,7 @@ header input:hover {
   border-bottom-color: #FB8C00;
 }
 
-/* English title styling */
+/* English title */
 .card-back-english-title {
   font-size: 16px;
   color: #777;
@@ -357,19 +357,32 @@ header input:hover {
   color: #333;
   scrollbar-width: none;
 }
+
 .card-back-body::-webkit-scrollbar {
   display: none;
 }
 
-/* Card details styling */
-.card-details p {
-  margin: 4px 0;
-  line-height: 1.5;
+/* Card details styling (transparent background, table layout) */
+.card-details {
+  /* Transparent background */
 }
 
-/* Home overlay */
+.card-details table {
+  background-color: transparent;
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.card-details td,
+.card-details th {
+  background-color: transparent;
+  padding: 4px 8px;
+  vertical-align: top;
+}
+
+/* Home overlay (footer) */
 .home-overlay {
-  position: absolute;
+  position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
@@ -377,7 +390,8 @@ header input:hover {
   background-color: rgba(250, 250, 250, 0.95);
   text-align: center;
   font-size: 16px;
-  color: #333;
+  color: #999;
+  z-index: 10;
 }
 
 /* Error banner */
