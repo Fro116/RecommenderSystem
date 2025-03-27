@@ -4,7 +4,8 @@ include("../julia_utils/multithreading.jl")
 include("../julia_utils/scheduling.jl")
 include("../julia_utils/stdout.jl")
 
-function backup()
+function backup_dbs()
+    logtag("BACKUP", "DATABASES")
     tables = [
         "mal_userids",
         "mal_users",
@@ -44,6 +45,18 @@ function backup()
     run(`sh -c $cleanup`)
     cmd = "cd ../Import/lists && julia save_lists.jl"
     run(`sh -c $cmd`)
+end
+
+function backup_images()
+    logtag("BACKUP", "IMAGES")
+    datadir = "../../data/collect"
+    run(`rclone --retries=10 sync $datadir/images r2:cdn/images/cards --exclude '*~'`)
+    run(`rclone --retries=10 copyto $datadir/images.csv r2:rsys/database/import/images.csv`)
+end
+
+function backup()
+    backup_dbs()
+    backup_images()
 end
 
 @scheduled "BACKUP" "01:00" @handle_errors backup()

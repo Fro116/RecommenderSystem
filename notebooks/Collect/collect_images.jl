@@ -116,7 +116,7 @@ function get_path(df, i)
     url = df.imageurl[i]
     stem = split(url, ".")[end]
     hash = shahash(url)
-    "$datadir/$hash.$stem"
+    "$hash.$stem"
 end
 
 function get_urls()
@@ -124,10 +124,12 @@ function get_urls()
         vcat,
         Random.shuffle.([get_mal_urls(), get_anilist_urls(), get_kitsu_urls(), get_animeplanet_urls()]),
     )
-    df[!, "savepath"] .= ""
+    df[!, "filename"] .= ""
     for i = 1:DataFrames.nrow(df)
-        df[i, "savepath"] = get_path(df, i)
+        df[i, "filename"] = get_path(df, i)
     end
+    hasimage(x) = ispath("$datadir/$x")
+    df[!, "saved"] = hasimage.(df.filename)
     df
 end
 
@@ -146,36 +148,46 @@ function save_image(source, url, fn)
     )
     if HTTP.iserror(r)
         logerror("failed to fetch $url")
-        return
+        return false
     end
     data = decode(r)
-    open("$fn~", "w") do f
+    open("$datadir/$fn~", "w") do f
         write(f, data["image"])
     end
-    mv("$fn~", fn, force = true)
+    if ispath("$datadir/$fn") && read("$datadir/$fn") == read("$datadir/$fn~")
+        rm("$datadir/$fn~")
+    else
+        mv("$datadir/$fn~", "$datadir/$fn", force = true)
+    end
+    true
 end
 
+write_df(df) = CSV.write("$datadir/../images.csv", sort(df))
+
 function save_new_images(df)
-    idxs = []
-    for i = 1:DataFrames.nrow(df)
-        if !ispath(df.savepath[i])
-            push!(idxs, i)
+    logtag("IMAGES", "collecting $(sum(.!df.saved)) new images")
+    num_saved = 0
+    for i in 1:DataFrames.nrow(df)
+        if df.saved[i]
+            continue
         end
-    end
-    logtag("IMAGES", "colling $(length(idxs)) new images")
-    for i in idxs
-        save_image(df.source[i], df.imageurl[i], df.savepath[i])
+        saved = save_image(df.source[i], df.imageurl[i], df.filename[i])
+        df.saved[i] |= saved
+        num_saved += saved
+        if num_saved % 10000 == 0
+            write_df(df)
+        end
     end
 end
 
 function save_random_images(df, N)
     for i in Random.shuffle(1:DataFrames.nrow(df))[1:N]
-        save_image(df.source[i], df.imageurl[i], df.savepath[i])
+        df.saved[i] |= save_image(df.source[i], df.imageurl[i], df.filename[i])
     end
 end
 
 function cleanup(df)
-    fns = setdiff(Set(Glob.glob("$datadir/*")), Set(df.savepath))
+    fns = setdiff(Set(Glob.glob("$datadir/*")), Set(["$datadir/$x" for x in df.filename]))
     logtag("IMAGES", "removing $(length(fns)) stale images")
     for x in fns
         rm(x, force = true, recursive = true)
@@ -185,8 +197,9 @@ end
 function save_images()
     while true
         df = get_urls()
+        write_df(df)
         save_new_images(df)
-        save_random_images(df, 1000)
+        save_random_images(df, 10000)
         cleanup(df)
     end
 end
