@@ -80,7 +80,7 @@ header input:hover {
   margin-bottom: 10px;
 }
 
-/* Anime/Manga and Flip buttons */
+/* Anime/Manga buttons */
 .header-toggle-button {
   flex: 2;
   padding: 12px 16px;
@@ -98,9 +98,11 @@ header input:hover {
   line-height: 1;
 }
 
+/* Flip button: fixed height and no vertical padding */
 .flip-all-button {
   flex: 0.5;
-  padding: 12px 16px;
+  height: 40px;
+  padding: 0 16px;
   font-size: 16px;
   font-weight: 500;
   cursor: pointer;
@@ -221,7 +223,6 @@ header input:hover {
   align-self: center;
   padding-top: 16px;
   display: grid;
-  /* Increased min width to 300px for larger cards */
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 16px;
   scrollbar-width: none;
@@ -353,7 +354,7 @@ header input:hover {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
-  font-size: 14px;
+  font-size: 16px;
   color: #333;
   scrollbar-width: none;
 }
@@ -364,7 +365,6 @@ header input:hover {
 
 /* Card details styling (transparent background, table layout) */
 .card-details {
-  /* Transparent background */
 }
 
 .card-details table {
@@ -378,6 +378,7 @@ header input:hover {
   background-color: transparent;
   padding: 4px 8px;
   vertical-align: top;
+  font-size: 16px;
 }
 
 /* Home overlay (footer) */
@@ -390,7 +391,7 @@ header input:hover {
   background-color: rgba(250, 250, 250, 0.95);
   text-align: center;
   font-size: 16px;
-  color: #999;
+  color: #333;
   z-index: 10;
 }
 
@@ -449,4 +450,12 @@ header input:hover {
     font-size: 12px;
     padding: 6px 12px;
   }
+}
+
+/* New rule for the flip button's image */
+.flip-all-button img {
+  display: block;
+  height: 100%;
+  width: auto;
+  pointer-events: none;
 }

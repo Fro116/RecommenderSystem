@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, FormEvent, ChangeEvent } from 'react';
 import pako from 'pako';
+import pica from 'pica';
 import './App.css';
 
 // Helper function to pick the biggest image URL from an array of image objects.
@@ -12,10 +13,66 @@ const getBiggestImageUrl = (images: any): string => {
   return images || '';
 };
 
+//
+// HighQualityImage Component
+// This component loads the original image and uses pica to downscale it to target dimensions.
+// It then renders the downscaled image as a data URL.
+//
+interface HighQualityImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
+  src: string;
+  targetWidth: number;
+  targetHeight: number;
+}
+
+const HighQualityImage: React.FC<HighQualityImageProps> = ({ src, targetWidth, targetHeight, alt, ...props }) => {
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const offscreenCanvas = useRef<HTMLCanvasElement>(document.createElement('canvas')).current;
+  const targetCanvas = useRef<HTMLCanvasElement>(document.createElement('canvas')).current;
+
+  useEffect(() => {
+    const image = new Image();
+    image.crossOrigin = 'anonymous';
+    image.src = src;
+    image.onload = async () => {
+      // Draw original image to offscreen canvas.
+      offscreenCanvas.width = image.width;
+      offscreenCanvas.height = image.height;
+      const offCtx = offscreenCanvas.getContext('2d');
+      offCtx?.drawImage(image, 0, 0);
+      
+      // Set target canvas size.
+      targetCanvas.width = targetWidth;
+      targetCanvas.height = targetHeight;
+      
+      try {
+        // Use pica to resize with high-quality algorithm.
+        await pica().resize(offscreenCanvas, targetCanvas, {
+          unsharpAmount: 80,
+          unsharpThreshold: 2,
+          quality: 3
+        });
+        const result = targetCanvas.toDataURL();
+        setDataUrl(result);
+      } catch (error) {
+        console.error("Error resizing image with pica", error);
+        setDataUrl(src); // fallback to original
+      }
+    };
+    image.onerror = () => {
+      setDataUrl(src); // fallback if image fails to load
+    };
+  }, [src, targetWidth, targetHeight, offscreenCanvas, targetCanvas]);
+
+  return <img src={dataUrl || src} alt={alt} width={targetWidth} height={targetHeight} {...props} />;
+};
+
+//
+// Existing types and payloads remain unchanged
+//
 interface Result {
   title: string;
   english_title?: string;
-  missing_image: any;
+  missing_image: any; // string or array of objects
   url: string;
   source: string | null;
   type: string;
@@ -30,7 +87,7 @@ interface Result {
   studios?: string;
   genres?: string;
   synopsis?: string;
-  image: any;
+  image: any; // string or array of objects
 }
 
 type SourceType = 'MyAnimeList' | 'AniList' | 'Kitsu' | 'Anime-Planet';
@@ -57,7 +114,9 @@ type Payload = AddUserPayload | MediaTypePayload;
 
 const UPDATE_URL = 'https://api.recs.moe/update';
 
+//
 // ManualScrollDiv remains unchanged.
+//
 const ManualScrollDiv: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ children, ...props }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const startY = useRef<number>(0);
@@ -101,7 +160,9 @@ const ManualScrollDiv: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ child
   );
 };
 
-// Updated CardImage component to use the biggest image URL.
+//
+// Updated CardImage component now uses HighQualityImage
+//
 const CardImage: React.FC<{ item: Result; onClick: () => void }> = ({ item, onClick }) => {
   const initialImageUrl = getBiggestImageUrl(item.image);
   const initialMissingImageUrl = getBiggestImageUrl(item.missing_image);
@@ -114,13 +175,18 @@ const CardImage: React.FC<{ item: Result; onClick: () => void }> = ({ item, onCl
     setIsFallback(!getBiggestImageUrl(item.image));
   }, [item.image, item.missing_image]);
 
+  // Desired dimensions for the downscaled image.
+  const targetWidth = 300;
+  const targetHeight = 426;
+
   return (
     <div className="card-front" onClick={onClick}>
-      <img
+      <HighQualityImage
         className="card-image"
         src={src}
         alt={item.title}
-        loading="lazy"
+        targetWidth={targetWidth}
+        targetHeight={targetHeight}
         onError={(e) => {
           e.currentTarget.onerror = null;
           setSrc(initialMissingImageUrl || '');
@@ -134,6 +200,9 @@ const CardImage: React.FC<{ item: Result; onClick: () => void }> = ({ item, onCl
   );
 };
 
+//
+// The App component remains largely unchanged except for the header toggle,
+// where we now replace the flip button text with an image that changes based on its state.
 const App: React.FC = () => {
   const [query, setQuery] = useState<string>('');
   const [activeSource, setActiveSource] = useState<SourceType>('MyAnimeList');
@@ -285,14 +354,13 @@ const App: React.FC = () => {
   const handleSearch = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!query.trim()) return;
-    const currentQuery = query;
     const source_map: Record<SourceType, string> = {
       MyAnimeList: 'mal',
       AniList: 'anilist',
       Kitsu: 'kitsu',
       'Anime-Planet': 'animeplanet',
     };
-    const payload: AddUserPayload = { state: '', action: { type: 'add_user', source: source_map[activeSource], username: currentQuery } };
+    const payload: AddUserPayload = { state: '', action: { type: 'add_user', source: source_map[activeSource], username: query } };
     fetchResults(payload, 0, false).then(() => setQuery(''));
     setShowButtons(false);
     if (inputRef.current) inputRef.current.blur();
@@ -344,7 +412,6 @@ const App: React.FC = () => {
     }
   };
 
-  // When no results, disable scrolling using dynamic viewport height.
   const containerStyle: React.CSSProperties = results.length === 0
     ? { height: 'calc(var(--vh, 1vh) * 100)', overflowY: 'hidden' }
     : {};
@@ -358,7 +425,9 @@ const App: React.FC = () => {
               onClick={() => handleMediaTypeChange('Anime')}>Anime</button>
             <button className={`header-toggle-button ${cardType === 'Manga' ? 'selected' : ''}`}
               onClick={() => handleMediaTypeChange('Manga')}>Manga</button>
-            <button className={`flip-all-button ${flipActive ? 'selected' : ''}`} onClick={handleFlipToggle}>⇄</button>
+            <button className={`flip-all-button ${flipActive ? 'selected' : ''}`} onClick={handleFlipToggle}>
+              <img src={flipActive ? "/flip-icon-selected.webp" : "/flip-icon.webp"} alt="flip" />
+            </button>
           </div>
         ) : (
           <form onSubmit={handleSearch}>

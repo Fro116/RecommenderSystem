@@ -5,7 +5,8 @@ import Glob
 import ProgressMeter: @showprogress
 import Random
 
-const datadir = "../../data/import/images"
+const basedir = "../../../"
+const datadir = "$basedir/data/import/images"
 
 qrun(x) = run(pipeline(x, stdout = devnull, stderr = devnull))
 
@@ -29,7 +30,7 @@ function super_resolution(src, dst)
     models = Dict("medium" => "noise_scale2x", "large" => "noise_scale4x")
     for (tag, model) in models
         cmds = [
-            "cd ../../../nunif",
+            "cd $basedir/../nunif",
             ". .venv/bin/activate",
             "python3 -m waifu2x.cli --style art_scan --method $model --noise-level 3 -i $abssrc -o $absdst",
         ]
@@ -135,13 +136,14 @@ function upload_images(to_add, to_delete)
 end
 
 function encode_images()
+    rm(datadir, recursive=true, force=true)
     mkpath(datadir)
     import_data("images")
     import_data("srimages")
     to_add, to_delete = get_diffs()
     sr_images(to_add)
     save_image_metadata()
-    upload_images()
+    upload_images(to_add, to_delete)
 end
 
 encode_images()
