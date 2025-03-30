@@ -452,10 +452,12 @@ header input:hover {
   }
 }
 
-/* New rule for the flip button's image */
+/* New rule for the flip button's image: 
+   Set height to 90% so it appears slightly smaller within the fixed 40px button.
+*/
 .flip-all-button img {
   display: block;
-  height: 100%;
+  height: 80%;
   width: auto;
   pointer-events: none;
 }

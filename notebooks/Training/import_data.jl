@@ -20,7 +20,7 @@ function download_data()
         ["$m.groups.csv" for m in MEDIUMS],
         ["$(s)_$(m).csv" for s in SOURCES for m in MEDIUMS],
         ["$(s)_media_relations.csv" for s in SOURCES],
-        ["fingerprints.csv"],
+        ["fingerprints.csv", "images.csv"],
     )
     for fn in files
         cmd = "$retrieval/$fn $datadir/$fn"

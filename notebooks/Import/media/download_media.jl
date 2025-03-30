@@ -175,6 +175,8 @@ function import_mal(medium)
             "finished" => "Finished",
             "currently_publishing" => "Releasing",
             "not_yet_published" => ismissing(startdate) ? "TBA" : "Upcoming",
+            "discontinued" => "Cancelled",
+            "on_hiatus" => "On Hiatus",
         )
         if ismissing(x)
             return missing

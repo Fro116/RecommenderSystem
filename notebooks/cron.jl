@@ -11,6 +11,7 @@ function cron()
     day = Dates.day(Dates.today())
     if day in [1, 8, 15, 22]
         runcmd("cd Import/media && julia save_media.jl")
+        runcmd("cd Import/images && julia save_images.jl")
         runcmd("cd Training && julia run.jl")
     end
     runcmd("cd Finetune && julia run.jl")
