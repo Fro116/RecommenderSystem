@@ -233,7 +233,9 @@ function import_mal(medium)
             return missing
         end
         json = JSON3.read(x)
-        JSON3.write([x["name"] for x in json])
+        vals = [x["name"] for x in json]
+        filter!(x -> x ∉ ["Eligible Titles for You Should Read This"], vals)
+        JSON3.write(vals)
     end
     ret = DataFrames.DataFrame()
     ret[!, "medium"] = df.medium

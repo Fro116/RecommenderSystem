@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, FormEvent, ChangeEvent } from 'react';
 import pako from 'pako';
-import pica from 'pica';
 import './App.css';
 
 // Helper function to pick the biggest image URL from an array of image objects.
@@ -14,57 +13,8 @@ const getBiggestImageUrl = (images: any): string => {
 };
 
 //
-// HighQualityImage Component
-// This component loads the original image and uses pica to downscale it to target dimensions.
-// It then renders the downscaled image as a data URL.
+// Removed HighQualityImage component entirely
 //
-interface HighQualityImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
-  src: string;
-  targetWidth: number;
-  targetHeight: number;
-}
-
-const HighQualityImage: React.FC<HighQualityImageProps> = ({ src, targetWidth, targetHeight, alt, ...props }) => {
-  const [dataUrl, setDataUrl] = useState<string | null>(null);
-  const offscreenCanvas = useRef<HTMLCanvasElement>(document.createElement('canvas')).current;
-  const targetCanvas = useRef<HTMLCanvasElement>(document.createElement('canvas')).current;
-
-  useEffect(() => {
-    const image = new Image();
-    image.crossOrigin = 'anonymous';
-    image.src = src;
-    image.onload = async () => {
-      // Draw original image to offscreen canvas.
-      offscreenCanvas.width = image.width;
-      offscreenCanvas.height = image.height;
-      const offCtx = offscreenCanvas.getContext('2d');
-      offCtx?.drawImage(image, 0, 0);
-      
-      // Set target canvas size.
-      targetCanvas.width = targetWidth;
-      targetCanvas.height = targetHeight;
-      
-      try {
-        // Use pica to resize with high-quality algorithm.
-        await pica().resize(offscreenCanvas, targetCanvas, {
-          unsharpAmount: 80,
-          unsharpThreshold: 2,
-          quality: 3
-        });
-        const result = targetCanvas.toDataURL();
-        setDataUrl(result);
-      } catch (error) {
-        console.error("Error resizing image with pica", error);
-        setDataUrl(src); // fallback to original
-      }
-    };
-    image.onerror = () => {
-      setDataUrl(src); // fallback if image fails to load
-    };
-  }, [src, targetWidth, targetHeight, offscreenCanvas, targetCanvas]);
-
-  return <img src={dataUrl || src} alt={alt} width={targetWidth} height={targetHeight} {...props} />;
-};
 
 //
 // Existing types and payloads remain unchanged
@@ -72,7 +22,7 @@ const HighQualityImage: React.FC<HighQualityImageProps> = ({ src, targetWidth, t
 interface Result {
   title: string;
   english_title?: string;
-  missing_image: any; // string or array of objects
+  missing_image: any;
   url: string;
   source: string | null;
   type: string;
@@ -87,7 +37,7 @@ interface Result {
   studios?: string;
   genres?: string;
   synopsis?: string;
-  image: any; // string or array of objects
+  image: any;
 }
 
 type SourceType = 'MyAnimeList' | 'AniList' | 'Kitsu' | 'Anime-Planet';
@@ -115,42 +65,90 @@ type Payload = AddUserPayload | MediaTypePayload;
 const UPDATE_URL = 'https://api.recs.moe/update';
 
 //
-// ManualScrollDiv remains unchanged.
+// ManualScrollDiv Component with momentum scrolling and boundary pass-through
 //
 const ManualScrollDiv: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ children, ...props }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const startY = useRef<number>(0);
   const startScrollTop = useRef<number>(0);
+  const lastY = useRef<number>(0);
+  const lastTime = useRef<number>(0);
+  const velocity = useRef<number>(0);
+  const momentumFrame = useRef<number | null>(null);
 
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const handleTouchStart = (e: TouchEvent) => {
-      startY.current = e.touches[0].clientY;
-      startScrollTop.current = el.scrollTop;
-      e.stopPropagation();
-    };
-    const handleTouchMove = (e: TouchEvent) => {
-      const deltaY = e.touches[0].clientY - startY.current;
+  const handleTouchStart = (e: TouchEvent) => {
+    if (momentumFrame.current) {
+      cancelAnimationFrame(momentumFrame.current);
+      momentumFrame.current = null;
+    }
+    startY.current = e.touches[0].clientY;
+    lastY.current = e.touches[0].clientY;
+    startScrollTop.current = scrollRef.current ? scrollRef.current.scrollTop : 0;
+    lastTime.current = e.timeStamp;
+    velocity.current = 0;
+    e.stopPropagation();
+  };
+
+  const handleTouchMove = (e: TouchEvent) => {
+    const currentY = e.touches[0].clientY;
+    const currentTime = e.timeStamp;
+    const deltaY = currentY - startY.current;
+
+    if (scrollRef.current) {
       const newScrollTop = startScrollTop.current - deltaY;
-      const maxScrollTop = el.scrollHeight - el.clientHeight;
+      const maxScrollTop = scrollRef.current.scrollHeight - scrollRef.current.clientHeight;
       if (newScrollTop > 0 && newScrollTop < maxScrollTop) {
-        el.scrollTop = newScrollTop;
+        scrollRef.current.scrollTop = newScrollTop;
         e.preventDefault();
         e.stopPropagation();
       } else {
         if (newScrollTop < 0) {
-          el.scrollTop = 0;
+          scrollRef.current.scrollTop = 0;
         } else if (newScrollTop > maxScrollTop) {
-          el.scrollTop = maxScrollTop;
+          scrollRef.current.scrollTop = maxScrollTop;
         }
       }
-    };
+    }
+    const dt = currentTime - lastTime.current;
+    if (dt > 0) {
+      velocity.current = (lastY.current - currentY) / dt;
+    }
+    lastY.current = currentY;
+    lastTime.current = currentTime;
+  };
+
+  const momentum = () => {
+    if (!scrollRef.current) return;
+    const friction = 0.95;
+    if (Math.abs(velocity.current) < 0.02) return;
+    scrollRef.current.scrollTop += velocity.current * 16;
+    velocity.current *= friction;
+    if (
+      scrollRef.current.scrollTop <= 0 ||
+      scrollRef.current.scrollTop >= scrollRef.current.scrollHeight - scrollRef.current.clientHeight
+    ) {
+      return;
+    }
+    momentumFrame.current = requestAnimationFrame(momentum);
+  };
+
+  const handleTouchEnd = (_e: TouchEvent) => {
+    momentumFrame.current = requestAnimationFrame(momentum);
+  };
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
     el.addEventListener('touchstart', handleTouchStart, { passive: false });
     el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    el.addEventListener('touchend', handleTouchEnd, { passive: false });
     return () => {
       el.removeEventListener('touchstart', handleTouchStart);
       el.removeEventListener('touchmove', handleTouchMove);
+      el.removeEventListener('touchend', handleTouchEnd);
+      if (momentumFrame.current) {
+        cancelAnimationFrame(momentumFrame.current);
+      }
     };
   }, []);
   return (
@@ -161,7 +159,7 @@ const ManualScrollDiv: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ child
 };
 
 //
-// Updated CardImage component now uses HighQualityImage
+// Updated CardImage Component using a native <img> element with lazy loading
 //
 const CardImage: React.FC<{ item: Result; onClick: () => void }> = ({ item, onClick }) => {
   const initialImageUrl = getBiggestImageUrl(item.image);
@@ -175,18 +173,18 @@ const CardImage: React.FC<{ item: Result; onClick: () => void }> = ({ item, onCl
     setIsFallback(!getBiggestImageUrl(item.image));
   }, [item.image, item.missing_image]);
 
-  // Desired dimensions for the downscaled image.
   const targetWidth = 300;
   const targetHeight = 426;
 
   return (
     <div className="card-front" onClick={onClick}>
-      <HighQualityImage
+      <img
+        loading="lazy"
         className="card-image"
         src={src}
         alt={item.title}
-        targetWidth={targetWidth}
-        targetHeight={targetHeight}
+        width={targetWidth}
+        height={targetHeight}
         onError={(e) => {
           e.currentTarget.onerror = null;
           setSrc(initialMissingImageUrl || '');
@@ -201,8 +199,8 @@ const CardImage: React.FC<{ item: Result; onClick: () => void }> = ({ item, onCl
 };
 
 //
-// The App component remains largely unchanged except for the header toggle,
-// where we now replace the flip button text with an image that changes based on its state.
+// The App component
+//
 const App: React.FC = () => {
   const [query, setQuery] = useState<string>('');
   const [activeSource, setActiveSource] = useState<SourceType>('MyAnimeList');
@@ -465,79 +463,83 @@ const App: React.FC = () => {
                 onClick={() => handleMediaTypeChange('Manga')}>Manga</button>
             </div>
           )}
-          <div className="grid-view" ref={gridViewRef}>
-            {results.map((item, index) => {
-              const currentRotation = cardRotation.hasOwnProperty(index)
-                ? cardRotation[index]
-                : (flipActive ? 180 : 0);
-              return (
-                <div key={index} className="card"
-                  onMouseEnter={!isMobile && !flipActive ? () => {
-                    const r = cardRotation[index] || 0;
-                    if (r % 360 === 0) setCardRotation(prev => ({ ...prev, [index]: r + 180 }));
-                  } : undefined}
-                  onMouseLeave={!isMobile && !flipActive ? () => {
-                    const r = cardRotation[index] || 0;
-                    if (r % 360 === 180) setCardRotation(prev => ({ ...prev, [index]: r - 180 }));
-                  } : undefined}
-                >
-                  <div className="card-inner" style={{ transform: `rotateY(${currentRotation}deg)` }}>
-                    <CardImage item={item} onClick={() => handleCardFrontClick(index)} />
-                    <div className="card-back" onClick={() => handleCardBackClick(index)}>
-                      <div className="card-back-bg" style={{ backgroundImage: `url(${getBiggestImageUrl(item.image) || getBiggestImageUrl(item.missing_image)})` }}></div>
-                      <div className="card-back-container">
-                        <div className="card-back-header" onClick={(e) => {
-                          e.stopPropagation();
-                          window.open(item.url, '_blank', 'noopener,noreferrer');
-                        }}>
-                          <div>{item.title}</div>
-                          {item.english_title && (<div className="card-back-english-title">{item.english_title}</div>)}
-                        </div>
-                        <ManualScrollDiv className="card-back-body">
-                          {showSynopsis[index] ? (
-                            <p style={{ whiteSpace: 'pre-line' }}>{item.synopsis}</p>
-                          ) : (
-                            <div className="card-details">
-                              {cardType === 'Anime' ? (
-                                <table>
-                                  <tbody>
-                                    {item.type && (<tr><td><strong>Medium:</strong></td><td>{item.type}</td></tr>)}
-                                    {item.season && (<tr><td><strong>Season:</strong></td><td>{item.season}</td></tr>)}
-                                    {item.episodes != null && (<tr><td><strong>Episodes:</strong></td><td>{item.episodes}</td></tr>)}
-                                    {item.status && (<tr><td><strong>Status:</strong></td><td>{item.status}</td></tr>)}
-                                    {item.startdate && (<tr><td><strong>Start&nbsp;Date:</strong></td><td>{item.startdate}</td></tr>)}
-                                    {item.enddate && (<tr><td><strong>End Date:</strong></td><td>{item.enddate}</td></tr>)}
-                                    {item.source && (<tr><td><strong>Source:</strong></td><td>{item.source}</td></tr>)}
-                                    {item.duration && (<tr><td><strong>Duration:</strong></td><td>{item.duration}</td></tr>)}
-                                    {item.studios && (<tr><td><strong>Studio:</strong></td><td>{item.studios}</td></tr>)}
-                                    {item.genres && (<tr><td><strong>Genres:</strong></td><td>{item.genres}</td></tr>)}
-                                  </tbody>
-                                </table>
+          <div className="grid-container" ref={gridViewRef}>
+            <div className="grid-view">
+              {results.map((item, index) => {
+                const currentRotation = cardRotation.hasOwnProperty(index)
+                  ? cardRotation[index]
+                  : (flipActive ? 180 : 0);
+                return (
+                  <div key={index} className="card"
+                    onMouseEnter={!isMobile && !flipActive ? () => {
+                      const r = cardRotation[index] || 0;
+                      if (r % 360 === 0) setCardRotation(prev => ({ ...prev, [index]: r + 180 }));
+                    } : undefined}
+                    onMouseLeave={!isMobile && !flipActive ? () => {
+                      const r = cardRotation[index] || 0;
+                      if (r % 360 === 180) setCardRotation(prev => ({ ...prev, [index]: r - 180 }));
+                    } : undefined}
+                  >
+                    <div className="card-inner" style={{ transform: `rotateY(${currentRotation}deg)` }}>
+                      <CardImage item={item} onClick={() => handleCardFrontClick(index)} />
+                      <div className="card-back" onClick={() => handleCardBackClick(index)}>
+                        <div className="card-back-bg" style={{ backgroundImage: `url(${getBiggestImageUrl(item.image) || getBiggestImageUrl(item.missing_image)})` }}></div>
+                        <div className="card-back-container">
+                          <div className="card-back-header" onClick={(e) => {
+                            e.stopPropagation();
+                            window.open(item.url, '_blank', 'noopener,noreferrer');
+                          }}>
+                            <div>{item.title}</div>
+                            {item.english_title && (<div className="card-back-english-title">{item.english_title}</div>)}
+                          </div>
+                          <ManualScrollDiv className="card-back-body">
+                            {showSynopsis[index] ? (
+                              <p style={{ whiteSpace: 'pre-line' }}>{item.synopsis}</p>
+                            ) : (
+                              cardType === 'Anime' ? (
+                                <div className="card-details">
+                                  <table>
+                                    <tbody>
+                                      {item.type && (<tr><td><strong>Medium:</strong></td><td>{item.type}</td></tr>)}
+                                      {item.season && (<tr><td><strong>Season:</strong></td><td>{item.season}</td></tr>)}
+                                      {item.episodes != null && (<tr><td><strong>Episodes:</strong></td><td>{item.episodes}</td></tr>)}
+                                      {item.status && (<tr><td><strong>Status:</strong></td><td>{item.status}</td></tr>)}
+                                      {item.startdate && (<tr><td><strong>Start&nbsp;Date:</strong></td><td>{item.startdate}</td></tr>)}
+                                      {item.enddate && (<tr><td><strong>End Date:</strong></td><td>{item.enddate}</td></tr>)}
+                                      {item.source && (<tr><td><strong>Source:</strong></td><td>{item.source}</td></tr>)}
+                                      {item.duration && (<tr><td><strong>Duration:</strong></td><td>{item.duration}</td></tr>)}
+                                      {item.studios && (<tr><td><strong>Studio:</strong></td><td>{item.studios}</td></tr>)}
+                                      {item.genres && (<tr><td><strong>Genres:</strong></td><td>{item.genres}</td></tr>)}
+                                    </tbody>
+                                  </table>
+                                </div>
                               ) : (
-                                <table>
-                                  <tbody>
-                                    {item.type && (<tr><td><strong>Medium:</strong></td><td>{item.type}</td></tr>)}
-                                    {item.status && (<tr><td><strong>Status:</strong></td><td>{item.status}</td></tr>)}
-                                    {item.startdate && (<tr><td><strong>Start&nbsp;Date:</strong></td><td>{item.startdate}</td></tr>)}
-                                    {item.enddate && (<tr><td><strong>End Date:</strong></td><td>{item.enddate}</td></tr>)}
-                                    {item.volumes != null && (<tr><td><strong>Volumes:</strong></td><td>{item.volumes}</td></tr>)}
-                                    {item.chapters != null && (<tr><td><strong>Chapters:</strong></td><td>{item.chapters}</td></tr>)}
-                                    {item.source && (<tr><td><strong>Source:</strong></td><td>{item.source}</td></tr>)}
-                                    {item.studios && (<tr><td><strong>Studio:</strong></td><td>{item.studios}</td></tr>)}
-                                    {item.genres && (<tr><td><strong>Genres:</strong></td><td>{item.genres}</td></tr>)}
-                                  </tbody>
-                                </table>
-                              )}
-                            </div>
-                          )}
-                        </ManualScrollDiv>
+                                <div className="card-details">
+                                  <table>
+                                    <tbody>
+                                      {item.type && (<tr><td><strong>Medium:</strong></td><td>{item.type}</td></tr>)}
+                                      {item.status && (<tr><td><strong>Status:</strong></td><td>{item.status}</td></tr>)}
+                                      {item.startdate && (<tr><td><strong>Start&nbsp;Date:</strong></td><td>{item.startdate}</td></tr>)}
+                                      {item.enddate && (<tr><td><strong>End Date:</strong></td><td>{item.enddate}</td></tr>)}
+                                      {item.volumes != null && (<tr><td><strong>Volumes:</strong></td><td>{item.volumes}</td></tr>)}
+                                      {item.chapters != null && (<tr><td><strong>Chapters:</strong></td><td>{item.chapters}</td></tr>)}
+                                      {item.source && (<tr><td><strong>Source:</strong></td><td>{item.source}</td></tr>)}
+                                      {item.studios && (<tr><td><strong>Studio:</strong></td><td>{item.studios}</td></tr>)}
+                                      {item.genres && (<tr><td><strong>Genres:</strong></td><td>{item.genres}</td></tr>)}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )
+                            )}
+                          </ManualScrollDiv>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-            <div ref={loadMoreRef} style={{ height: '1px' }}></div>
+                );
+              })}
+              <div ref={loadMoreRef} style={{ height: '1px' }}></div>
+            </div>
           </div>
         </>
       ) : (

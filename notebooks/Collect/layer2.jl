@@ -797,6 +797,15 @@ function malweb_get_user(resource::Resource, username::String)
         )
     end
 
+    function get_avatar()
+        stem = "https://cdn.myanimelist.net/s/common/userimages/"
+        leaf = extract(r.body, """<img class="lazyload" data-src="$stem""", "\"", optional=true)
+        if isnothing(leaf)
+            return nothing
+        end
+        stem * leaf
+    end
+
     ret = Dict(
         "version" => API_VERSION,
         "username" => username,
@@ -820,6 +829,7 @@ function malweb_get_user(resource::Resource, username::String)
         "clubs" => info_links("Clubs"),
         "manga_count" => item_counts("mangalist"),
         "anime_count" => item_counts("animelist"),
+        "avatar" => get_avatar(),
     )
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
@@ -2086,6 +2096,13 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
         end
         maybeint(replace(first(x), "," => ""), 0)
     end
+    function to_image_url(x)
+        if isnothing(x) || !startswith(x, "/")
+            return nothing
+        end
+        x = first(split(x, "?"))
+        "https://www.anime-planet.com$x"
+    end
     ret = Dict(
         "version" => API_VERSION,
         "username" => username,
@@ -2109,6 +2126,8 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
         ),
         "followers" => parse(Int, extract(text, """followers">""", " Followers<")),
         "following" => parse(Int, extract(text, """following">""", " Following<")),
+        "avatar" => to_image_url(extract(text, "<meta property='og:image' content='", "'", optional = true)),
+        "banner_image" => to_image_url(extract(text, "style='background-image: url\\(", "'", optional = true)),
     )
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
