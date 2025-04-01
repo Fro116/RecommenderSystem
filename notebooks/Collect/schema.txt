@@ -28,6 +28,7 @@ CREATE TABLE mal_users (
     interest_stacks BIGINT,
     anime_count BIGINT,
     avatar TEXT,
+    about TEXT,
     db_refreshed_at DOUBLE PRECISION,
     db_primary_last_changed_at DOUBLE PRECISION,
     db_primary_hash TEXT,

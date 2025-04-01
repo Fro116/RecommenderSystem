@@ -806,6 +806,14 @@ function malweb_get_user(resource::Resource, username::String)
         stem * leaf
     end
 
+    function get_about()
+        matches = extract(r.body, """<div class="word-break">""", "</div>", optional=true, multiple = true)
+        if isnothing(matches)
+            return matches
+        end
+        html_unescape(first(matches))
+    end
+
     ret = Dict(
         "version" => API_VERSION,
         "username" => username,
@@ -830,6 +838,7 @@ function malweb_get_user(resource::Resource, username::String)
         "manga_count" => item_counts("mangalist"),
         "anime_count" => item_counts("animelist"),
         "avatar" => get_avatar(),
+        "about" => get_about(),
     )
     HTTP.Response(200, encode(ret, :msgpack)...)
 end

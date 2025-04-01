@@ -17,7 +17,6 @@ body {
   height: 100vh;
 }
 
-/* When on the homepage, force container to fill visible viewport */
 .container.homepage {
   height: calc(var(--vh, 1vh) * 100);
   overflow-y: hidden;
@@ -98,7 +97,7 @@ header input:hover {
   line-height: 1;
 }
 
-/* Flip button: fixed height and no vertical padding */
+/* Flip button */
 .flip-all-button {
   flex: 0.5;
   height: 40px;
@@ -215,7 +214,7 @@ header input:hover {
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
-/* Grid view for cards */
+/* Grid */
 .grid-view {
   width: 90%;
   margin: 0 auto;
@@ -230,16 +229,15 @@ header input:hover {
   display: none;
 }
 
-/* New container that takes up full width and handles scrolling */
 .grid-container {
   flex: 1;
   width: 100%;
   overflow-y: auto;
-  scrollbar-width: none; /* Firefox */
+  scrollbar-width: none;
 }
 
 .grid-container::-webkit-scrollbar {
-  display: none; /* Chrome, Safari, Opera */
+  display: none;
 }
 
 /* Flip card styling */
@@ -260,7 +258,6 @@ header input:hover {
   backdrop-filter: blur(2px);
 }
 
-/* Card inner */
 .card-inner {
   position: absolute;
   top: 0;
@@ -269,15 +266,17 @@ header input:hover {
   bottom: 0;
   transition: transform 0.3s ease;
   transform-style: preserve-3d;
+  will-change: transform;
 }
 
-/* Card front and back */
 .card-front,
 .card-back {
   position: absolute;
   width: 100%;
   height: 100%;
   backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform-style: preserve-3d;
   border-radius: 12px;
 }
 
@@ -287,11 +286,12 @@ header input:hover {
 
 .card-back {
   transform: rotateY(180deg);
+  will-change: transform;
   padding: 0;
   overflow: hidden;
 }
 
-/* Front side image */
+/* Card image */
 .card-image {
   width: 100%;
   height: 100%;
@@ -300,7 +300,6 @@ header input:hover {
   image-rendering: optimizeQuality;
 }
 
-/* Card back background */
 .card-back-bg {
   position: absolute;
   top: 0;
@@ -314,7 +313,6 @@ header input:hover {
   z-index: 1;
 }
 
-/* Card back container */
 .card-back-container {
   position: relative;
   z-index: 2;
@@ -325,7 +323,6 @@ header input:hover {
   padding: 0;
 }
 
-/* Card back header */
 .card-back-header {
   font-size: 20px;
   font-weight: bold;
@@ -347,7 +344,6 @@ header input:hover {
   border-bottom-color: #FB8C00;
 }
 
-/* English title */
 .card-back-english-title {
   font-size: 16px;
   color: #777;
@@ -359,7 +355,6 @@ header input:hover {
   color: #FB8C00;
 }
 
-/* Card back body */
 .card-back-body {
   flex: 1;
   overflow-y: auto;
@@ -371,10 +366,6 @@ header input:hover {
 
 .card-back-body::-webkit-scrollbar {
   display: none;
-}
-
-/* Card details styling (transparent background, table layout) */
-.card-details {
 }
 
 .card-details table {
@@ -391,7 +382,7 @@ header input:hover {
   font-size: 16px;
 }
 
-/* Home overlay (footer) */
+/* Footer */
 .home-overlay {
   position: fixed;
   bottom: 0;
@@ -428,7 +419,7 @@ header input:hover {
   line-height: 1;
 }
 
-/* Placeholder overlay for missing images */
+/* Placeholder for missing images */
 .card-placeholder-overlay {
   position: absolute;
   top: 0;
@@ -444,27 +435,25 @@ header input:hover {
   justify-content: center;
 }
 
+/* Responsive tweaks */
 @media (max-width: 600px) {
   header input {
     width: 90%;
     font-size: 14px;
   }
-  
+
   .source-button {
     flex: 1 1 45%;
     margin: 6px;
     font-size: 14px;
   }
-  
+
   .toggle-button {
     font-size: 12px;
     padding: 6px 12px;
   }
 }
 
-/* New rule for the flip button's image: 
-   Set height to 90% so it appears slightly smaller within the fixed 40px button.
-*/
 .flip-all-button img {
   display: block;
   height: 80%;
