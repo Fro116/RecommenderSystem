@@ -186,7 +186,7 @@ function gen_splits()
         mkpath.([train_dir, test_dir])
         df = Random.shuffle(read_csv(f))
         Threads.@threads for i = 1:DataFrames.nrow(df)
-            user = import_user(df.source[i], decompress(df.data[i]))
+            user = import_user(df.source[i], decompress(df.data[i]), df.db_refreshed_at[i])
             if length(user["items"]) < min_items
                 continue
             end

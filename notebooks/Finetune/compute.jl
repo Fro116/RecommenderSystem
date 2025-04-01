@@ -203,7 +203,7 @@ Oxygen.@post "/add_user" function add_user(r::HTTP.Request)::HTTP.Response
     data = decompress(d_read["data"])
     data["user"] = standardize(data["user"])
     data["items"] = standardize.(data["items"])
-    u = import_user(d_read["source"], data)
+    u = import_user(d_read["source"], data, d_read["db_refreshed_at"])
     r_embed = HTTP.post(
         "$MODEL_URL/embed",
         encode(u, :msgpack)...,

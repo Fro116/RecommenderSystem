@@ -220,7 +220,7 @@ function save_fingerprints(source::String)
         end
         userid = users[i, :userid]
         user_data = Dict(k => users[i, k] for k in user_cols)
-        db_refreshed_at = users[i, :db_refreshed_at]
+        db_last_success_at = users[i, :db_last_success_at]
         if uid ∉ keys(chunk_map)
             items = []
             fingerprints = []
@@ -262,7 +262,7 @@ function save_fingerprints(source::String)
                         Vector{UInt8}(MsgPack.pack(user)),
                     ),
                 ),
-            "db_refreshed_at" => db_refreshed_at,
+            "db_refreshed_at" => db_last_success_at,
         )
         put!(ch, df)
     end

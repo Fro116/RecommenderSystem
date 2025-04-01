@@ -282,7 +282,7 @@ function import_animeplanet_user(data)
     Dict("user" => user, "items" => items)
 end
 
-function import_user(source, data)
+function import_user(source, data, reftime)
     if source == "mal"
         return import_mal_user(data)
     elseif source == "anilist"
