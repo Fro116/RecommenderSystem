@@ -4,7 +4,7 @@ include("../julia_utils/multithreading.jl")
 include("../julia_utils/scheduling.jl")
 include("../julia_utils/stdout.jl")
 
-function backup_dbs()
+function backup()
     logtag("BACKUP", "DATABASES")
     tables = [
         "mal_userids",
@@ -38,24 +38,12 @@ function backup_dbs()
             LibPQ.execute(stmt)
         end
     end
+    run(`rclone --retries=10 copyto ../../data/collect/images.tar r2:rsys/database/collect/$date/images.tar`)
     save = replace(save_template, "{FILE}" => "latest")
     cmd = "echo -n $date $save"
     run(`sh -c $cmd`)
     cleanup = raw"rclone lsd r2:rsys/database/collect/ | sort | head -n -30 | awk '{print $NF}' | xargs -I {} rclone purge r2:rsys/database/collect/{}"
     run(`sh -c $cleanup`)
-    cmd = "cd ../Import/lists && julia save_lists.jl"
-    run(`sh -c $cmd`)
-end
-
-function backup_images()
-    logtag("BACKUP", "IMAGES")
-    datadir = "../../data/collect"
-    run(`rclone --retries=10 copyto $datadir/images.tar r2:rsys/database/import/images.tar`)
-end
-
-function backup()
-    backup_dbs()
-    backup_images()
 end
 
 @scheduled "BACKUP" "01:00" @handle_errors backup()

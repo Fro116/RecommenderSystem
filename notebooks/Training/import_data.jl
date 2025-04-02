@@ -183,20 +183,55 @@ function gen_splits()
                       Iterators.enumerate(Glob.glob("$datadir/fingerprints_*.csv"))
         train_dir = "$datadir/users/training/$idx"
         test_dir = "$datadir/users/test/$idx"
-        mkpath.([train_dir, test_dir])
+        unused_dir = "$datadir/users/unused/$idx"
+        mkpath.([train_dir, test_dir, unused_dir])
         df = Random.shuffle(read_csv(f))
         Threads.@threads for i = 1:DataFrames.nrow(df)
-            user = import_user(df.source[i], decompress(df.data[i]), df.db_refreshed_at[i])
+            user = import_user(df.source[i], decompress(df.data[i]), parse(Float32, df.db_refreshed_at[i]))
             if length(user["items"]) < min_items
-                continue
+                outdir = unused_dir
+            else
+                outdir = rand() < test_perc ? test_dir : train_dir
             end
-            outdir = rand() < test_perc ? test_dir : train_dir
             open("$outdir/$i.msgpack", "w") do g
                 write(g, MsgPack.pack(user))
             end
         end
         rm(f)
     end
+end
+
+function save_profiles()
+    fns = reduce(
+        vcat,
+        [
+            Glob.glob("$datadir/users/$x/*/*.msgpack") for
+            x in ["training", "test", "unused"]
+        ],
+    )
+    records = []
+    for datasplit in ["training", "test", "unused"]
+        users = sort(Glob.glob("$datadir/users/$datasplit/*/*.msgpack"))
+        batches = collect(Iterators.partition(users, 65_536))
+        @showprogress for batch in batches
+            rs = Vector{Any}(undef, length(batch))
+            Threads.@threads for i = 1:length(batch)
+                data = open(batch[i]) do f
+                    MsgPack.unpack(read(f))
+                end
+                user = data["user"]
+                r = (user["source"], user["username"], user["accessed_at"], user["avatar"])
+                rs[i] = r
+            end
+            append!(records, rs)
+        end
+    end
+    df = DataFrames.DataFrame(records, [:source, :username, :accessed_at, :avatar])
+    CSV.write(
+        "$datadir/profiles.csv",
+        df;
+        transform = (col, val) -> something(val, missing),
+    )
 end
 
 function import_data()
@@ -209,8 +244,10 @@ function import_data()
     open("$datadir/latest", "w") do f
         write(f, date)
     end
+    gen_splits()
+    save_profiles()
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}"
-    files = vcat(["$m.csv" for m in MEDIUMS], ["images.csv"])
+    files = vcat(["$m.csv" for m in MEDIUMS], ["images.csv", "profiles.csv"])
     for f in files
         cmd = replace(
             save_template,
@@ -219,7 +256,6 @@ function import_data()
         )
         run(`sh -c $cmd`)
     end
-    gen_splits()
 end
 
 import_data()

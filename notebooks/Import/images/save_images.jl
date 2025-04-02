@@ -5,7 +5,9 @@ import Glob
 import ProgressMeter: @showprogress
 import Random
 
-const basedir = "../../../"
+include("../../julia_utils/stdout.jl")
+
+const basedir = "../../.."
 const datadir = "$basedir/data/import/images"
 
 qrun(x) = run(pipeline(x, stdout = devnull, stderr = devnull))
@@ -116,12 +118,6 @@ end
 function upload_images(to_add, to_delete)
     cmd = "cd $datadir && tar cf srimages.tar srimages"
     qrun(`sh -c $cmd`)
-    qrun(
-        `rclone --retries=10 copyto $datadir/srimages.tar r2:rsys/database/import/srimages.tar`,
-    )
-    qrun(
-        `rclone --retries=10 copyto $datadir/srimages.csv r2:rsys/database/import/images.csv`,
-    )
     @showprogress for fn in to_add
         name, ext = split(fn, ".")
         for x in ["medium", "large"]
@@ -133,6 +129,12 @@ function upload_images(to_add, to_delete)
     @showprogress for fn in to_delete
         qrun(`rclone --retries=10 delete r2:cdn/images/cards/$fn`)
     end
+    qrun(
+        `rclone --retries=10 copyto $datadir/srimages.tar r2:rsys/database/import/srimages.tar`,
+    )
+    qrun(
+        `rclone --retries=10 copyto $datadir/srimages.csv r2:rsys/database/import/images.csv`,
+    )
 end
 
 function encode_images()
@@ -141,6 +143,7 @@ function encode_images()
     import_data("images")
     import_data("srimages")
     to_add, to_delete = get_diffs()
+    logtag("IMAGES", "adding $(length(to_add)) and deleting $(length(to_delete))")
     sr_images(to_add)
     save_image_metadata()
     upload_images(to_add, to_delete)
