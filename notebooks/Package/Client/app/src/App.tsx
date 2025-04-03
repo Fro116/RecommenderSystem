@@ -2,6 +2,10 @@ import React, { useState, useEffect, useRef, FormEvent, ChangeEvent } from 'reac
 import pako from 'pako';
 import './App.css';
 
+// Define the base API URL so it's only written once
+const API_BASE = 'https://api.recs.moe';
+const UPDATE_URL = `${API_BASE}/update`;
+
 // Helper function to pick the biggest image URL from an array of image objects.
 const getBiggestImageUrl = (images: any): string => {
   if (Array.isArray(images) && images.length > 0) {
@@ -11,10 +15,6 @@ const getBiggestImageUrl = (images: any): string => {
   }
   return images || '';
 };
-
-//
-// Removed HighQualityImage component entirely
-//
 
 //
 // Existing types and payloads remain unchanged
@@ -62,7 +62,13 @@ interface MediaTypePayload {
 
 type Payload = AddUserPayload | MediaTypePayload;
 
-const UPDATE_URL = 'https://api.recs.moe/update';
+// Updated interface for autocomplete results including the new "matched" field.
+interface AutocompleteItem {
+  username: string;
+  avatar: string | null;
+  missing_avatar: string | null;
+  matched: boolean[];
+}
 
 //
 // ManualScrollDiv Component with momentum scrolling and boundary pass-through
@@ -216,12 +222,17 @@ const App: React.FC = () => {
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const [cardRotation, setCardRotation] = useState<{ [index: number]: number }>({});
   const [flipActive, setFlipActive] = useState<boolean>(false);
+  // New state for autocomplete results and a flag to disable fetching when updated via autocomplete click.
+  const [autocompleteResults, setAutocompleteResults] = useState<AutocompleteItem[]>([]);
+  const [autocompleteDisabled, setAutocompleteDisabled] = useState<boolean>(false);
 
   const searchRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const buttonContainerRef = useRef<HTMLDivElement>(null);
   const gridViewRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  // New ref for the search container (input + autocomplete)
+  const searchContainerRef = useRef<HTMLDivElement>(null);
 
   const placeholders: Record<SourceType, string> = {
     MyAnimeList: 'Type a MyAnimeList username',
@@ -236,43 +247,55 @@ const App: React.FC = () => {
     setIsMobile(window.matchMedia && window.matchMedia('(hover: none)').matches);
   }, []);
 
+  // Hide autocomplete when the input loses focus
+  const handleInputBlur = () => {
+    setAutocompleteResults([]);
+  };
+
+  // Debounced effect to fetch autocomplete suggestions (50ms delay)
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (results.length > 0) {
-        if (
-          searchRef.current &&
-          !searchRef.current.contains(event.target as Node) &&
-          buttonContainerRef.current &&
-          !buttonContainerRef.current.contains(event.target as Node)
-        ) {
-          setShowButtons(false);
+    if (autocompleteDisabled) return;
+    if (query.trim() === '') {
+      setAutocompleteResults([]);
+      return;
+    }
+    const handler = setTimeout(() => {
+      fetchAutocomplete();
+    }, 50);
+    return () => clearTimeout(handler);
+  }, [query, activeSource, autocompleteDisabled]);
+
+  // Using POST with JSON as requested.
+  const fetchAutocomplete = async () => {
+    const source_map: Record<SourceType, string> = {
+      MyAnimeList: 'mal',
+      AniList: 'anilist',
+      Kitsu: 'kitsu',
+      'Anime-Planet': 'animeplanet',
+    };
+    try {
+      const response = await fetch(`${API_BASE}/autocomplete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "user",
+          source: source_map[activeSource],
+          prefix: query,
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.autocompletes) {
+          setAutocompleteResults(data.autocompletes);
+        } else {
+          setAutocompleteResults([]);
         }
       }
-    };
-    document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
-  }, [results]);
-
-  useEffect(() => {
-    if (!loadMoreRef.current || results.length >= totalResults) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting && !loadingMore) {
-            setLoadingMore(true);
-            const offset = results.length;
-            const payload = currentPayloadForPagination();
-            fetchResults(payload, offset, true).finally(() => setLoadingMore(false));
-          }
-        });
-      },
-      { root: gridViewRef.current, threshold: 0.1 }
-    );
-    observer.observe(loadMoreRef.current);
-    return () => {
-      if (loadMoreRef.current) observer.unobserve(loadMoreRef.current);
-    };
-  }, [results, totalResults, loadingMore]);
+    } catch (e) {
+      console.error(e);
+      setAutocompleteResults([]);
+    }
+  };
 
   const currentPayloadForPagination = (): Payload => {
     if (results.length > 0) {
@@ -286,6 +309,28 @@ const App: React.FC = () => {
     setShowSynopsis({});
     setFlipActive(false);
   };
+
+  // Updated infinite scrolling useEffect with rootMargin and unconditional observer creation
+  useEffect(() => {
+    if (!loadMoreRef.current) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && !loadingMore && results.length < totalResults) {
+            setLoadingMore(true);
+            const offset = results.length;
+            const payload = currentPayloadForPagination();
+            fetchResults(payload, offset, true).finally(() => setLoadingMore(false));
+          }
+        });
+      },
+      { root: gridViewRef.current || null, rootMargin: '100px', threshold: 0.1 }
+    );
+    observer.observe(loadMoreRef.current);
+    return () => {
+      if (loadMoreRef.current) observer.unobserve(loadMoreRef.current);
+    };
+  }, [results, totalResults, loadingMore]);
 
   const fetchResults = (payload: Payload, offset: number = 0, append: boolean = false) => {
     const limit = isMobile ? 10 : 25;
@@ -348,7 +393,11 @@ const App: React.FC = () => {
       });
   };
 
-  const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => setQuery(e.target.value);
+  const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    setQuery(e.target.value);
+    setAutocompleteDisabled(false);
+  };
+
   const handleSearch = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!query.trim()) return;
@@ -365,6 +414,7 @@ const App: React.FC = () => {
   };
 
   const handleButtonClick = (source: SourceType) => setActiveSource(source);
+
   const handleMediaTypeChange = (type: CardType) => {
     setCardType(type);
     const payload: MediaTypePayload = { state: apiState, action: { type: 'set_media', medium: type } };
@@ -429,8 +479,71 @@ const App: React.FC = () => {
           </div>
         ) : (
           <form onSubmit={handleSearch}>
-            <input ref={inputRef} type="text" placeholder={showButtons ? placeholders[activeSource] : ''}
-              value={query} onChange={handleInputChange} onFocus={() => { setShowButtons(true); setErrorMessage(''); setHasSearched(false); }} />
+            <div ref={searchContainerRef} style={{ position: 'relative', width: '80%' }}>
+              <input 
+                ref={inputRef} 
+                type="text" 
+                placeholder={showButtons ? placeholders[activeSource] : ''} 
+                value={query} 
+                onChange={handleInputChange} 
+                onFocus={() => { 
+                  setShowButtons(true); 
+                  setErrorMessage(''); 
+                  setHasSearched(false); 
+                  if (query.trim() !== '') { 
+                    fetchAutocomplete(); 
+                  }
+                }}
+                onBlur={handleInputBlur}
+              />
+              {autocompleteResults.length > 0 && (
+                <div className="autocomplete-container">
+                  {autocompleteResults.map((item, index) => (
+                    <div 
+                      key={index} 
+                      className="autocomplete-item"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        // When an autocomplete is clicked, disable further autocomplete fetching
+                        setAutocompleteDisabled(true);
+                        setQuery(item.username);
+                        setAutocompleteResults([]);
+                        const source_map: Record<SourceType, string> = {
+                          MyAnimeList: 'mal',
+                          AniList: 'anilist',
+                          Kitsu: 'kitsu',
+                          'Anime-Planet': 'animeplanet',
+                        };
+                        const payload: AddUserPayload = { state: '', action: { type: 'add_user', source: source_map[activeSource], username: item.username } };
+                        fetchResults(payload, 0, false).then(() => setQuery(''));
+                        setShowButtons(false);
+                        if (inputRef.current) inputRef.current.blur();
+                      }}
+                    >
+                      {(item.avatar || item.missing_avatar) && (
+                        <img 
+                          className="autocomplete-avatar" 
+                          src={item.avatar || item.missing_avatar || ''} 
+                          alt={item.username}
+                          onError={(e) => {
+                            if (e.currentTarget.src !== (item.missing_avatar || '')) {
+                              e.currentTarget.src = item.missing_avatar || '';
+                            }
+                          }}
+                        />
+                      )}
+                      <span>
+                        {item.username.split('').map((char, idx) => (
+                          <span key={idx} className={item.matched[idx] ? "autocomplete-match" : "autocomplete-unmatch"}>
+                            {char}
+                          </span>
+                        ))}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </form>
         )}
       </header>

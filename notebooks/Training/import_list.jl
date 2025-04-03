@@ -275,6 +275,9 @@ function import_anilist_profile(data, reftime)
         maximum(vals)
     end
     function anilist_image(x)
+        if isnothing(x)
+            return nothing
+        end
         json = JSON3.read(x)
         if isempty(json)
             return nothing

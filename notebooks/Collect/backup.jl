@@ -38,6 +38,7 @@ function backup()
             LibPQ.execute(stmt)
         end
     end
+    logtag("BACKUP", "images")
     run(`rclone --retries=10 copyto ../../data/collect/images.tar r2:rsys/database/collect/$date/images.tar`)
     save = replace(save_template, "{FILE}" => "latest")
     cmd = "echo -n $date $save"

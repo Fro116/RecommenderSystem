@@ -40,11 +40,12 @@ header form {
   display: flex;
   flex-direction: column;
   align-items: center;
+  position: relative;
 }
 
 header input {
   padding: 12px 16px;
-  width: 80%;
+  width: 100%;
   font-size: 16px;
   text-align: center;
   margin-bottom: 10px;
@@ -67,6 +68,61 @@ header input:hover {
   border-color: #FB8C00;
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
+
+/* Autocomplete UI */
+.autocomplete-container {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  z-index: 1000;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.autocomplete-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.autocomplete-item:hover {
+  background-color: #f0f0f0;
+}
+
+.autocomplete-avatar {
+  width: 32px;
+  height: 32px;
+  margin-right: 10px;
+  object-fit: cover;
+  /* Ensures the image covers the square without being stretched */
+}
+
+/* .autocomplete-match {
+  font-weight: bold;
+  color: #FB8C00;
+}
+
+.autocomplete-unmatch {
+  font-weight: normal;
+  color: inherit;
+} */
+
+.autocomplete-match {
+  font-weight: normal;
+  color: inherit;
+}
+
+.autocomplete-unmatch {
+  font-weight: bold;
+  color: #FB8C00;
+}
+
 
 /* Header toggle section */
 .header-toggle {
@@ -438,14 +494,17 @@ header input:hover {
 /* Responsive tweaks */
 @media (max-width: 600px) {
   header input {
-    width: 90%;
-    font-size: 14px;
+    width: 100%;
+  }
+  
+  /* Added extra horizontal padding between source buttons and screen edges */
+  .source-buttons {
+    padding: 0 20px;
   }
 
   .source-button {
     flex: 1 1 45%;
     margin: 6px;
-    font-size: 14px;
   }
 
   .toggle-button {

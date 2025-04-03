@@ -803,8 +803,7 @@ function malweb_get_user(resource::Resource, username::String)
         if isnothing(leaf)
             return nothing
         end
-        url = stem * leaf
-        first(split(url, "?"))
+        stem * leaf
     end
 
     function get_about()

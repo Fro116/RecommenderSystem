@@ -201,39 +201,6 @@ function gen_splits()
     end
 end
 
-function save_profiles()
-    fns = reduce(
-        vcat,
-        [
-            Glob.glob("$datadir/users/$x/*/*.msgpack") for
-            x in ["training", "test", "unused"]
-        ],
-    )
-    records = []
-    for datasplit in ["training", "test", "unused"]
-        users = sort(Glob.glob("$datadir/users/$datasplit/*/*.msgpack"))
-        batches = collect(Iterators.partition(users, 65_536))
-        @showprogress for batch in batches
-            rs = Vector{Any}(undef, length(batch))
-            Threads.@threads for i = 1:length(batch)
-                data = open(batch[i]) do f
-                    MsgPack.unpack(read(f))
-                end
-                user = data["user"]
-                r = (user["source"], user["username"], user["accessed_at"], user["avatar"])
-                rs[i] = r
-            end
-            append!(records, rs)
-        end
-    end
-    df = DataFrames.DataFrame(records, [:source, :username, :accessed_at, :avatar])
-    CSV.write(
-        "$datadir/profiles.csv",
-        df;
-        transform = (col, val) -> something(val, missing),
-    )
-end
-
 function import_data()
     download_data()
     for m in MEDIUMS
@@ -245,9 +212,8 @@ function import_data()
         write(f, date)
     end
     gen_splits()
-    save_profiles()
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}"
-    files = vcat(["$m.csv" for m in MEDIUMS], ["images.csv", "profiles.csv"])
+    files = vcat(["$m.csv" for m in MEDIUMS], ["images.csv"])
     for f in files
         cmd = replace(
             save_template,

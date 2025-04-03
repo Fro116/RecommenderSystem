@@ -43,7 +43,7 @@ function download_data()
         ["baseline.$m.msgpack" for m in [0, 1]],
         ["bagofwords.$m.$metric.$stem" for m in [0, 1] for metric in ["rating"] for stem in ["csv", "pt"]],
         ["transformer.$stem" for stem in ["csv", "pt"]],
-        ["profiles.csv", "images.csv"],
+        ["images.csv"],
     )
     for fn in files
         cmd = "$download/training/$tag/$fn $datadir/$fn"
@@ -79,14 +79,15 @@ function gen_splits()
                       Iterators.enumerate(Glob.glob("$datadir/fingerprints_*.csv"))
         train_dir = "$datadir/users/training/$idx"
         test_dir = "$datadir/users/test/$idx"
-        mkpath.([train_dir, test_dir])
+        unused_dir = "$datadir/users/unused/$idx"
+        mkpath.([train_dir, test_dir, unused_dir])
         df = Random.shuffle(read_csv(f))
         Threads.@threads for i = 1:DataFrames.nrow(df)
             user = import_user(df.source[i], decompress(df.data[i]), df.db_refreshed_at[i])
             if length(user["items"]) < min_items
-                continue
-            end
-            if rand() < test_perc
+                recent_days = 0
+                outdir = unused_dir
+            elseif rand() < test_perc
                 recent_days = 1
                 outdir = test_dir
             else
@@ -104,7 +105,7 @@ function gen_splits()
                 end
             end
             if isempty(new_items)
-                continue
+                outdir = unused_dir
             end
             user["items"] = reverse(old_items)
             user["test_items"] = reverse(new_items)
@@ -116,5 +117,39 @@ function gen_splits()
     end
 end
 
+function save_profiles()
+    fns = reduce(
+        vcat,
+        [
+            Glob.glob("$datadir/users/$x/*/*.msgpack") for
+            x in ["training", "test", "unused"]
+        ],
+    )
+    records = []
+    for datasplit in ["training", "test", "unused"]
+        users = sort(Glob.glob("$datadir/users/$datasplit/*/*.msgpack"))
+        batches = collect(Iterators.partition(users, 65_536))
+        @showprogress for batch in batches
+            rs = Vector{Any}(undef, length(batch))
+            Threads.@threads for i = 1:length(batch)
+                data = open(batch[i]) do f
+                    MsgPack.unpack(read(f))
+                end
+                user = data["user"]
+                r = (user["source"], user["username"], user["accessed_at"], user["avatar"])
+                rs[i] = r
+            end
+            append!(records, rs)
+        end
+    end
+    df = DataFrames.DataFrame(records, [:source, :username, :accessed_at, :avatar])
+    CSV.write(
+        "$datadir/profiles.csv",
+        df;
+        transform = (col, val) -> something(val, missing),
+    )
+end
+
 download_data()
 gen_splits()
+save_profiles()

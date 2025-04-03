@@ -34,6 +34,7 @@ function finetune()
         run(`sh -c $cmd`)
     end
     blue_green_deploy()
+    run(`julia save_autocomplete.jl`)
 end
 
 finetune()

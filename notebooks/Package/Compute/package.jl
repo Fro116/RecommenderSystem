@@ -19,6 +19,7 @@ function compute(basedir::String)
         rm(app; recursive = true)
     end
     copy("notebooks/Finetune/compute.jl", app)
+    copy("notebooks/Finetune/render.jl", app)
     copy("notebooks/Training/import_list.jl", app)
     mediums = ["manga", "anime"]
     sources = ["mal", "anilist", "kitsu", "animeplanet"]

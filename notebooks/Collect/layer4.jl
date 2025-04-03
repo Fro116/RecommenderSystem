@@ -93,6 +93,15 @@ Oxygen.@post "/fingerprint" function fingerprint_user(r::HTTP.Request)::HTTP.Res
     HTTP.Response(200, r.headers, r.body)
 end
 
+function normalize(d::AbstractDict)
+    norm(x::AbstractDict) = JSON3.write(x)
+    norm(x::AbstractVector) = JSON3.write(x)
+    norm(::Nothing) = missing
+    norm(x) = x
+    Dict(k => norm(v) for (k, v) in d)
+end
+normalize(d::AbstractVector) = [normalize(x) for x in d]
+
 Oxygen.@post "/fetch" function fetch_user(r::HTTP.Request)::HTTP.Response
     if isnothing(LAYER_3_URL)
         return HTTP.Response(403, [])
@@ -121,10 +130,11 @@ Oxygen.@post "/fetch" function fetch_user(r::HTTP.Request)::HTTP.Response
     if HTTP.iserror(r)
         return HTTP.Response(r.status, [])
     end
-    @assert !HTTP.hasheader(r, "Content-Encoding")
-    HTTP.setheader(r, "Content-Encoding" => "zstd")
-    r.body = CodecZstd.transcode(CodecZstd.ZstdCompressor, r.body)
-    HTTP.Response(200, r.headers, r.body)
+    d = decode(r)
+    for k in keys(d)
+        d[k] = normalize(d[k])
+    end
+    HTTP.Response(200, encode(d, :msgpack)...)
 end
 
 Oxygen.@post "/refresh" function refresh_user(r::HTTP.Request)::HTTP.Response
@@ -213,18 +223,44 @@ Oxygen.@post "/refresh" function refresh_user(r::HTTP.Request)::HTTP.Response
     HTTP.Response(200, encode(Dict("refresh" => true), :msgpack)...)
 end
 
+Oxygen.@post "/autocomplete" function autocomplete(r::HTTP.Request)::HTTP.Response
+    data = decode(r)
+    if data["type"] != "user"
+        return HTTP.Response(404, [])
+    end
+    source = data["source"]
+    prefix = data["prefix"]
+    table = "autocomplete_users"
+    df = with_db(:inference_read, 3) do db
+        query = "SELECT * FROM $table WHERE (source, prefix) = (\$1, \$2)"
+        stmt = db_prepare(db, query)
+        DataFrames.DataFrame(LibPQ.execute(stmt, (source, prefix)))
+    end
+    if df isa Symbol || DataFrames.nrow(df) == 0
+        return HTTP.Response(404, [])
+    end
+    d = Dict(k => only(df[:, k]) for k in DataFrames.names(df))
+    HTTP.Response(200, encode(d, :msgpack)...)
+end
+
 function compile(port::Integer)
     profiles = CSV.read("../../secrets/test.users.csv", DataFrames.DataFrame, stringtype = String)
     @sync for (source, username, userid) in zip(profiles.source, profiles.username, profiles.userid)
         Threads.@spawn begin
+            logtag("STARTUP", "/autcomplete")
+            HTTP.post(
+                "http://localhost:$PORT/autocomplete",
+                encode(Dict("source" => source, "prefix" => lowercase(username), "type" => "user"), :msgpack)...,
+                status_exception = false,
+            )
             logtag("STARTUP", "/read")
-            r_read = HTTP.post(
+            HTTP.post(
                 "http://localhost:$PORT/read",
                 encode(Dict("source" => source, "username" => username), :msgpack)...,
                 status_exception = false,
             )
             logtag("STARTUP", "/refresh")
-            r_refresh = HTTP.post(
+            HTTP.post(
                 "http://localhost:$PORT/refresh",
                 encode(Dict("source" => source, "username" => username, "force" => true), :msgpack)...,
                 status_exception = false,
