@@ -103,16 +103,6 @@ header input:hover {
   /* Ensures the image covers the square without being stretched */
 }
 
-/* .autocomplete-match {
-  font-weight: bold;
-  color: #FB8C00;
-}
-
-.autocomplete-unmatch {
-  font-weight: normal;
-  color: inherit;
-} */
-
 .autocomplete-match {
   font-weight: normal;
   color: inherit;
@@ -272,11 +262,11 @@ header input:hover {
 
 /* Grid */
 .grid-view {
-  width: 90%;
+  width: 95%;
   margin: 0 auto;
   padding-top: 16px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(275px, 1fr));
   gap: 16px;
   scrollbar-width: none;
 }
@@ -438,6 +428,15 @@ header input:hover {
   font-size: 16px;
 }
 
+.card-details-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100px; /* Adjust as needed */
+  color: #777;
+  font-style: italic;
+}
+
 /* Footer */
 .home-overlay {
   position: fixed;
@@ -518,4 +517,35 @@ header input:hover {
   height: 80%;
   width: auto;
   pointer-events: none;
+}
+
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-grow: 1; /* Allows it to take up space in the flex container */
+  padding: 40px;
+  text-align: center;
+  color: #555; /* Softer text color */
+}
+
+.loading-spinner {
+  border: 6px solid #f3f3f3; /* Light grey */
+  border-top: 6px solid #F48FB1; /* Pink to match theme */
+  border-radius: 50%;
+  width: 50px;
+  height: 50px;
+  animation: spin 1s linear infinite;
+  margin-bottom: 20px; /* Space between spinner and text */
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-container p {
+  font-size: 1.2em;
+  font-weight: 500;
 }
