@@ -59,6 +59,46 @@ end
     typemap
 end
 
+function get_valid_users(source)
+    latest = Dict()
+    all_users = Dict()
+    to_delete = Set()
+    types = get_typemap(dbschema)["$(source)_users"]
+    user_cols = [x for x in keys(types) if !startswith(x, "db_")]
+    for r in CSV.Rows("$datadir/$source/$(source)_users.csv", types = types)
+        ts = r.db_last_success_at
+        if ismissing(ts)
+            continue
+        end
+        if source in ["mal", "anilist", "animeplanet"]
+            username = r.username
+            userid = r.userid
+        elseif source == "kitsu"
+            username = r.name
+            userid = r.userid
+        else
+            @assert false
+        end
+        user_data = Dict(k => get(r, Symbol(k), nothing) for k in user_cols)
+        all_users[(username, userid)] = (user_data, ts)
+        k = (lowercase(coalesce(username, "")), coalesce(userid, -1))
+        l_ts, l_username, l_userid = get(latest, k, (nothing, nothing, nothing))
+        if isnothing(l_ts)
+            latest[k] = (ts, username, userid)
+        elseif ts > l_ts
+            latest[k] = (ts, username, userid)
+            push!(to_delete, (l_username, l_userid))
+        else
+            push!(to_delete, (username, userid))
+        end
+    end
+    logtag("save_lists", "deduping $(length(to_delete)) $source users")
+    for k in to_delete
+        delete!(all_users, k)
+    end
+    all_users
+end
+
 function partition(source)
     if source in ["mal", "animeplanet"]
         col = :username
@@ -75,7 +115,7 @@ function partition(source)
     run(`sh -c $cmd`)
     rm("$datadir/$source/$(source)_user_items.csv")
     @showprogress for (chunk_idx, f) in
-        Iterators.enumerate(Glob.glob("$datadir/$source/splits/split_*.csv"))
+                      Iterators.enumerate(Glob.glob("$datadir/$source/splits/split_*.csv"))
         savedir = "$datadir/$source/user_items/$chunk_idx"
         mkpath(savedir)
         run(`mlr --csv --from $f split -g $(string(col)) --prefix $savedir/ -j ""`)
@@ -83,57 +123,7 @@ function partition(source)
     rm("$datadir/$source/splits", recursive = true, force = true)
 end
 
-function get_fingerprints(source::String, items::DataFrames.DataFrame)
-    fingerprints = []
-    if source in ["mal", "anilist"]
-        for m in ["manga", "anime"]
-            sdf = filter(x -> x.medium == m, items)
-            if DataFrames.nrow(sdf) == 0
-                continue
-            end
-            if source == "mal"
-                update_col = "updated_at"
-            elseif source == "anilist"
-                update_col = "updatedat"
-            else
-                @assert false
-            end
-            d = last(sort(sdf, update_col))
-            d = Dict(
-                "version" => d["version"],
-                "medium" => d["medium"],
-                "itemid" => d["itemid"],
-                "updated_at" => d[update_col],
-            )
-            push!(fingerprints, d)
-        end
-    elseif source == "kitsu"
-        if DataFrames.nrow(items) != 0
-            update_col = "updatedat"
-            d = last(sort(items, update_col))
-            d = Dict("version" => d["version"], "updated_at" => d[update_col])
-            push!(fingerprints, d)
-        end
-    elseif source == "animeplanet"
-        for m in ["manga", "anime"]
-            sdf = filter(x -> x.medium == m, items)
-            if DataFrames.nrow(sdf) != 0
-                d = last(sort(sdf, :item_order))
-                d = Dict(
-                    "version" => d["version"],
-                    "medium" => d["medium"],
-                    "itemid" => d["itemid"],
-                )
-                push!(fingerprints, d)
-            end
-            d = Dict("$(m)_count" => DataFrames.nrow(sdf))
-            push!(fingerprints, d)
-        end
-    end
-    fingerprints
-end
-
-function save_fingerprints(source::String)
+function gather(source)
     chunks = readdir("$datadir/$source/user_items")
     chunk_map = Dict()
     for c in chunks
@@ -152,144 +142,67 @@ function save_fingerprints(source::String)
             push!(chunk_map[user], "$datadir/$source/user_items/$c/$f")
         end
     end
-    users = CSV.read(
-        "$datadir/$source/$(source)_users.csv",
-        DataFrames.DataFrame,
-        stringtype = String,
-        ntasks = 1,
-        types = get_typemap(dbschema)["$(source)_users"]
-    )
-    user_cols = [x for x in DataFrames.names(users) if !startswith(x, "db_")]
-    function writecsv(c::Channel)
-        p = ProgressMeter.ProgressUnknown(desc = "$source fingerprints"; showspeed=true)
-        function write!(dfs, part)
-            CSV.write(
-                "$datadir/$source.$part.csv",
-                reduce(vcat, dfs);
-                bufsize = 2^24,
-                quotestrings=true,
-                transform=(col, val) -> something(val, missing),
-            )
-            empty!(dfs)
-        end
-        part = 1
-        dfs = []
-        try
-            while true
-                push!(dfs, take!(c))
-                if length(dfs) == 1_000_000
-                    write!(dfs, part)
-                    ProgressMeter.next!(p)
-                    part += 1
-                end
+    types = get_typemap(dbschema)["$(source)_user_items"]
+    mkpath("$datadir/$source/lists")
+    users = get_valid_users(source)
+    batches = Iterators.partition(collect(users), 1_000_000)
+    @showprogress for (b, batch) in Iterators.enumerate(batches)
+        dfs = Vector{Any}(undef, length(batch))
+        Threads.@threads for i = 1:length(batch)
+            ((username, userid), (v, ts)) = batch[i]
+
+            if source in ["mal", "animeplanet"]
+                k = username
+            elseif source in ["anilist", "kitsu"]
+                k = userid
+            else
+                @assert false
             end
-        catch
-        finally
-            if length(dfs) > 0
-                write!(dfs, part)
-            end
-        end
-        touch("$datadir/$source.finished")
-        ProgressMeter.finish!(p)
-    end
-    ch = Channel(writecsv, 1000)
-    Threads.@threads for i = 1:DataFrames.nrow(users)
-        if ismissing(users[i, :db_last_success_at])
-            continue
-        end
-        if source in ["mal", "animeplanet"]
-            if ismissing(users[i, :username])
-                continue
-            end
-            uid = users[i, :username]
-            username = users[i, :username]
-        elseif source == "anilist"
-            if ismissing(users[i, :username]) || ismissing(users[i, :userid])
-                continue
-            end
-            uid = users[i, :userid]
-            username = users[i, :username]
-        elseif source == "kitsu"
-            if ismissing(users[i, :name]) || ismissing(users[i, :userid])
-                continue
-            end
-            uid = users[i, :userid]
-            username = users[i, :name]
-        else
-            @assert false
-        end
-        userid = users[i, :userid]
-        user_data = Dict(k => users[i, k] for k in user_cols)
-        db_last_success_at = users[i, :db_last_success_at]
-        if uid ∉ keys(chunk_map)
             items = []
-            fingerprints = []
-        else
-            items = []
-            dfs = []
-            for f in chunk_map[uid]
+            for f in get(chunk_map, k, [])
                 df = CSV.read(
                     f,
                     DataFrames.DataFrame,
                     stringtype = String,
                     ntasks = 1,
-                    types = get_typemap(dbschema)["$(source)_user_items"]
+                    types = types,
                 )
-                cols = DataFrames.names(df)
                 for i = 1:DataFrames.nrow(df)
-                    d = Dict(k => df[i, k] for k in cols)
+                    d = Dict(k => df[i, k] for k in keys(types))
                     push!(items, d)
                 end
-                push!(dfs, df)
             end
-            df = vcat(dfs...)
-            fingerprints = get_fingerprints(source, df)
-        end
-        user = Dict(
-            "user" => user_data,
-            "items" => items,
-            "usermap" => Dict("username" => username, "userid" => userid),
-        )
-        df = DataFrames.DataFrame(
-            "source" => source,
-            "username" => username,
-            "userid" => userid,
-            "fingerprint" => JSON3.write(fingerprints),
-            "data" =>
-                "\\x" * bytes2hex(
-                    CodecZstd.transcode(
-                        CodecZstd.ZstdCompressor,
-                        Vector{UInt8}(MsgPack.pack(user)),
+            user = Dict(
+                "user" => v,
+                "items" => items,
+                "usermap" => Dict("username" => username, "userid" => userid),
+            )
+            dfs[i] = DataFrames.DataFrame(
+                "source" => source,
+                "username" => username,
+                "userid" => userid,
+                "data" =>
+                    "\\x" * bytes2hex(
+                        CodecZstd.transcode(
+                            CodecZstd.ZstdCompressor,
+                            Vector{UInt8}(MsgPack.pack(user)),
+                        ),
                     ),
-                ),
-            "db_refreshed_at" => db_last_success_at,
-        )
-        put!(ch, df)
-    end
-    close(ch)
-    rm("$datadir/$source", force = true, recursive = true)
-    while !ispath("$datadir/$source.finished")
-        sleep(10)
-    end
-    rm("$datadir/$source.finished")
-end
-
-function run_sql(script)
-    conn_strs = readlines("../../../secrets/db.inference.txt")
-    for conn_str in conn_strs
-        try
-            cmd = """psql "$conn_str" -f $script"""
-            run(`sh -c $cmd`)
-            return true
-        catch
-             nothing
+                "db_refreshed_at" => ts,
+            )
         end
+        CSV.write(
+            "$datadir/$source.$b.csv",
+            reduce(vcat, dfs);
+            bufsize = 2^24,
+            quotestrings = true,
+            transform = (col, val) -> something(val, missing),
+        )
     end
-    false
 end
 
-function upload_fingerprints()
-    rm(datadir, force = true, recursive = true)
+function save_lists()
+    rm(datadir, recursive = true, force = true)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     mkpath(datadir)
     retrieval = "rclone --retries=10 copyto r2:rsys/database/collect"
@@ -298,19 +211,21 @@ function upload_fingerprints()
     for source in reverse(sources)
         download_users(source)
         partition(source)
-        save_fingerprints(source)
+        gather(source)
+        rm("$datadir/$source", recursive = true, force = true)
     end
+    tag = read("$datadir/latest", String)
     files = join(readdir(datadir), " ")
-    cmd = "cd $datadir && mlr --csv cat *.csv > fingerprints.csv && rm $files"
+    cmds = [
+        "cd $datadir",
+        "mlr --csv cat *.csv > lists.csv",
+        "zstd lists.csv -o lists.csv.zstd",
+        "rclone --retries=10 copyto lists.csv.zstd r2:rsys/database/lists/$tag/lists.csv.zstd",
+        "rclone --retries=10 copyto latest r2:rsys/database/lists/latest",
+        "rm $files",
+    ]
+    cmd = join(cmds, " && ")
     run(`sh -c $cmd`)
-    save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/import/{OUTPUT}"
-    cmd = replace(save_template, "{INPUT}" => "$datadir/fingerprints.csv", "{OUTPUT}" => "fingerprints.csv")
-    run(`sh -c $cmd`)
-    @assert run_sql("startup.sql")
-    script = "./import_csv.sh"
-    cmd = "chmod +x $script && $script $datadir"
-    run(`sh -c $cmd`)
-    @assert run_sql("import_csv.sql")
 end
 
-upload_fingerprints()
+save_lists()

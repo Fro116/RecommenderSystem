@@ -117,11 +117,20 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     if action["type"] == "add_user"
         username = sanitize(action["username"])
         source = action["source"]
+        followup_action = Dict("type" => "refresh_user", "source" => source, "username" => username)
         r_embed = HTTP.post(
             "http://localhost:$PORT/add_user",
             encode(Dict("source" => source, "username" => username), :msgpack)...,
             status_exception = false,
         )
+        if r_embed.status == 404 && refresh_user(source, username)
+            r_embed = HTTP.post(
+                "http://localhost:$PORT/add_user",
+                encode(Dict("source" => source, "username" => username), :msgpack)...,
+                status_exception = false,
+            )
+            followup_action = nothing
+        end
         if HTTP.iserror(r_embed)
             return HTTP.Response(r_embed.status)
         end
@@ -130,18 +139,10 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
             state["users"] = []
         end
         push!(state["users"], d_embed)
-        followup_action = Dict("type" => "refresh_user", "source" => source, "username" => username)
     elseif action["type"] == "refresh_user"
         username = sanitize(action["username"])
         source = action["source"]
-        idx = nothing
-        for (i, x) in Iterators.enumerate(state["users"])
-            if x["username"] == username && x["source"] == source
-                idx = i
-                break
-            end
-        end
-        if isnothing(idx) || !refresh_user(source, username)
+        if !refresh_user(source, username)
             return HTTP.Response(200, encode(Dict(), :json, encoding)...)
         end
         r_embed = HTTP.post(

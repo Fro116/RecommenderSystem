@@ -26,20 +26,20 @@ Oxygen.@post "/read" function read_user(r::HTTP.Request)::HTTP.Response
         end
         push!(tasks, task)
     end
-    user = nothing
+    dfs = []
     for task in tasks
         df = fetch(task)
         if df isa Symbol || DataFrames.nrow(df) == 0
             continue
         end
-        if isnothing(user) || df[:, "db_refreshed_at"] > user[:, "db_refreshed_at"]
-            user = df
-        end
+        push!(dfs, df)
     end
-    if isnothing(user)
+    if isempty(dfs)
         return HTTP.Response(404, [])
     end
-    d = Dict(k => only(user[:, k]) for k in DataFrames.names(user))
+    df = reduce(vcat, dfs)
+    sort!(df, :db_refreshed_at, rev=true)
+    d = Dict(k => df[1, k] for k in DataFrames.names(df))
     HTTP.Response(200, encode(d, :msgpack)...)
 end
 
@@ -52,17 +52,16 @@ Oxygen.@post "/write" function write_user(r::HTTP.Request)::HTTP.Response
         source,
         username,
         coerce(data["userid"]),
-        data["fingerprint"],
         bytes2hex(Vector{UInt8}(data["data"])),
         time()
     )
     r = with_db(:inference_write, 3) do db
-        query = "DELETE FROM inference_users WHERE (source, lower(username)) = (\$1, lower(\$2))"
-        stmt = db_prepare(db, query)
-        LibPQ.execute(stmt, (source, username), binary_format=true)
         query = """
-            INSERT INTO inference_users (source, username, userid, fingerprint, data, db_refreshed_at)
-            VALUES (\$1, \$2, \$3, \$4, decode(\$5, 'hex'), \$6)
+            INSERT INTO inference_users (source, username, userid, data, db_refreshed_at)
+            VALUES (\$1, \$2, \$3, decode(\$4, 'hex'), \$5)
+            ON CONFLICT (source, lower(username), coalesce(userid, -1))
+            DO UPDATE SET source = EXCLUDED.source, username = EXCLUDED.username,
+            userid = EXCLUDED.userid, data = EXCLUDED.data, db_refreshed_at = EXCLUDED.db_refreshed_at;
             """
         stmt = db_prepare(db, query)
         LibPQ.execute(stmt, vals, binary_format=true)
@@ -73,24 +72,54 @@ Oxygen.@post "/write" function write_user(r::HTTP.Request)::HTTP.Response
     HTTP.Response(200, [])
 end
 
-Oxygen.@post "/fingerprint" function fingerprint_user(r::HTTP.Request)::HTTP.Response
-    if isnothing(LAYER_3_URL)
-        return HTTP.Response(403, [])
+function get_fingerprints(source::String, items::DataFrames.DataFrame)
+    fingerprints = []
+    if source in ["mal", "anilist"]
+        for m in ["manga", "anime"]
+            sdf = filter(x -> x.medium == m, items)
+            if DataFrames.nrow(sdf) == 0
+                continue
+            end
+            if source == "mal"
+                update_col = "updated_at"
+            elseif source == "anilist"
+                update_col = "updatedat"
+            else
+                @assert false
+            end
+            d = last(sort(sdf, update_col))
+            d = Dict(
+                "version" => d["version"],
+                "medium" => d["medium"],
+                "itemid" => d["itemid"],
+                "updated_at" => d[update_col],
+            )
+            push!(fingerprints, d)
+        end
+    elseif source == "kitsu"
+        if DataFrames.nrow(items) != 0
+            update_col = "updatedat"
+            d = last(sort(items, update_col))
+            d = Dict("version" => d["version"], "updated_at" => d[update_col])
+            push!(fingerprints, d)
+        end
+    elseif source == "animeplanet"
+        for m in ["manga", "anime"]
+            sdf = filter(x -> x.medium == m, items)
+            if DataFrames.nrow(sdf) != 0
+                d = last(sort(sdf, :item_order))
+                d = Dict(
+                    "version" => d["version"],
+                    "medium" => d["medium"],
+                    "itemid" => d["itemid"],
+                )
+                push!(fingerprints, d)
+            end
+            d = Dict("$(m)_count" => DataFrames.nrow(sdf))
+            push!(fingerprints, d)
+        end
     end
-    data = decode(r)
-    source = data["source"]
-    username = data["username"]
-    userid = data["userid"]
-    d = Dict(source => source, "username" => username, "userid" => userid)
-    r = HTTP.post(
-        "$LAYER_3_URL/$(source)_fingerprint",
-        encode(d, :msgpack)...,
-        status_exception = false,
-    )
-    if HTTP.iserror(r)
-        return HTTP.Response(r.status, [])
-    end
-    HTTP.Response(200, r.headers, r.body)
+    fingerprints
 end
 
 function normalize(d::AbstractDict)
@@ -98,7 +127,7 @@ function normalize(d::AbstractDict)
     norm(x::AbstractVector) = JSON3.write(x)
     norm(::Nothing) = missing
     norm(x) = x
-    Dict(k => norm(v) for (k, v) in d)
+    Dict(lowercase(k) => norm(v) for (k, v) in d)
 end
 normalize(d::AbstractVector) = [normalize(x) for x in d]
 
@@ -153,7 +182,7 @@ Oxygen.@post "/refresh" function refresh_user(r::HTTP.Request)::HTTP.Response
     if !HTTP.iserror(r_read)
         d_read = decode(r_read)
         r_fingerprint = HTTP.post(
-            "http://localhost:$PORT/fingerprint",
+            "$LAYER_3_URL/$(source)_fingerprint",
             encode(
                 Dict(
                     "source" => source,
@@ -168,11 +197,14 @@ Oxygen.@post "/refresh" function refresh_user(r::HTTP.Request)::HTTP.Response
             return HTTP.Response(r_fingerprint.status, [])
         end
         d_fingerprint = decode(r_fingerprint)
-        if d_read["fingerprint"] == d_fingerprint["fingerprint"] && !force
+        user = MsgPack.unpack(
+            CodecZstd.transcode(CodecZstd.ZstdDecompressor, Vector{UInt8}(d_read["data"])),
+        )
+        item_df = DataFrames.DataFrame([Dict{String,Any}(x) for x in user["items"]])
+        d_read_fingerprint = get_fingerprints(source, item_df)
+        if d_read_fingerprint == JSON3.read(d_fingerprint["fingerprint"]) && !force
             return HTTP.Response(200, encode(Dict("refresh" => false), :msgpack)...)
         end
-    else
-        r_fingerprint = nothing
     end
     r_fetch = HTTP.post(
         "http://localhost:$PORT/fetch",
@@ -183,27 +215,8 @@ Oxygen.@post "/refresh" function refresh_user(r::HTTP.Request)::HTTP.Response
         return HTTP.Response(r_fetch.status, [])
     end
     d_fetch = decode(r_fetch)
-    if isnothing(r_fingerprint)
-        r_fingerprint = HTTP.post(
-            "http://localhost:$PORT/fingerprint",
-            encode(
-                Dict(
-                    "source" => source,
-                    "username" => username,
-                    "userid" => d_fetch["usermap"]["userid"],
-                ),
-                :msgpack,
-            )...,
-            status_exception = false,
-        )
-        if HTTP.iserror(r_fingerprint)
-            return HTTP.Response(r_fingerprint.status, [])
-        end
-        d_fingerprint = decode(r_fingerprint)
-    end
     data = merge(
         d_fetch["usermap"],
-        d_fingerprint,
         Dict(
             "source" => source,
             "data" => CodecZstd.transcode(

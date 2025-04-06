@@ -594,16 +594,22 @@ function import_animeplanet_user(data, reftime)
     Dict("user" => user, "items" => items)
 end
 
+function import_profile(source, data, reftime)
+    fns = Dict(
+        "mal" => import_mal_profile,
+        "anilist" => import_anilist_profile,
+        "kitsu" => import_kitsu_profile,
+        "animeplanet" => import_animeplanet_profile,
+    )
+    fns[source](data, reftime)
+end
+
 function import_user(source, data, reftime)
-    if source == "mal"
-        return import_mal_user(data, reftime)
-    elseif source == "anilist"
-        return import_anilist_user(data, reftime)
-    elseif source == "kitsu"
-        return import_kitsu_user(data, reftime)
-    elseif source == "animeplanet"
-        return import_animeplanet_user(data, reftime)
-    else
-        @assert false
-    end
+    fns = Dict(
+        "mal" => import_mal_user,
+        "anilist" => import_anilist_user,
+        "kitsu" => import_kitsu_user,
+        "animeplanet" => import_animeplanet_user,
+    )
+    fns[source](data, reftime)
 end
