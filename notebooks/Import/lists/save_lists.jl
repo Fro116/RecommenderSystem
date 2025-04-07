@@ -201,13 +201,13 @@ function gather(source)
     end
 end
 
-function save_lists()
+function save_lists(datetag)
     rm(datadir, recursive = true, force = true)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     mkpath(datadir)
-    retrieval = "rclone --retries=10 copyto r2:rsys/database/collect"
-    cmd = "$retrieval/latest $datadir/latest"
-    run(`sh -c $cmd`)
+    open("$datadir/latest", "w") do f
+        write(f, datetag)
+    end
     for source in reverse(sources)
         download_users(source)
         partition(source)
@@ -226,6 +226,8 @@ function save_lists()
     ]
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)
+    run(`./save_lists.sh`)
 end
 
-save_lists()
+save_lists(ARGS[1])
+
