@@ -20,16 +20,20 @@ function download_data()
         ["$m.groups.csv" for m in MEDIUMS],
         ["$(s)_$(m).csv" for s in SOURCES for m in MEDIUMS],
         ["$(s)_media_relations.csv" for s in SOURCES],
-        ["fingerprints.csv", "images.csv"],
+        ["images.csv"],
     )
     for fn in files
         cmd = "$retrieval/$fn $datadir/$fn"
         run(`sh -c $cmd`)
     end
+    run(`rclone --retries=10 copyto r2:rsys/database/lists/latest $datadir/list_tag`)
+    tag = read("$datadir/list_tag", String)
+    run(`rclone --retries=10 copyto r2:rsys/database/lists/latest/$tag/lists.csv.zstd $datadir/lists.csv.zstd`)
+    run(`unzstd $datadir/lists.csv.zstd`)
     run(
-        `mlr --csv split -n 1000000 --prefix $datadir/fingerprints $datadir/fingerprints.csv`,
+        `mlr --csv split -n 1000000 --prefix $datadir/lists $datadir/lists.csv`,
     )
-    rm("$datadir/fingerprints.csv")
+    rm("$datadir/lists.csv")
 end
 
 function get_media(source, medium::String)
@@ -180,7 +184,7 @@ function gen_splits()
     min_items = 5
     test_perc = 0.01
     @showprogress for (idx, f) in
-                      Iterators.enumerate(Glob.glob("$datadir/fingerprints_*.csv"))
+                      Iterators.enumerate(Glob.glob("$datadir/lists_*.csv"))
         train_dir = "$datadir/users/training/$idx"
         test_dir = "$datadir/users/test/$idx"
         unused_dir = "$datadir/users/unused/$idx"

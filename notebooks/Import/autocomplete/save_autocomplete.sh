@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euxo pipefail
-cd "../../data/finetune"
+cd "../../../data/import/autocomplete"
 df="user_autocomplete"
 db="autocomplete_users"
-secretdir="../../secrets"
+secretdir="../../../secrets"
 bucket=`cat $secretdir/gcp.bucket.txt`
 connstr=`tail -n 1 $secretdir/db.inference.txt | tr -d '\n'`
 

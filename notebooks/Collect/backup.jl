@@ -43,8 +43,6 @@ function backup()
     save = replace(save_template, "{FILE}" => "latest")
     cmd = "echo -n $date $save"
     run(`sh -c $cmd`)
-    cleanup = raw"rclone lsd r2:rsys/database/collect/ | sort | head -n -30 | awk '{print $NF}' | xargs -I {} rclone purge r2:rsys/database/collect/{}"
-    run(`sh -c $cleanup`)
 end
 
 @scheduled "BACKUP" "01:00" @handle_errors backup()

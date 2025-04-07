@@ -1,10 +1,59 @@
 import CSV
 import CodecZstd
 import DataFrames
+import Glob
 import MsgPack
 import ProgressMeter: @showprogress
 
-const datadir = "../../data/finetune"
+
+include("../../julia_utils/stdout.jl")
+include("../../Training/import_list.jl")
+
+const datadir = "../../../data/import/autocomplete"
+
+qrun(x) = run(pipeline(x, stdout = devnull, stderr = devnull))
+
+function import_data()
+    rm(datadir, recursive=true, force=true)
+    mkpath(datadir)
+    qrun(`rclone --retries=10 copyto r2:rsys/database/lists/latest $datadir/latest`)
+    tag = read("$datadir/latest", String)
+    qrun(
+        `rclone --retries=10 copyto r2:rsys/database/lists/$tag/lists.csv.zstd $datadir/lists.csv.zstd`,
+    )
+    cmds = ["cd $datadir", "unzstd lists.csv.zstd", "rm lists.csv.zstd"]
+    cmd = join(cmds, " && ")
+    qrun(`sh -c $cmd`)
+    qrun(`mlr --csv split -n 1000000 --prefix $datadir/lists $datadir/lists.csv`)
+    rm("$datadir/lists.csv")
+end
+
+function save_profiles()
+    @showprogress for (idx, f) in Iterators.enumerate(Glob.glob("$datadir/lists_*.csv"))
+        df = read_csv(f)
+        records = Vector{Any}(undef, DataFrames.nrow(df))
+        Threads.@threads for i = 1:length(records)
+            ts = parse(Float64, df.db_refreshed_at[i])
+            data = decompress(df.data[i])
+            user = import_profile(df.source[i], data, ts)
+            r = (user["source"], user["username"], ts, user["avatar"])
+            records[i] = r
+        end
+        df = DataFrames.DataFrame(records, [:source, :username, :accessed_at, :avatar])
+        CSV.write(
+            "$datadir/profiles.$idx.csv",
+            df,
+            transform = (col, val) -> something(val, missing),
+        )
+    end
+    cmds = [
+        "mlr --csv cat $datadir/profiles.*.csv > $datadir/profiles.csv ",
+        "rm $datadir/profiles.*.csv",
+        "rm $datadir/lists*.csv",
+    ]
+    cmd = join(cmds, " && ")
+    qrun(`sh -c $cmd`)
+end
 
 mutable struct TrieNode{V}
     children::Dict{Char,TrieNode{V}}
@@ -131,8 +180,14 @@ function save_user_autcompletes()
         ac_df = DataFrames.DataFrame(records, [:source, :prefix, :data])
         CSV.write("$datadir/user_autocomplete.$b.csv", ac_df)
     end
-    cmd = "chmod +x ./save_autocomplete.sh && ./save_autocomplete.sh"
-    run(`sh -c $cmd`)
 end
 
+function upload_autocompletes()
+    cmd = "chmod +x ./save_autocomplete.sh && ./save_autocomplete.sh"
+    qrun(`sh -c $cmd`)
+end
+
+import_data()
+save_profiles()
 save_user_autcompletes()
+upload_autocompletes()

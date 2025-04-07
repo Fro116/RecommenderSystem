@@ -5,7 +5,7 @@ dependencies = [
     ("CodecZstd", "0.8.6"),
     ("CSV", "0.10.15"),
     ("DataFrames", "1.7.0"),
-    )"DataStructures", "0.18.22"),
+    ("DataStructures", "0.18.22"),
     ("Glob", "1.3.1"),
     ("H5Zblosc", "0.1.2"),
     ("HDF5", "0.17.2"),

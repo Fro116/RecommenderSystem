@@ -9,12 +9,16 @@ end
 
 function cron()
     day = Dates.day(Dates.today())
-    if day in [1, 8, 15, 22]
-        runcmd("cd Import/media && julia save_media.jl")
-        runcmd("cd Import/images && julia save_images.jl")
-        runcmd("cd Training && julia run.jl")
+    for x ["lists", "autocomplete", "images", "media"]
+        runcmd("cd Import/$x && julia save_$(x).jl")
     end
-    runcmd("cd Finetune && julia run.jl")
+    train_models = false
+    if train_models
+        if day in [1, 8, 15, 22]
+            runcmd("cd Training && julia run.jl")
+        end
+        runcmd("cd Finetune && julia run.jl")
+    end
 end
 
-@scheduled "CRON" "7:00" @handle_errors cron()
+@scheduled "CRON" "2:00" @handle_errors cron()
