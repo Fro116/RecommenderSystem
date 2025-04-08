@@ -49,12 +49,14 @@ function download_data()
         cmd = "$download/training/$tag/$fn $datadir/$fn"
         run(`sh -c $cmd`)
     end
-    cmd = "$download/import/fingerprints.csv $datadir/fingerprints.csv"
-    run(`sh -c $cmd`)
+    run(`rclone --retries=10 copyto r2:rsys/database/lists/latest $datadir/list_tag`)
+    tag = read("$datadir/list_tag", String)
+    run(`rclone --retries=10 copyto r2:rsys/database/lists/$tag/lists.csv.zstd $datadir/lists.csv.zstd`)
+    run(`unzstd $datadir/lists.csv.zstd`)
     run(
-        `mlr --csv split -n 1000000 --prefix $datadir/fingerprints $datadir/fingerprints.csv`,
+        `mlr --csv split -n 1000000 --prefix $datadir/lists $datadir/lists.csv`,
     )
-    rm("$datadir/fingerprints.csv")
+    rm("$datadir/lists.csv")
     date = Dates.format(Dates.today(), "yyyymmdd")
     open("$datadir/latest", "w") do f
         write(f, date)
@@ -69,14 +71,15 @@ function gen_splits()
     min_items = 5
     test_perc = 0.1
     max_ts = -Inf
-    @showprogress for f in Glob.glob("$datadir/fingerprints_*.csv")
+    @showprogress for f in Glob.glob("$datadir/lists_*.csv")
         df = read_csv(f)
         max_df_ts = maximum(parse.(Float64, filter(x -> !ismissing(x), df.db_refreshed_at)))
         max_ts = max(max_ts, max_df_ts)
     end
+    logtag("IMPORT_DATA", "using max_ts of $max_ts")
     rm("$datadir/users", recursive = true, force = true)
     @showprogress for (idx, f) in
-                      Iterators.enumerate(Glob.glob("$datadir/fingerprints_*.csv"))
+                      Iterators.enumerate(Glob.glob("$datadir/lists_*.csv"))
         train_dir = "$datadir/users/training/$idx"
         test_dir = "$datadir/users/test/$idx"
         unused_dir = "$datadir/users/unused/$idx"

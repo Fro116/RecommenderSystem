@@ -54,7 +54,8 @@ function start_sfcompute(gpuhour_price)
         end
         should_retry = false
         run(`sf clusters users add --cluster $cluster --user myuser`)
-        run(`cd ../../data/training && kubectl apply -f prod.yaml`)
+        cmd = "cd ../../data/training && kubectl apply -f prod.yaml"
+        run(`sh -c $cmd`)
         sleep(h * 3600)
         return should_retry
     catch e

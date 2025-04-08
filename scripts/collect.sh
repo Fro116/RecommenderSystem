@@ -7,7 +7,7 @@ kill_bg_processes() {
 trap kill_bg_processes INT
 cd ../../
 workdir=`pwd`
-logs="$workdir/RecommenderSystem/logs/training"
+logs="$workdir/RecommenderSystem/logs/collect"
 mkdir -p $logs && rm -f $logs/*.log
 source venv/bin/activate
 export JULIA_PROJECT="$workdir/juliaenv"

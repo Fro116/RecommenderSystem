@@ -87,8 +87,19 @@ function load_resources()::Vector{Resource}
         ) for x in shared
     ]
 
-    animeplanet_resources =
-        [Dict("location" => "animeplanet", "proxyurl" => x, "ratelimit" => 8) for x in dedicated]
+    animeplanet_credentials = []
+    for x in readlines("../../secrets/animeplanet.auth.txt")
+        username, password = split(x, ",")
+        push!(animeplanet_credentials, Dict("username" => username, "password" => password))
+    end
+    animeplanet_resources = [
+        Dict(
+            "location" => "animeplanet",
+            "proxyurl" => x,
+            "ratelimit" => 8,
+            "credentials" => animeplanet_credentials[(i % length(animeplanet_credentials))+1],
+        ) for (i, x) in Iterators.enumerate(dedicated)
+    ]
 
     resources = vcat(
         mal_resources,
@@ -1790,6 +1801,8 @@ Oxygen.@post "/animeplanet" function animeplanet_api(r::HTTP.Request)::HTTP.Resp
             )
         elseif endpoint == "image"
             return animeplanet_get_image(resource, sessionid, data["url"])
+        elseif endpoint == "login"
+            return animeplanet_login(resource, sessionid)
         else
             logerror("animeplanet_api invalid endpoint $endpoint")
             return HTTP.Response(500, [])
@@ -2147,10 +2160,6 @@ function animeplanet_get_feed(
     medium::String,
     username::String,
 )
-    logged_in = false
-    if !logged_in
-        return HTTP.Response(200, encode(Dict(), :msgpack)...)
-    end
     params = Dict("type" => medium)
     url = string(
         HTTP.URI("https://www.anime-planet.com/users/$username/feed", query = params),
@@ -2205,6 +2214,24 @@ function animeplanet_get_image(resource::Resource, sessionid::String, url::Strin
     end
     ret = Dict("version" => API_VERSION, "url" => url, "image" => r.body)
     HTTP.Response(200, encode(ret, :msgpack)...)
+end
+
+function animeplanet_login(resource::Resource, sessionid::String)
+    url = "https://www.anime-planet.com/api/login"
+    creds = resource["credentials"]
+    d = Dict(
+        "_username" => creds["username"],
+        "_password" => creds["password"],
+        "_remember_me" => true,
+    )
+    headers, body = encode(d, :json)
+    headers["sessionid"] = sessionid
+    r = request(resource, "PUT", url, headers, body)
+    if r.status >= 400
+        logstatus("animeplanet_login", r, url)
+        return HTTP.Response(r)
+    end
+    HTTP.Response(200, [])
 end
 
 function compile(::Integer) end

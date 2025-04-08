@@ -97,6 +97,13 @@ function get_session(token)
         sessionid = data["token"]
     elseif token["resource"]["location"] == "animeplanet"
         sessionid = string(UUIDs.uuid4())
+        r = request(
+            "animeplanet",
+            Dict("token" => token, "sessionid" => sessionid, "endpoint" => "login")
+        )
+        if r.status >= 400
+            return TOKEN_UNAVAILABLE::Errors
+        end
     else
         @assert false
     end
@@ -903,6 +910,9 @@ function get_animeplanet_username(userid::Integer)
     token = decode(r)
     try
         sessionid = get_session(token)
+        if sessionid isa Errors
+            return sessionid
+        end
         s = request(
             "animeplanet",
             Dict(
@@ -969,6 +979,9 @@ function get_animeplanet_user(username::String)
     token = decode(r)
     try
         sessionid = get_session(token)
+        if sessionid isa Errors
+            return sessionid
+        end
         s = request(
             "animeplanet",
             Dict(
@@ -1025,6 +1038,9 @@ function get_animeplanet_feed(medium::String, username::String)
     token = decode(r)
     try
         sessionid = get_session(token)
+        if sessionid isa Errors
+            return sessionid
+        end
         s = request(
             "animeplanet",
             Dict(
@@ -1058,6 +1074,9 @@ function get_animeplanet_entries(medium::String, username::String)
     token = decode(r)
     try
         sessionid = get_session(token)
+        if sessionid isa Errors
+            return sessionid
+        end
         entries = []
         page = 1
         expand_pagelimit = false
@@ -1123,6 +1142,9 @@ function get_animeplanet_fingerprint(medium::String, username::String)
     token = decode(r)
     try
         sessionid = get_session(token)
+        if sessionid isa Errors
+            return sessionid
+        end
         s = request(
             "animeplanet",
             Dict(
@@ -1167,6 +1189,9 @@ function get_animeplanet_media(medium::String, itemid::String)
     token = decode(r)
     try
         sessionid = get_session(token)
+        if sessionid isa Errors
+            return sessionid
+        end
         s = request(
             "animeplanet",
             Dict(
@@ -1243,6 +1268,9 @@ function get_animeplanet_image(url::String)
     token = decode(r)
     try
         sessionid = get_session(token)
+        if sessionid isa Errors
+            return sessionid
+        end
         s = request(
             "animeplanet",
             Dict(

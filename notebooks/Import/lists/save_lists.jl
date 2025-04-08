@@ -65,7 +65,7 @@ function get_valid_users(source)
     to_delete = Set()
     types = get_typemap(dbschema)["$(source)_users"]
     user_cols = [x for x in keys(types) if !startswith(x, "db_")]
-    for r in CSV.Rows("$datadir/$source/$(source)_users.csv", types = types)
+    for r in CSV.Rows("$datadir/$source/$(source)_users.csv", types = types, validate=false)
         ts = r.db_last_success_at
         if ismissing(ts)
             continue

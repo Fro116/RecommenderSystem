@@ -15,6 +15,14 @@ const datadir = "../../data/training"
 function download_data()
     rm(datadir, force = true, recursive = true)
     mkpath(datadir)
+    run(`rclone --retries=10 copyto r2:rsys/database/lists/latest $datadir/list_tag`)
+    tag = read("$datadir/list_tag", String)
+    run(`rclone --retries=10 copyto r2:rsys/database/lists/$tag/lists.csv.zstd $datadir/lists.csv.zstd`)
+    run(`unzstd $datadir/lists.csv.zstd`)
+    run(
+        `mlr --csv split -n 1000000 --prefix $datadir/lists $datadir/lists.csv`,
+    )
+    rm("$datadir/lists.csv")
     retrieval = "rclone --retries=10 copyto r2:rsys/database/import"
     files = vcat(
         ["$m.groups.csv" for m in MEDIUMS],
@@ -26,14 +34,6 @@ function download_data()
         cmd = "$retrieval/$fn $datadir/$fn"
         run(`sh -c $cmd`)
     end
-    run(`rclone --retries=10 copyto r2:rsys/database/lists/latest $datadir/list_tag`)
-    tag = read("$datadir/list_tag", String)
-    run(`rclone --retries=10 copyto r2:rsys/database/lists/latest/$tag/lists.csv.zstd $datadir/lists.csv.zstd`)
-    run(`unzstd $datadir/lists.csv.zstd`)
-    run(
-        `mlr --csv split -n 1000000 --prefix $datadir/lists $datadir/lists.csv`,
-    )
-    rm("$datadir/lists.csv")
 end
 
 function get_media(source, medium::String)
