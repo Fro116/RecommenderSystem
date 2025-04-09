@@ -5,6 +5,7 @@ import os
 import time
 import warnings
 
+warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
 warnings.filterwarnings("ignore", ".*Sparse CSR tensor support is in beta state.*")
 
 import h5py
@@ -18,10 +19,13 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.optim as optim
+import torchtune.models.llama3
 from torch.distributed import destroy_process_group, init_process_group
+from torch.nn.attention.flex_attention import create_block_mask
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
+
 
 with open("transformer.model.py") as f:
     exec(f.read())
@@ -241,11 +245,6 @@ def to_device(data, rank, baselines):
         d["rating"] *= rmask
         for k in d:
             d[k] = d[k].reshape(-1, max_seq_len)
-    userid = d["userid"]
-    m, n = userid.shape
-    attn_mask = userid.reshape(m, 1, n) != userid.reshape(m, n, 1)
-    d["attn_mask"] = attn_mask
-    del d["userid"]
     return d
 
 
@@ -528,11 +527,10 @@ def train():
         for (x, y) in {0: "manga", 1: "anime"}.items()
     }
     config = {
-        "dropout": 0.1,
-        "activation": "gelu",
         "num_layers": 4,
+        "num_heads": 12,
         "embed_size": 768,
-        "intermediate_size": 768 * 4,
+        "dropout": 0.1,
         "max_sequence_length": max_seq_len,
         "vocab_names": [
             "0_matchedid",
@@ -550,7 +548,6 @@ def train():
             8,
             None,
         ],
-        "num_attention_heads": 12,
         "forward": "pretrain" if finetune is None else "finetune",
     }
     model = TransformerModel(config)

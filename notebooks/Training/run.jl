@@ -2,9 +2,11 @@ import JSON3
 include("../julia_utils/stdout.jl")
 
 function get_gpu_args()
-    image = "us-docker.pkg.dev/deeplearning-platform-release/gcr.io/pytorch-cu124.2-4.py310"
+    image = "pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel"
     envvars = readlines("../../secrets/r2.auth.txt")
     script = [
+        "apt update",
+        "apt install wget -y",
         "wget https://github.com/Fro116/RecommenderSystem/raw/main/notebooks/Training/entrypoint.sh -O startup.sh",
         "chmod +x startup.sh",
         "./startup.sh",

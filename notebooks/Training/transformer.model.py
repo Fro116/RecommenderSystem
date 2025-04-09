@@ -46,34 +46,25 @@ class CompositeEmbedding(nn.Module):
         return self.postprocessor(embedding)
 
 
-class Bert(nn.Module):
-    def __init__(
-        self,
-        num_layers,
-        embed_size,
-        num_attention_heads,
-        intermediate_size,
-        activation,
-        dropout,
-    ):
-        super(Bert, self).__init__()
-        self.num_heads = num_attention_heads
-        self.encoder = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=embed_size,
-                nhead=num_attention_heads,
-                dim_feedforward=intermediate_size,
-                dropout=dropout,
-                activation=activation,
-                norm_first=True,
-                batch_first=True,
-            ),
-            num_layers=num_layers,
+class Llama3(nn.Module):
+    def __init__(self, config):
+        super(Llama3, self).__init__()
+        llama3 = torchtune.models.llama3.llama3(
+            vocab_size=0,
+            num_layers=config["num_layers"],
+            num_heads=config["num_heads"],
+            num_kv_heads=config["num_heads"],
+            embed_dim=config["embed_size"],
+            max_seq_len=config["max_sequence_length"],
         )
+        self.layers = llama3.layers
+        self.norm = llama3.norm
 
     def forward(self, x, mask):
-        mask = torch.repeat_interleave(mask, self.num_heads, dim=0)
-        return self.encoder(x, mask=mask)
+        for layer in self.layers:
+            x = layer(x, mask=mask)
+        x = self.norm(x)
+        return x
 
 
 class TransformerModel(nn.Module):
@@ -96,14 +87,7 @@ class TransformerModel(nn.Module):
         self.embed = CompositeEmbedding(embeddings, postprocessor)
 
         # create transformers
-        self.transformers = Bert(
-            num_layers=config["num_layers"],
-            embed_size=config["embed_size"],
-            num_attention_heads=config["num_attention_heads"],
-            intermediate_size=config["intermediate_size"],
-            activation=config["activation"],
-            dropout=config["dropout"],
-        )
+        self.transformers = Llama3(config)
 
         # create classifiers
         metric_models = {
@@ -190,11 +174,19 @@ class TransformerModel(nn.Module):
             / w.sum()
         )
 
-    def pretrain_forward(self, d, evaluate):
+    def to_embedding(self, d):
         inputs = [d[k] for k in self.config["vocab_names"]]
-        mask = d["attn_mask"]
+        userid = d["userid"]
+        m, n = userid.shape
+        def maskfn(b, h, q_idx, kv_idx):
+            return userid[b][q_idx] == userid[b][kv_idx]
+        block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
         e = self.embed(inputs)
-        e = self.transformers(e, mask)
+        e = self.transformers(e, block_mask)
+        return e
+
+    def pretrain_forward(self, d, evaluate):
+        e = self.to_embedding(d)
         lossfns = self.evaluatefns if evaluate else self.lossfns
         losses = []
         for i in range(len(lossfns)):
@@ -221,10 +213,7 @@ class TransformerModel(nn.Module):
         return losses
 
     def finetune_forward(self, d, evaluate):
-        inputs = [d[k] for k in self.config["vocab_names"]]
-        mask = d["attn_mask"]
-        e = self.embed(inputs)
-        e = self.transformers(e, mask)
+        e = self.to_embedding(d)
         bp = torch.nonzero(d["mask_index"], as_tuple=True)
         embed = e[bp[0], bp[1], :]
         lossfns = self.evaluatefns if evaluate else self.lossfns
@@ -246,9 +235,6 @@ class TransformerModel(nn.Module):
         return losses
 
     def embed_forward(self, d):
-        inputs = [d[k] for k in self.config["vocab_names"]]
-        mask = d["attn_mask"]
-        e = self.embed(inputs)
-        e = self.transformers(e, mask)
+        e = self.to_embedding(d)
         bp = torch.nonzero(d["mask_index"], as_tuple=True)
         return e[bp[0], bp[1], :]

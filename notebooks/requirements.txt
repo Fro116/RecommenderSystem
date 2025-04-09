@@ -6,6 +6,9 @@ msgpack==1.1.0
 numpy==2.1.2
 pandas==2.2.3
 scipy==1.14.1
-torch==2.5.1
+torch==2.6.0
+torchao==0.9.0
+torchvision==0.21.0
+torchtune==0.6.0
 tqdm==4.66.6
 uvicorn==0.32.1

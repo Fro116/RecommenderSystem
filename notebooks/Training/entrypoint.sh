@@ -1,22 +1,7 @@
 #!/bin/bash
 set -euxo pipefail
-handle_error() {
-  sleep 600 # give time to debug
-}
-trap handle_error ERR
-cleanup() {
-    if [ -n "${RUNPOD_POD_ID+x}" ]; then
-	    runpodctl remove pod $RUNPOD_POD_ID
-    fi
-}
-trap cleanup EXIT
-if [ -n "${RUNPOD_POD_ID+x}" ]; then
-    (sleep 86400 && cleanup) & # max runtime of 24 hours
-    python -c 'import torch; torch.rand(1, device="cuda:0")'
-	cd ~
-else
-    cd /data
-fi
+apt update && apt install git curl unzip -y
+cd /data
 git clone https://github.com/Fro116/RecommenderSystem.git
 curl https://rclone.org/install.sh | bash
 mkdir -p ~/.config/rclone/
@@ -30,7 +15,7 @@ endpoint = https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com
 " > ~/.config/rclone/rclone.conf
 rclone --retries=10 -Pv copy r2:rsys/secrets secrets
 mv secrets RecommenderSystem/
-pip install h5py hdf5plugin
+pip install scipy h5py hdf5plugin msgpack torchao torchtune
 cd RecommenderSystem/notebooks/Training/
 python transformer.py --datadir ../../data/training --download
 cmd="torchrun --standalone --nproc_per_node=8 transformer.py --datadir ../../data/training"
