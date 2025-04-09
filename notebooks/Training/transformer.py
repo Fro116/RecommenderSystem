@@ -201,7 +201,7 @@ def to_device(data, rank, baselines):
             d[k] = data[k].to(rank).to_dense()
     if finetune is None:
         mask = (torch.rand(data["userid"].shape, device=rank) < mask_rate) & (
-            d["position"] != cls_val
+            d["updated_at"] != cls_val
         )
         for m in ALL_MEDIUMS:
             for metric in ALL_METRICS:
@@ -321,6 +321,8 @@ def train_epoch(
                 training_losses[i] += float(tloss[i]) * w
                 training_weights[i] += w
             loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
+            if float(loss) == 0:
+                continue
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -535,7 +537,6 @@ def train():
         "vocab_names": [
             "0_matchedid",
             "1_matchedid",
-            "position",
             "rating",
             "status",
             "updated_at",
@@ -543,7 +544,6 @@ def train():
         "vocab_sizes": [
             num_items[0],
             num_items[1],
-            max_seq_len - reserved_vals,
             None,
             8,
             None,

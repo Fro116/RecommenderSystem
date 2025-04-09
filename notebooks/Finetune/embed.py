@@ -191,7 +191,6 @@ def predict_transformer(users):
         "1_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
         "updated_at": np.zeros((len(users), max_len), dtype=np.float32),
         "source": np.zeros((len(users), max_len), dtype=np.int32),
-        "position": np.zeros((len(users), max_len), dtype=np.int32),
     }
     input_fields = list(d.keys())
     d["userid"] = np.zeros((len(users), max_len), dtype=np.int32)
@@ -217,7 +216,6 @@ def predict_transformer(users):
             n = 1 - x["medium"]
             d["status"][u, i] = x["status"]
             d["rating"][u, i] = x["rating.resid"]
-            d["position"][u, i] = (i + skipped) % (max_seq_len - reserved_vals)
             d["progress"][u, i] = x["progress"]
             d[f"{m}_matchedid"][u, i] = x["matchedid"]
             d[f"{m}_distinctid"][u, i] = x["distinctid"]
@@ -234,7 +232,6 @@ def predict_transformer(users):
             d[k][u, i] = mask_val
         d["userid"][u, i] = userid
         d["updated_at"][u, i] = 1
-        d["position"][u, i] = i % (max_seq_len - reserved_vals)
         d["mask_index"][u, i] = 1
         d["rating"][u, i] = 0
     d = {k: torch.tensor(v).to(device) for k, v in d.items()}
@@ -320,7 +317,6 @@ def load_transformer_model(medium):
         "vocab_names": [
             "0_matchedid",
             "1_matchedid",
-            "position",
             "rating",
             "status",
             "updated_at",
@@ -328,7 +324,6 @@ def load_transformer_model(medium):
         "vocab_sizes": [
             num_items[0],
             num_items[1],
-            max_seq_len - reserved_vals,
             None,
             8,
             None,

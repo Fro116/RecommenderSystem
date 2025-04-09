@@ -82,7 +82,6 @@ function get_data(data, userid)
         "1_distinctid" => zeros(Int32, max_seq_len),
         "updated_at" => zeros(Float32, max_seq_len),
         "source" => zeros(Int32, max_seq_len),
-        "position" => zeros(Int32, max_seq_len),
     )
     input_fields = collect(keys(d))
     d["userid"] = zeros(Int32, max_seq_len)
@@ -92,11 +91,9 @@ function get_data(data, userid)
     end
     d["userid"][1] = userid
     d["rating"][1] = 0
-    skipped = 0
     items = data["items"]
     while length(items) > max_seq_len - 2
         items = items[2:end]
-        skipped += 1
     end
     i = 1
     for x in items
@@ -111,7 +108,6 @@ function get_data(data, userid)
         else
             d["rating"][i] = 0
         end
-        d["position"][i] = (i + skipped) % (max_seq_len - reserved_vals)
         d["progress"][i] = x["progress"]
         d["$(m)_matchedid"][i] = x["matchedid"]
         d["$(m)_distinctid"][i] = x["distinctid"]
