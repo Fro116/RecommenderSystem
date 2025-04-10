@@ -335,22 +335,14 @@ def train_epoch(
 
 
 def create_optimizer(model):
-    should_decay = {False: [], True: []}
-    for name, param in model.named_parameters():
-        # TODO can we simplify this?
-        if (
-            "norm" in name
-            or "bias" in name
-            or (name.startswith("module.embed") and "weightdecay" not in name)
-        ):
-            decay = False
-        else:
-            decay = True
-        should_decay[decay].append(param)
+    param_dict = {pn: p for pn, p in model.named_parameters()}
+    param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+    decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+    nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
     return optim.AdamW(
         [
-            {"params": should_decay[True], "weight_decay": 0.1},
-            {"params": should_decay[False], "weight_decay": 0.0},
+            {"params": decay_params, "weight_decay": 0.1},
+            {"params": nodecay_params, "weight_decay": 0.0},
         ],
         lr=2e-4 if finetune is None else 1e-7,
         betas=(0.9, 0.95),

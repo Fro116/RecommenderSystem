@@ -2,7 +2,7 @@ cls_val = -1
 mask_val = -2
 reserved_vals = 2
 max_seq_len = 1024
-ALL_MEDIUMS = [0, 1] # TODO rename
+ALL_MEDIUMS = [0, 1]
 ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
 
 
@@ -12,7 +12,7 @@ class DiscreteEmbed(nn.Module):
         self.reserved_vals = 2
         self.embedding = nn.Sequential(
             nn.Embedding(vocab_size + self.reserved_vals, embed_size),
-            nn.LayerNorm(embed_size),
+            nn.RMSNorm(embed_size),
         )
 
     def forward(self, x):
@@ -22,28 +22,22 @@ class DiscreteEmbed(nn.Module):
 class ContinuousEmbed(nn.Module):
     def __init__(self, embed_size, dropout):
         super(ContinuousEmbed, self).__init__()
-        hidden_size = int(embed_size / 4)
-        self.embedding_with_weightdecay = nn.Sequential(
-            nn.Linear(1, hidden_size),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, embed_size),
-            nn.LayerNorm(embed_size),
+        self.embedding = nn.Sequential(
+            nn.Linear(1, embed_size),
+            nn.RMSNorm(embed_size),
         )
 
     def forward(self, x):
-        return self.embedding_with_weightdecay(x.reshape(*x.shape, 1))
+        return self.embedding(x.reshape(*x.shape, 1))
 
 
 class CompositeEmbedding(nn.Module):
-    def __init__(self, embeddings, postprocessor):
+    def __init__(self, embeddings):
         super(CompositeEmbedding, self).__init__()
         self.embeddings = nn.ModuleList(embeddings)
-        self.postprocessor = postprocessor
 
     def forward(self, inputs):
-        embedding = sum(embed(x) for (embed, x) in zip(self.embeddings, inputs))
-        return self.postprocessor(embedding)
+        return sum(embed(x) for (embed, x) in zip(self.embeddings, inputs))
 
 
 class Llama3(nn.Module):
@@ -81,10 +75,7 @@ class TransformerModel(nn.Module):
                 embeddings.append(
                     ContinuousEmbed(config["embed_size"], config["dropout"])
                 )
-        postprocessor = nn.Sequential(
-            nn.LayerNorm(config["embed_size"]), nn.Dropout(config["dropout"])
-        )
-        self.embed = CompositeEmbedding(embeddings, postprocessor)
+        self.embed = CompositeEmbedding(embeddings)
 
         # create transformers
         self.transformers = Llama3(config)

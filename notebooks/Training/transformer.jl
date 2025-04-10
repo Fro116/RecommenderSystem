@@ -149,6 +149,7 @@ function save_data(datasplit)
     while length(users) % num_shards != 0
         push!(users, rand(users))
     end
+    Random.shuffle!(users)
     for shard = 1:num_shards
         dest = mkpath("$datadir/transformer/$datasplit/$shard")
         files =
@@ -163,7 +164,6 @@ function save_data(datasplit)
                 end
                 d[i] = get_data(data, i)
             end
-            Random.shuffle!(d)
             h5 = concat(d)
             HDF5.h5open("$dest/$p.h5", "w") do file
                 for (k, v) in h5
