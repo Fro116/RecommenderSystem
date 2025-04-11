@@ -17,9 +17,13 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import torchtune.models.llama3
+from torch.nn.attention.flex_attention import create_block_mask, and_masks
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
+import warnings
 
+warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
 
 class ErrorCode(Enum):
     INTERNAL_SERVER_ERROR = auto()
@@ -98,19 +102,22 @@ class RequestBuffer:
 
 def get_user_bias(data):
     biases = {}
-    for m in mediums:
-        _, λ_u, _, λ_wu, λ_wa = baselines[m]["params"]
-        numer = 0
-        denom = np.exp(λ_u)
-        ucount = len([x for x in data["items"] if x["rating"] > 0 and x["medium"] == m])
-        for x in data["items"]:
-            if x["medium"] != m or x["rating"] == 0:
-                continue
-            acount = baselines[m]["item_counts"][x["matchedid"]]
-            w = ucount**λ_wu * acount**λ_wa
-            numer += (x["rating"] - baselines[m]["a"][x["matchedid"]]) * w
-            denom += w
-        biases[m] = float(numer / denom)
+    for metric in ["rating"]:
+        biases[metric] = {}
+        for m in mediums:
+            base = baselines[metric][m]
+            _, λ_u, _, λ_wu, λ_wa = base["params"]
+            numer = 0
+            denom = np.exp(λ_u)
+            ucount = len([x for x in data["items"] if x[metric] > 0 and x["medium"] == m])
+            for x in data["items"]:
+                if x["medium"] != m or x[metric] == 0:
+                    continue
+                acount = base["item_counts"][x["matchedid"]]
+                w = ucount**λ_wu * acount**λ_wa
+                numer += (x[metric] - base["a"][x["matchedid"]]) * w
+                denom += w
+            biases[metric][m] = float(numer / denom)
     return biases
 
 
@@ -122,18 +129,19 @@ def predict_baseline(users):
         for m in mediums:
             for metric in metrics:
                 if metric == "rating":
-                    d[f"baseline.{m}.{metric}"] = [biases[m]]
+                    d[f"baseline.{m}.{metric}"] = [biases[metric][m]]
                 else:
                     d[f"baseline.{m}.{metric}"] = [0]
         ret.append(d)
         for x in users[u]["items"]:
-            if x["rating"] > 0:
-                m = x["medium"]
-                bl = baselines[m]
-                rating_pred = (biases[m] + bl["a"][x["matchedid"]]) * bl["weight"]
-                x["rating.resid"] = x["rating"] - rating_pred
-            else:
-                x["rating.resid"] = 0
+            for metric in ["rating"]:
+                if x[metric] > 0:
+                    m = x["medium"]
+                    bl = baselines[metric][m]
+                    pred = (biases[metric][m] + bl["a"][x["matchedid"]]) * bl["weight"]
+                    x[f"{metric}.resid"] = x[metric] - pred
+                else:
+                    x[f"{metric}.resid"] = 0
     return ret
 
 
@@ -146,7 +154,6 @@ def predict_bagofwords(users):
         for x in u["items"]:
             m = x["medium"]
             idx = x["matchedid"]
-            X[f"{m}_rating"][i, idx] = x["rating.resid"]
             if x["rating"] > 0:
                 X[f"{m}_rating"][i, idx] = x["rating.resid"]
             else:
@@ -168,12 +175,7 @@ def predict_bagofwords(users):
         for metric in bagofwords_metrics:
             k = f"bagofwords.{medium}.{metric}"
             with torch.no_grad():
-                context = (
-                    contextlib.nullcontext()
-                    if device == "cpu"
-                    else torch.amp.autocast(device, dtype=torch.bfloat16)
-                )
-                with context:
+                with torch.amp.autocast(device, dtype=torch.bfloat16):
                     ret[k] = models[k](X, None, None, mode="embed").to("cpu")
     ret = [{k: v[i, :].tolist() for k, v in ret.items()} for i in range(len(users))]
     return ret
@@ -190,6 +192,7 @@ def predict_transformer(users):
         "1_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
         "1_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
         "updated_at": np.zeros((len(users), max_len), dtype=np.float32),
+        "delta_time": np.zeros((len(users), max_len), dtype=np.float32),
         "source": np.zeros((len(users), max_len), dtype=np.int32),
     }
     input_fields = list(d.keys())
@@ -209,6 +212,7 @@ def predict_transformer(users):
         while len(items) > max_len - 2:
             items = items[1:]
             skipped += 1
+        last_ts = min_ts
         i = 0
         for x in items:
             i += 1
@@ -224,6 +228,9 @@ def predict_transformer(users):
             d["updated_at"][u, i] = np.clip(
                 (x["updated_at"] - min_ts) / (max_ts - min_ts), 0, 1
             )
+            if x["updated_at"] >= min_ts and x["updated_at"] <= max_ts: # TODO think about max_ts
+                d["delta_time"][u, i-1] = (x["updated_at"] - last_ts) / (max_ts - min_ts)
+                last_ts = x["updated_at"]
             d["source"][u, i] = users[u]["user"]["source"]
             d["userid"][u, i] = userid
             d["mask_index"][u, i] = 0
@@ -231,24 +238,17 @@ def predict_transformer(users):
         for k in input_fields:
             d[k][u, i] = mask_val
         d["userid"][u, i] = userid
-        d["updated_at"][u, i] = 1
-        d["mask_index"][u, i] = 1
+        d["delta_time"][u, i-1] = (max_ts - last_ts) / (max_ts - min_ts)
         d["rating"][u, i] = 0
+        if causal:
+            d["mask_index"][u, i-1] = 1
+        else:
+            d["mask_index"][u, i] = 1
     d = {k: torch.tensor(v).to(device) for k, v in d.items()}
-    userid = d["userid"]
-    m, n = userid.shape
-    attn_mask = userid.reshape(m, 1, n) != userid.reshape(m, n, 1)
-    d["attn_mask"] = attn_mask
-    del d["userid"]
     ret = {}
     for medium in mediums:
         with torch.no_grad():
-            context = (
-                contextlib.nullcontext()
-                if device == "cpu"
-                else torch.amp.autocast(device, dtype=torch.bfloat16)
-            )
-            with context:
+            with torch.amp.autocast(device, dtype=torch.bfloat16):
                 e = models[f"transformer.{medium}"](d).to("cpu")
                 ret[f"transformer.{medium}"] = e
     ret = [{k: v[i, :].tolist() for k, v in ret.items()} for i in range(len(users))]
@@ -260,7 +260,6 @@ def predict(users):
         return [x | y for (x, y) in zip(X, Y)]
 
     ret = [{"version": version} for _ in users]
-    predict_baseline(users)
     ret = merge(ret, predict_baseline(users))
     ret = merge(ret, predict_bagofwords(users))
     ret = merge(ret, predict_transformer(users))
@@ -269,19 +268,21 @@ def predict(users):
 
 def get_baselines(rank):
     baselines = {}
-    for m in mediums:
-        with open(f"{datadir}/baseline.{m}.msgpack", "rb") as f:
-            baseline = msgpack.unpackb(f.read(), strict_map_key=False)
-            d = {}
-            d["params"] = baseline["params"]["λ"]
-            d["weight"] = baseline["weight"][0]
-            d["a"] = torch.tensor(baseline["params"]["a"]).to(rank)
-            item_counts = baseline["params"]["item_counts"]
-            item_counts = [
-                item_counts.get(x, 1) for x in range(len(baseline["params"]["a"]))
-            ]
-            d["item_counts"] = torch.tensor(item_counts).to(rank)
-            baselines[m] = d
+    for metric in ["rating"]:
+        baselines[metric] = {}
+        for m in mediums:
+            with open(f"{datadir}/baseline.{metric}.{m}.msgpack", "rb") as f:
+                baseline = msgpack.unpackb(f.read(), strict_map_key=False)
+                d = {}
+                d["params"] = baseline["params"]["λ"]
+                d["weight"] = baseline["weight"][0]
+                d["a"] = torch.tensor(baseline["params"]["a"]).to(rank)
+                item_counts = baseline["params"]["item_counts"]
+                item_counts = [
+                    item_counts.get(x, 1) for x in range(len(baseline["params"]["a"]))
+                ]
+                d["item_counts"] = torch.tensor(item_counts).to(rank)
+                baselines[metric][m] = d
     return baselines
 
 
@@ -308,11 +309,11 @@ def load_transformer_model(medium):
         for (x, y) in {0: "manga", 1: "anime"}.items()
     }
     config = {
-        "dropout": 0.1,
-        "activation": "gelu",
         "num_layers": 4,
+        "num_heads": 12,
+        "num_kv_heads": 12,
         "embed_size": 768,
-        "intermediate_size": 768 * 4,
+        "intermediate_dim": None,
         "max_sequence_length": max_seq_len,
         "vocab_names": [
             "0_matchedid",
@@ -320,6 +321,7 @@ def load_transformer_model(medium):
             "rating",
             "status",
             "updated_at",
+            "delta_time",
         ],
         "vocab_sizes": [
             num_items[0],
@@ -327,8 +329,8 @@ def load_transformer_model(medium):
             None,
             8,
             None,
+            None,
         ],
-        "num_attention_heads": 12,
         "forward": "embed",
     }
     m = TransformerModel(config)
@@ -343,7 +345,7 @@ logging.warning("STARTUP BEGIN")
 starttime = time.time()
 device = "cuda" if torch.cuda.is_available() else "cpu"
 mediums = [0, 1]
-metrics = ["rating", "watch", "plantowatch", "drop"]
+metrics = ["watch", "rating", "status"]
 bagofwords_metrics = ["rating"]
 datadir = "../../data/finetune"
 models = {}
@@ -355,7 +357,7 @@ num_items = {
     m: pd.read_csv(f"{datadir}/{n}.csv").matchedid.max() + 1
     for m, n in [(0, "manga"), (1, "anime")]
 }
-planned_status = 3
+planned_status = 4
 baselines = get_baselines(device)
 request_buffer = RequestBuffer(
     batch_size=256, timeout_seconds=0.01, max_queue_size=1024
@@ -372,6 +374,7 @@ max_ts = int(
     .replace(tzinfo=datetime.timezone.utc)
     .timestamp()
 )
+causal = False
 predict([{"user": {"source": "mal"}, "items": []}])
 logging.warning(f"STARTUP END AFTER {time.time() - starttime}s")
 app = FastAPI()

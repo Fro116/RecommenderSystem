@@ -206,7 +206,7 @@ def train_epoch(rank, model, baselines, dataloader, optimizer, scaler):
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(f"cuda:{rank}", dtype=torch.bfloat16):
             loss, w = model(*to_device(data, baselines, rank), mode="train")
-        losses += float(loss)
+        losses += float(loss.detach())
         weights += float(w)
         tloss = loss / w if w != 0 else loss
         scaler.scale(tloss).backward()
@@ -386,7 +386,7 @@ def download():
 def get_baselines(rank):
     baselines = {}
     for m in [0, 1]:
-        with open(f"{datadir}/baseline.{m}.msgpack", "rb") as f:
+        with open(f"{datadir}/baseline.{metric}.{m}.msgpack", "rb") as f:
             baseline = msgpack.unpackb(f.read(), strict_map_key=False)
             d = {}
             d["params"] = baseline["params"]["λ"]

@@ -217,7 +217,7 @@ function import_data()
     end
     gen_splits()
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}"
-    files = vcat(["$m.csv" for m in MEDIUMS], ["images.csv"])
+    files = vcat(["$m.csv" for m in MEDIUMS], ["latest", "images.csv"])
     for f in files
         cmd = replace(
             save_template,

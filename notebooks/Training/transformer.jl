@@ -19,7 +19,9 @@ const max_ts = Dates.datetime2unix(
     Dates.DateTime(read("$datadir/latest", String), Dates.dateformat"yyyymmdd"),
 )
 const max_seq_len = 1024
-const batch_size = 256 * max_seq_len
+const batch_size = 64 * max_seq_len
+
+include("../julia_utils/stdout.jl")
 
 @memoize function num_items(medium::Int)
     m = medium_map[medium]
@@ -27,9 +29,7 @@ const batch_size = 256 * max_seq_len
 end
 
 function get_data(data, userid)
-    reserved_vals = 2
     cls_val = -1
-    mask_val = -2
     N = length(data["items"]) + 1
     d = Dict(
         "status" => Vector{Int32}(undef, N),
@@ -39,8 +39,9 @@ function get_data(data, userid)
         "0_distinctid" => Vector{Int32}(undef, N),
         "1_matchedid" => Vector{Int32}(undef, N),
         "1_distinctid" => Vector{Int32}(undef, N),
-        "updated_at" => Vector{Float32}(undef, N),
         "source" => Vector{Int32}(undef, N),
+        "time" => zeros(Float64, N),
+        "delta_time" => zeros(Float64, N),
     )
     for k in keys(d)
         d[k][1] = cls_val
@@ -52,6 +53,7 @@ function get_data(data, userid)
             d["$m.$metric.weight"] = zeros(Float32, N)
         end
     end
+    last_ts = min_ts
     i = 1
     for x in data["items"]
         i += 1
@@ -64,9 +66,13 @@ function get_data(data, userid)
         d["$(m)_distinctid"][i] = x["distinctid"]
         d["$(n)_matchedid"][i] = cls_val
         d["$(n)_distinctid"][i] = cls_val
-        d["updated_at"][i] = clamp((x["updated_at"] - min_ts) / (max_ts - min_ts), 0, 1)
         d["source"][i] = data["user"]["source"]
-        if x["status"] >= planned_status && (x["rating"] == 0 || x["rating"] >= 5)
+        if x["updated_at"] >= min_ts && x["updated_at"] <= max_ts
+            d["time"][i] = x["updated_at"]
+            d["delta_time"][i-1] = x["updated_at"] - last_ts
+            last_ts = x["updated_at"]
+        end
+        if (x["status"] == 0 || x["status"] >= planned_status) && (x["rating"] == 0 || x["rating"] >= 5)
             d["$m.watch.label"][i] = 1
             d["$m.watch.weight"][i] = 1
         end
@@ -121,6 +127,7 @@ function pad_splits(datasplit, num_shards)
         if num_padding == 0
             continue
         end
+        logtag("TRANSFORMER", "padding split $x with $num_padding tokens")
         infn = "$datadir/transformer/$datasplit/$x/1.h5"
         outfn = "$datadir/transformer/$datasplit/$x/pad.h5"
         HDF5.h5open(outfn, "w") do outfile
@@ -182,7 +189,13 @@ function upload()
     run(`sh -c $cmd`)
 end
 
+function set_random_seed()
+    tag = read("$datadir/latest", String)
+    Random.seed!(tag)
+end
+
 rm("$datadir/transformer", recursive = true, force = true)
+set_random_seed()
 save_data("test")
 save_data("training")
 upload()

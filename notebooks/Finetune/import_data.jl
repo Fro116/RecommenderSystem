@@ -40,7 +40,7 @@ function download_data()
     files = vcat(
         ["$m.csv" for m in ["manga", "anime"]],
         ["media_relations.$m.jld2" for m in [0, 1]],
-        ["baseline.$m.msgpack" for m in [0, 1]],
+        ["baseline.$metric.$m.msgpack" for metric in ["rating"] for m in [0, 1]],
         ["bagofwords.$m.$metric.$stem" for m in [0, 1] for metric in ["rating"] for stem in ["csv", "pt"]],
         ["transformer.$stem" for stem in ["csv", "pt"]],
         ["images.csv"],
@@ -73,7 +73,7 @@ function gen_splits()
     max_ts = -Inf
     @showprogress for f in Glob.glob("$datadir/lists_*.csv")
         df = read_csv(f)
-        max_df_ts = maximum(parse.(Float64, filter(x -> !ismissing(x), df.db_refreshed_at)))
+        max_df_ts = maximum(parse.(Float64, df.db_refreshed_at))
         max_ts = max(max_ts, max_df_ts)
     end
     logtag("IMPORT_DATA", "using max_ts of $max_ts")
@@ -86,7 +86,8 @@ function gen_splits()
         mkpath.([train_dir, test_dir, unused_dir])
         df = Random.shuffle(read_csv(f))
         Threads.@threads for i = 1:DataFrames.nrow(df)
-            user = import_user(df.source[i], decompress(df.data[i]), df.db_refreshed_at[i])
+            ts = parse(Float64, df.db_refreshed_at[i])
+            user = import_user(df.source[i], decompress(df.data[i]), ts)
             if length(user["items"]) < min_items
                 recent_days = 0
                 outdir = unused_dir

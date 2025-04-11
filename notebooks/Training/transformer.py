@@ -1,12 +1,11 @@
 import argparse
+import datetime
 import glob
+import json
 import logging
 import os
 import time
 import warnings
-
-warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
-warnings.filterwarnings("ignore", ".*Sparse CSR tensor support is in beta state.*")
 
 import h5py
 import hdf5plugin
@@ -21,11 +20,14 @@ import torch.nn as nn
 import torch.optim as optim
 import torchtune.models.llama3
 from torch.distributed import destroy_process_group, init_process_group
-from torch.nn.attention.flex_attention import create_block_mask
+from torch.nn.attention.flex_attention import and_masks, create_block_mask
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, IterableDataset
+from torchtune.modules.peft import get_adapter_params, set_trainable_params
 from tqdm import tqdm
 
+warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
+warnings.filterwarnings("ignore", ".*Sparse CSR tensor support is in beta state.*")
 
 with open("transformer.model.py") as f:
     exec(f.read())
@@ -39,9 +41,11 @@ class PretrainDataset(IterableDataset):
         world_size,
         batch_size,
         mask_rate,
+        causal,
     ):
         self.datadir = datadir
         self.mask_rate = mask_rate
+        self.causal = causal
         self.batch_size = batch_size * max_seq_len
         shards = sorted(glob.glob(f"{self.datadir}/*/"))
         assert len(shards) % world_size == 0
@@ -99,6 +103,7 @@ class PretrainDataset(IterableDataset):
             for idx in idxs:
                 ret = {
                     "mask_rate": self.mask_rate,
+                    "causal": self.causal,
                 }
                 for k, v in d.items():
                     ret[k] = v[idx]
@@ -113,6 +118,7 @@ class FinetuneDataset(IterableDataset):
         world_size,
         batch_size,
         shuffle,
+        causal,
     ):
         self.datadir = datadir
         self.batch_size = batch_size
@@ -129,6 +135,7 @@ class FinetuneDataset(IterableDataset):
             for metric in ALL_METRICS
         ]
         self.shuffle = shuffle
+        self.causal = causal
 
     def load_sparse_matrix(self, f, name):
         i = f[f"{name}_i"][:] - 1
@@ -169,14 +176,16 @@ class FinetuneDataset(IterableDataset):
                 for i in range(0, len(idxs), self.batch_size)
             ]
             for idx in idxs:
-                yield {k: v[idx, :] for k, v in d.items()}
+                ret = {k: v[idx, :] for k, v in d.items()}
+                ret["causal"] = self.causal
+                yield ret
 
 
 def collate(data):
     assert len(data) == 1
     ret = {}
     for k, v in data[0].items():
-        if k in ["mask_rate"]:
+        if k in ["mask_rate", "causal"]:
             ret[k] = v
         elif scipy.sparse.issparse(v):
             ret[k] = torch.sparse_csr_tensor(v.indptr, v.indices, v.data, v.shape)
@@ -192,59 +201,79 @@ def scatter_add(values, group_ids):
     return s[inverse_indices]
 
 
+def shift_left(x):
+    y = torch.zeros_like(x)
+    y[..., :-1] = x[..., 1:]
+    return y
+
+
 def to_device(data, rank, baselines):
     d = {}
     for k in data:
         if k == "mask_rate":
             mask_rate = data[k]
+        elif k == "causal":
+            causal = data[k]
         else:
             d[k] = data[k].to(rank).to_dense()
-    if finetune is None:
+    if finetune is not None:
+        if causal:
+            d["mask_index"] = shift_left(d["mask_index"])
+        return d
+    for m in ALL_MEDIUMS:
+        for metric in ALL_METRICS:
+            d[f"{m}.{metric}.position"] = d[f"{m}_matchedid"].clip(0).to(torch.int64)
+    if causal:
+        userid_mask = d["userid"] == shift_left(d["userid"])
+        for m in ALL_MEDIUMS:
+            for metric in ALL_METRICS:
+                for k in ["position", "label", "weight"]:
+                    d[f"{m}.{metric}.{k}"] = (
+                        shift_left(d[f"{m}.{metric}.{k}"]) * userid_mask
+                    )
+    else:
+        # mask
+        # TODO try masking cls token
+        # TODO try masking strategies
         mask = (torch.rand(data["userid"].shape, device=rank) < mask_rate) & (
-            d["updated_at"] != cls_val
+            d["time"] != cls_val
         )
         for m in ALL_MEDIUMS:
             for metric in ALL_METRICS:
-                d[f"{m}.{metric}.position"] = torch.clone(d[f"{m}_matchedid"]).to(
-                    torch.int64
-                )
                 d[f"{m}.{metric}.position"][~mask] = 0
                 d[f"{m}.{metric}.label"][~mask] = 0
                 d[f"{m}.{metric}.weight"][~mask] = 0
-        fields_to_mask = [
-            "status",
-            "rating",
-            "progress",
-            "0_matchedid",
-            "0_distinctid",
-            "1_matchedid",
-            "1_distinctid",
-            "source",
-        ]
-        for k in fields_to_mask:
-            d[k][mask] = mask_val
-        # residualize ratings
-        rmask = d["rating"] > 0
-        for m in ALL_MEDIUMS:
-            _, λ_u, _, λ_wu, λ_wa = baselines[m]["params"]
-            idx = d[f"{m}_matchedid"].clip(0).to(torch.int64)
-            a = torch.gather(baselines[m]["a"], 0, idx)
-            acount = torch.gather(baselines[m]["item_counts"], 0, idx)
-            rating_mask = (d[f"{m}_matchedid"] >= 0) * rmask
-            ucount = scatter_add(rating_mask.to(torch.float32), d["userid"])
-            w = (ucount.clip(1) ** λ_wu * acount**λ_wa) * rating_mask
-            denom = scatter_add(w, d["userid"]) + np.exp(λ_u)
-            numer = scatter_add((d["rating"] - a) * w, d["userid"])
-            bias = numer / denom
-            label_idx = d[f"{m}.rating.position"].clip(0).to(torch.int64)
-            label_rating_pred = bias + torch.gather(baselines[m]["a"], 0, label_idx)
-            label_rating_mask = d[f"{m}.rating.weight"] > 0
-            beta = baselines[m]["weight"]
-            d[f"{m}.rating.label"] -= beta * label_rating_pred * label_rating_mask
-            d["rating"] -= beta * (bias + a) * rating_mask
-        d["rating"] *= rmask
         for k in d:
-            d[k] = d[k].reshape(-1, max_seq_len)
+            if k.endswith(".position") or k.endswith(".label") or k.endswith(".weight"):
+                continue
+            if k in ["userid"]:
+                continue
+            d[k][mask] = mask_val
+        # residualize
+        for metric in ["rating"]:
+            rmask = d[metric] > 0
+            for m in ALL_MEDIUMS:
+                base = baselines[metric][m]
+                _, λ_u, _, λ_wu, λ_wa = base["params"]
+                idx = d[f"{m}_matchedid"].clip(0).to(torch.int64)
+                a = torch.gather(base["a"], 0, idx)
+                acount = torch.gather(base["item_counts"], 0, idx)
+                rating_mask = (d[f"{m}_matchedid"] >= 0) * rmask
+                ucount = scatter_add(rating_mask.to(torch.float32), d["userid"])
+                w = (ucount.clip(1) ** λ_wu * acount**λ_wa) * rating_mask
+                denom = scatter_add(w, d["userid"]) + np.exp(λ_u)
+                numer = scatter_add((d[metric] - a) * w, d["userid"])
+                bias = numer / denom
+                beta = base["weight"]
+                if metric in ALL_METRICS:
+                    label_idx = d[f"{m}.{metric}.position"].clip(0).to(torch.int64)
+                    label_rating_pred = bias + torch.gather(base["a"], 0, label_idx)
+                    label_rating_mask = d[f"{m}.{metric}.weight"] > 0
+                    d[f"{m}.{metric}.label"] -= beta * label_rating_pred * label_rating_mask
+                d[metric] = d[metric] - beta * (bias + a) * rating_mask
+            d[metric] *= rmask
+    for k in d:
+        d[k] = d[k].reshape(-1, max_seq_len)
     return d
 
 
@@ -321,8 +350,6 @@ def train_epoch(
                 training_losses[i] += float(tloss[i].detach()) * w
                 training_weights[i] += w
             loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
-            if float(loss.detach()) == 0:
-                continue
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -350,22 +377,8 @@ def create_optimizer(model):
 
 
 def create_learning_rate_schedule(optimizer, tokens_per_batch, epochs):
-    if finetune is not None:
-        return optim.lr_scheduler.LambdaLR(optimizer, lambda x: 1)
-    with open(f"{datadir}/transformer/training/num_tokens.txt") as f:
-        tokens_per_epoch = int(f.read())
-    steps_per_epoch = int(tokens_per_epoch / tokens_per_batch)
-    total_steps = epochs * steps_per_epoch
-    warmup_steps = int(round(total_steps * 0.01))
-    warmup_lambda = lambda x: (
-        x / warmup_steps
-        if x <= warmup_steps
-        else 0.1
-        + 0.9
-        * 0.5
-        * (1 + np.cos(np.pi * (x - warmup_steps) / (total_steps - warmup_steps)))
-    )
-    return optim.lr_scheduler.LambdaLR(optimizer, warmup_lambda)
+    # TODO tune schedule
+    return optim.lr_scheduler.LambdaLR(optimizer, lambda x: 1)
 
 
 class EarlyStopper:
@@ -400,35 +413,38 @@ def wsum(values, weights):
 def make_task_weights():
     # TODO can we set this programatically?
     if finetune_medium is None:
-        medium_weight = {0: 1, 1: 2}
+        medium_weight = {0: 0, 1: 1}
     else:
-        medium_weight = {finetune_medium: 1, 1-finetune_medium: 0}
+        medium_weight = {finetune_medium: 1, 1 - finetune_medium: 0}
     metric_weight = {
-        "watch": 4,
+        "watch": 1,
         "rating": 1,
-        "status": 1 / 4,
+        "status": 0,
     }
     weights = [
         medium_weight[x] * metric_weight[y] for x in ALL_MEDIUMS for y in ALL_METRICS
     ]
     weights = [x / sum(weights) for x in weights]
     # rescale losses so each task is equally weighted
-    scale = [
-        5.180758325289576,
-        1.036553297051344,
-        1,
-        3.515180369672557,
-        1.1299115263959014,
-        1,
-    ]
+    scale = {
+        0: {
+            "watch": 5.402838564127421,
+            "rating": 1.2371406205358377,
+        },
+        1: {
+            "watch": 3.2170518025452397,
+            "rating": 1.0569478898429487,
+        },
+    }
+    scale = [scale[x][y] for x in ALL_MEDIUMS for y in ALL_METRICS]
     return [(w / s) for (w, s) in zip(weights, scale)]
 
 
 def get_logger(rank, name):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
+    logger.propagate = False
     if rank != 0:
-        logger.propagate = False
         return logger
     formatter = logging.Formatter(
         "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
@@ -439,7 +455,7 @@ def get_logger(rank, name):
     return logger
 
 
-def checkpoint_model(rank, model, save, loss, epoch, task_weights):
+def checkpoint_model(rank, model, config, save, loss, epoch, task_weights):
     if rank != 0:
         return
     stem = f"{datadir}/transformer"
@@ -454,17 +470,18 @@ def checkpoint_model(rank, model, save, loss, epoch, task_weights):
     with open(f"{stem}.csv", "a") as f:
         vals = [epoch, wsum(loss, task_weights)] + loss
         f.write(",".join([str(x) for x in vals]) + "\n")
+    with open(f"{stem}.config", "w") as f:
+        json.dump(config, f, indent=4)
 
 
 def upload(rank, logger):
     if rank != 0 or finetune is not None:
         return
     logger.info("uploading model")
-    template = "tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
-    for suffix in ["pt", "csv"]:
-        cmd = template.replace("{INPUT}", f"{datadir}/transformer.{suffix}").replace(
-            "{OUTPUT}", f"transformer.{suffix}"
-        )
+    with open(os.path.join(datadir, "latest"), "r") as f:
+        latest = f.read()
+    for suffix in ["pt", "csv", "config"]:
+        cmd =  f"rclone --retries=10 copyto {datadir}/transformer.{suffix} r2:rsys/database/training/{latest}/transformer.{suffix}"
         os.system(cmd)
 
 
@@ -473,17 +490,46 @@ def ddp_setup():
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
 
+def training_config():
+    num_items = {
+        x: int(pd.read_csv(f"{datadir}/{y}.csv").matchedid.max()) + 1
+        for (x, y) in {0: "manga", 1: "anime"}.items()
+    }
+    min_ts = datetime.datetime.strptime("20000101", "%Y%m%d").timestamp()
+    with open(os.path.join(datadir, "latest"), "r") as f:
+        max_ts = datetime.datetime.strptime(f.read().strip(), "%Y%m%d").timestamp()
+    return {
+        "num_layers": 8,
+        "num_heads": 32,
+        "num_kv_heads": 16,
+        "embed_dim": 2048,
+        "intermediate_dim": None,
+        "max_sequence_length": max_seq_len,
+        "vocab_sizes": {
+            "0_matchedid": num_items[0],
+            "1_matchedid": num_items[1],
+            "status": 8,
+        },
+        "reserved_vals": 2,
+        "causal": False,
+        "min_ts": min_ts,
+        "max_ts": max_ts,
+        "forward": "pretrain" if finetune is None else "finetune",
+        "lora": finetune is not None,
+    }
+
+
 def train():
     ddp_setup()
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
     logger = get_logger(rank, "transformer")
     logger.setLevel(logging.DEBUG)
-    logger.info(f"training")
-    batch_size = 2048 if finetune is None else 64
-    num_epochs = 64
+    batch_size = 512 if finetune is None else 16
+    num_epochs = 1024
     assert batch_size % world_size == 0
     baselines = get_baselines(rank)
+    config = training_config()
 
     def TransformerDataset(x):
         if finetune is None:
@@ -493,6 +539,7 @@ def train():
                 world_size,
                 batch_size // world_size,
                 mask_rate=0.15,
+                causal=config["causal"],
             )
         else:
             return FinetuneDataset(
@@ -501,6 +548,7 @@ def train():
                 world_size,
                 batch_size // world_size,
                 shuffle=x == "training",
+                causal=config["causal"],
             )
 
     dataloaders = {
@@ -514,37 +562,13 @@ def train():
         )
         for (x, w) in [("training", 8), ("test", 2)]
     }
-    num_items = {
-        x: pd.read_csv(f"{datadir}/{y}.csv").matchedid.max() + 1
-        for (x, y) in {0: "manga", 1: "anime"}.items()
-    }
-    config = {
-        "num_layers": 4,
-        "num_heads": 12,
-        "num_kv_heads": 12,
-        "embed_size": 768,
-        "intermediate_dim": None,
-        "max_sequence_length": max_seq_len,
-        "vocab_names": [
-            "0_matchedid",
-            "1_matchedid",
-            "rating",
-            "status",
-            "updated_at",
-        ],
-        "vocab_sizes": [
-            num_items[0],
-            num_items[1],
-            None,
-            8,
-            None,
-        ],
-        "forward": "pretrain" if finetune is None else "finetune",
-    }
     model = TransformerModel(config)
-    logger.info(f"Created model with {sum(p.numel() for p in model.parameters())} parameters")
+    logger.info(
+        f"Created model with {sum(p.numel() for p in model.parameters())} parameters"
+        f" and {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters"
+    )
     if finetune is not None:
-        model.load_state_dict(torch.load(finetune, weights_only=True))
+        model.load_state_dict(torch.load(finetune, weights_only=True), strict=False)
     model = model.to(rank)
     model = torch.compile(model)
     model = DDP(
@@ -562,7 +586,7 @@ def train():
     )
     task_weights = make_task_weights()
     get_loss = lambda x: evaluate_metrics(rank, x, dataloaders["test"], baselines)
-    checkpoint = lambda m, s, l, e: checkpoint_model(rank, m, s, l, e, task_weights)
+    checkpoint = lambda m, s, l, e: checkpoint_model(rank, m, config, s, l, e, task_weights)
     initial_loss = get_loss(model)
     logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")
     stopper(wsum(initial_loss, task_weights))
@@ -598,9 +622,9 @@ def train():
 def download():
     template = "tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto r2:rsys/database/training/$tag"
     files = (
-        ["transformer"] +
-        [f"{m}.csv" for m in ["manga", "anime"]] +
-        [f"baseline.{m}.msgpack" for m in [0, 1]]
+        ["transformer", "latest"]
+        + [f"{m}.csv" for m in ["manga", "anime"]]
+        + [f"baseline.{metric}.{m}.msgpack" for metric in ["rating"] for m in [0, 1]]
     )
     for data in files:
         os.system(f"{template}/{data} {datadir}/{data}")
@@ -608,19 +632,21 @@ def download():
 
 def get_baselines(rank):
     baselines = {}
-    for m in [0, 1]:
-        with open(f"{datadir}/baseline.{m}.msgpack", "rb") as f:
-            baseline = msgpack.unpackb(f.read(), strict_map_key=False)
-            d = {}
-            d["params"] = baseline["params"]["λ"]
-            d["weight"] = baseline["weight"][0]
-            d["a"] = torch.tensor(baseline["params"]["a"]).to(rank)
-            item_counts = baseline["params"]["item_counts"]
-            item_counts = [
-                item_counts.get(x, 1) for x in range(len(baseline["params"]["a"]))
-            ]
-            d["item_counts"] = torch.tensor(item_counts).to(rank)
-            baselines[m] = d
+    for metric in ["rating"]:
+        baselines[metric] = {}
+        for m in [0, 1]:
+            with open(f"{datadir}/baseline.{metric}.{m}.msgpack", "rb") as f:
+                baseline = msgpack.unpackb(f.read(), strict_map_key=False)
+                d = {}
+                d["params"] = baseline["params"]["λ"]
+                d["weight"] = baseline["weight"][0]
+                d["a"] = torch.tensor(baseline["params"]["a"]).to(rank)
+                item_counts = baseline["params"]["item_counts"]
+                item_counts = [
+                    item_counts.get(x, 1) for x in range(len(baseline["params"]["a"]))
+                ]
+                d["item_counts"] = torch.tensor(item_counts).to(rank)
+                baselines[metric][m] = d
     return baselines
 
 
@@ -633,7 +659,6 @@ args = parser.parse_args()
 datadir = args.datadir
 finetune = args.finetune
 finetune_medium = args.finetune_medium
-
 
 if __name__ == "__main__":
     if args.download:

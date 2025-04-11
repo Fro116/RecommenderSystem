@@ -182,8 +182,7 @@ function compute(state, pagination)
             get(weight, "rating", 1) *
             get(weight, "total", 1)
         x .+= logsoftmax(project(user, "$medium.watch")) * (1 / log(4)) * get(weight, "watch", 1) * get(weight, "total", 1)
-        x .+= logsoftmax(project(user, "$medium.plantowatch")) * (0 / log(4)) * get(weight, "plantowatch", 1) * get(weight, "total", 1)
-        x .+= sigmoid.(project(user, "$medium.drop")) * (0) * get(weight, "drop", 1) * get(weight, "total", 1)
+        x .+= logsoftmax(project(user, "$medium.status")) * 0 * get(weight, "status", 1) * get(weight, "total", 1)
     end
     # constraints
     function get_watched(user, m, status_filter = x -> x != planned_status)

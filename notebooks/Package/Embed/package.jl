@@ -17,7 +17,7 @@ function embed_py(basedir::String)
         ["latest", "training_tag"],
         ["bagofwords.$m.$metric.finetune.pt" for m in mediums for metric in ["rating"]],
         ["transformer.$m.finetune.pt" for m in mediums],
-        ["baseline.$m.msgpack" for m in mediums],
+        ["baseline.$metric.$m.msgpack" for m in mediums for metric in ["rating"]],
     )
     for f in files
         copy("data/finetune/$f", app)

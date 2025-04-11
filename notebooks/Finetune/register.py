@@ -4,6 +4,11 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import torchtune.models.llama3
+import warnings
+
+warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
+
 
 with open("../Training/bagofwords.model.py") as f:
     exec(f.read())
@@ -24,7 +29,7 @@ def register_bagofwords(medium, metric):
 
 
 def register_baseline(medium, metric):
-    with open(f"{datadir}/baseline.{medium}.msgpack", "rb") as f:
+    with open(f"{datadir}/baseline.rating.{medium}.msgpack", "rb") as f:
         baseline = msgpack.unpackb(f.read(), strict_map_key=False)
         baseline["bias"] = np.array(baseline["bias"])
         baseline["weight"] = np.array([baseline["weight"]])
@@ -45,29 +50,28 @@ def register_transformer(medium, metric):
         for (x, y) in {0: "manga", 1: "anime"}.items()
     }
     config = {
-        "dropout": 0.1,
-        "activation": "gelu",
         "num_layers": 4,
+        "num_heads": 12,
+        "num_kv_heads": 12,
         "embed_size": 768,
-        "intermediate_size": 768 * 4,
+        "intermediate_dim": None,
         "max_sequence_length": max_seq_len,
         "vocab_names": [
             "0_matchedid",
             "1_matchedid",
-            "position",
             "rating",
             "status",
             "updated_at",
+            "delta_time",
         ],
         "vocab_sizes": [
             num_items[0],
             num_items[1],
-            max_seq_len - reserved_vals,
             None,
             8,
             None,
+            None,
         ],
-        "num_attention_heads": 12,
         "forward": "finetune",
     }
     m = TransformerModel(config)
@@ -89,7 +93,7 @@ def register_transformer(medium, metric):
 
 def register():
     mediums = [0, 1]
-    metrics = ["rating", "watch", "plantowatch", "drop"]
+    metrics = ["watch", "rating", "status"]
     models = []
     for medium in mediums:
         for metric in metrics:

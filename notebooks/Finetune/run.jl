@@ -29,12 +29,11 @@ function finetune()
     end
     run(`python register.py`)
     run(`julia regress.jl`)
-    for app in ["Embed", "Compute", "Client"]
+    for app in ["Embed", "Compute"]
         cmd = "cd ../Package/$app && julia package.jl"
         run(`sh -c $cmd`)
     end
     blue_green_deploy()
-    run(`julia save_autocomplete.jl`)
 end
 
 finetune()

@@ -3,55 +3,82 @@ mask_val = -2
 reserved_vals = 2
 max_seq_len = 1024
 ALL_MEDIUMS = [0, 1]
-ALL_METRICS = ["watch", "rating", "status"]
+ALL_METRICS = ["watch", "rating"]
 
 
-class DiscreteEmbed(nn.Module):
-    def __init__(self, vocab_size, embed_size):
-        super(DiscreteEmbed, self).__init__()
-        self.reserved_vals = 2
-        self.embedding = nn.Sequential(
-            nn.Embedding(vocab_size + self.reserved_vals, embed_size),
-            nn.RMSNorm(embed_size),
+class InputEmbedding(nn.Module):
+    def __init__(self, config):
+        super(InputEmbedding, self).__init__()
+        self.config = config
+        self.item_embeddings = nn.ModuleList(
+            [
+                nn.Embedding(
+                    config["vocab_sizes"][f"{m}_matchedid"] + config["reserved_vals"],
+                    config["embed_dim"],
+                )
+                for m in ALL_MEDIUMS
+            ]
         )
-
-    def forward(self, x):
-        return self.embedding(x + self.reserved_vals)
-
-
-class ContinuousEmbed(nn.Module):
-    def __init__(self, embed_size):
-        super(ContinuousEmbed, self).__init__()
-        self.embedding = nn.Sequential(
-            nn.Linear(1, embed_size),
-            nn.RMSNorm(embed_size),
+        N = sum(
+            [
+                config["embed_dim"],
+                config["embed_dim"],
+                1,
+                (config["vocab_sizes"]["status"] + config["reserved_vals"]),
+                1,
+                1,
+            ]
         )
+        self.linear = nn.Linear(N, config["embed_dim"])
 
-    def forward(self, x):
-        return self.embedding(x.reshape(*x.shape, 1))
-
-
-class CompositeEmbedding(nn.Module):
-    def __init__(self, embeddings):
-        super(CompositeEmbedding, self).__init__()
-        self.embeddings = nn.ModuleList(embeddings)
-
-    def forward(self, inputs):
-        return sum(embed(x) for (embed, x) in zip(self.embeddings, inputs))
+    def forward(self, d):
+        config = self.config
+        item_embs = [
+            self.item_embeddings[m](d[f"{m}_matchedid"] + config["reserved_vals"])
+            for m in ALL_MEDIUMS
+        ]
+        rating_emb = d["rating"].reshape(*d["rating"].shape, 1)
+        status_emb = torch.nn.functional.one_hot(
+            (d["status"] + config["reserved_vals"]).to(torch.int64),
+            config["vocab_sizes"]["status"] + config["reserved_vals"],
+        )
+        time_emb = d["time"].reshape(*d["time"].shape, 1)
+        delta_time_emb = d["delta_time"].reshape(*d["time"].shape, 1)
+        emb = torch.cat(
+            (
+                *item_embs,
+                rating_emb,
+                status_emb,
+                time_emb,
+                delta_time_emb,
+            ),
+            dim=-1,
+        )
+        return self.linear(emb)
 
 
 class Llama3(nn.Module):
     def __init__(self, config):
         super(Llama3, self).__init__()
-        llama3 = torchtune.models.llama3.llama3(
-            vocab_size=0,
-            num_layers=config["num_layers"],
-            num_heads=config["num_heads"],
-            num_kv_heads=config["num_kv_heads"],
-            embed_dim=config["embed_size"],
-            intermediate_dim=config["intermediate_dim"],
-            max_seq_len=config["max_sequence_length"],
-        )
+        llama_config = {
+            "vocab_size": 0,
+            "num_layers": config["num_layers"],
+            "num_heads": config["num_heads"],
+            "num_kv_heads": config["num_kv_heads"],
+            "embed_dim": config["embed_dim"],
+            "intermediate_dim": config["intermediate_dim"],
+            "max_seq_len": config["max_sequence_length"],
+        }
+        if config["lora"]:
+            llama3 = torchtune.models.llama3.lora_llama3(
+                lora_attn_modules=["q_proj", "v_proj"],
+                lora_rank=8,
+                lora_alpha=16,
+                **llama_config,
+            )
+            set_trainable_params(llama3, get_adapter_params(llama3))
+        else:
+            llama3 = torchtune.models.llama3.llama3(**llama_config)
         self.layers = llama3.layers
         self.norm = llama3.norm
 
@@ -66,43 +93,23 @@ class TransformerModel(nn.Module):
     def __init__(self, config):
         super(TransformerModel, self).__init__()
         self.config = config
-
-        # create embeddings
-        embeddings = []
-        for size in config["vocab_sizes"]:
-            if size is not None:
-                embeddings.append(DiscreteEmbed(size, config["embed_size"]))
-            else:
-                embeddings.append(ContinuousEmbed(config["embed_size"]))
-        self.embed = CompositeEmbedding(embeddings)
-
-        # create transformers
+        self.embed = InputEmbedding(config)
         self.transformers = Llama3(config)
-
-        # create classifiers
-        metric_models = {
-            m: nn.Linear(
-                config["embed_size"],
-                config["embed_size"],
-            )
-            for m in ALL_METRICS
-        }
-        medium_models = {}
-        for i, m in enumerate(ALL_MEDIUMS):
-            x = self.embed.embeddings[i].embedding[0] # weight tying
-            linear = nn.Linear(*reversed(x.weight.shape))
-            x.weight = linear.weight
-            medium_models[m] = linear
-
         def create_head(medium, metric):
-            base = [
-                metric_models[metric],
-                medium_models[medium],
-            ]
-            if metric in ["watch", "plantowatch"]:
-                base.append(nn.LogSoftmax(dim=-1))
+            if metric == "watch":
+                x = self.embed.item_embeddings[medium]
+                weight_tied_linear = nn.Linear(*reversed(x.weight.shape))
+                x.weight = weight_tied_linear.weight
+                return nn.Sequential(weight_tied_linear, nn.LogSoftmax(dim=-1))
+            elif metric == "rating":
+                return nn.Sequential(
+                    nn.Linear(2 * config["embed_dim"], config["embed_dim"]),
+                    nn.GELU(),
+                    nn.Linear(config["embed_dim"], 1),
+                )
+            else:
+                assert False
             return nn.Sequential(*base)
-
         self.classifier = nn.ModuleList(
             [
                 create_head(medium, metric)
@@ -110,12 +117,12 @@ class TransformerModel(nn.Module):
                 for metric in ALL_METRICS
             ]
         )
+        self.empty_loss = nn.Parameter(torch.tensor(0.))
 
         # create loss functions
         lossfn_map = {
             "watch": self.crossentropy,
             "rating": self.mse,
-            "status": self.mse,
         }
         self.lossfns = [
             lossfn_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
@@ -123,7 +130,6 @@ class TransformerModel(nn.Module):
         evaluate_map = {
             "watch": self.crossentropy,
             "rating": self.moments,
-            "status": self.moments,
         }
         self.evaluatefns = [
             evaluate_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
@@ -152,13 +158,26 @@ class TransformerModel(nn.Module):
         return (-x * y * w).sum() / w.sum()
 
     def to_embedding(self, d):
-        inputs = [d[k] for k in self.config["vocab_names"]]
+        min_ts = self.config["min_ts"]
+        max_ts = self.config["max_ts"]
+        ts = d["time"].clip(min_ts, max_ts)
+        d["time"] = ((ts - min_ts) / (max_ts - min_ts)).to(torch.float32)
+        dts = d["delta_time"].clip(0, max_ts - min_ts)
+        d["delta_time"] = (dts / (max_ts - min_ts)).to(torch.float32)
         userid = d["userid"]
         m, n = userid.shape
-        def maskfn(b, h, q_idx, kv_idx):
+
+        def document_mask(b, h, q_idx, kv_idx):
             return userid[b][q_idx] == userid[b][kv_idx]
+
+        def causal_mask(b, h, q_idx, kv_idx):
+            return q_idx >= kv_idx
+
+        maskfn = document_mask
+        if self.config["causal"]:
+            maskfn = and_masks(maskfn, causal_mask)
         block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
-        e = self.embed(inputs)
+        e = self.embed(d)
         e = self.transformers(e, block_mask)
         return e
 
@@ -166,27 +185,37 @@ class TransformerModel(nn.Module):
         e = self.to_embedding(d)
         lossfns = self.evaluatefns if evaluate else self.lossfns
         losses = []
-        for i in range(len(lossfns)):
-            k = self.names[i]
-            weights = d[f"{k}.weight"]
-            if not torch.is_nonzero(weights.sum()):
-                losses.append(
-                    torch.tensor(
-                        [0.0], device=e.get_device(), requires_grad=e.requires_grad
+        i = -1
+        for medium in ALL_MEDIUMS:
+            for metric in ALL_METRICS:
+                i += 1
+                weights = d[f"{medium}.{metric}.weight"]
+                if not torch.is_nonzero(weights.sum()):
+                    losses.append(torch.square(self.empty_loss).sum())
+                    continue
+                labels = d[f"{medium}.{metric}.label"]
+                positions = d[f"{medium}.{metric}.position"]
+                positions = positions.reshape(*positions.shape, 1)
+                bp = torch.nonzero(weights, as_tuple=True)
+                embed = e[bp[0], bp[1], :]
+                labels = labels[bp[0], bp[1]]
+                positions = positions[bp[0], bp[1]]
+                weights = weights[bp[0], bp[1]]
+                classifier = self.classifier[i]
+                if metric == "watch":
+                    preds = classifier(embed).gather(dim=-1, index=positions).reshape(-1)
+                elif metric == "rating":
+                    X = torch.cat(
+                        (
+                            embed,
+                            self.embed.item_embeddings[medium](positions.squeeze(dim=1)),
+                        ),
+                        dim=-1,
                     )
-                )
-                continue
-            labels = d[f"{k}.label"]
-            positions = d[f"{k}.position"]
-            positions = positions.reshape(*positions.shape, 1)
-            classifier = self.classifier[i]
-            bp = torch.nonzero(weights, as_tuple=True)
-            embed = e[bp[0], bp[1], :]
-            labels = labels[bp[0], bp[1]]
-            positions = positions[bp[0], bp[1]]
-            weights = weights[bp[0], bp[1]]
-            preds = classifier(embed).gather(dim=-1, index=positions).reshape(-1)
-            losses.append(lossfns[i](preds, labels, weights))
+                    preds = classifier(X).reshape(-1)
+                else:
+                    assert False
+                losses.append(lossfns[i](preds, labels, weights))
         return losses
 
     def finetune_forward(self, d, evaluate):
@@ -199,11 +228,7 @@ class TransformerModel(nn.Module):
             k = self.names[i]
             weights = d[f"{k}.weight"]
             if not torch.is_nonzero(weights.sum()):
-                losses.append(
-                    torch.tensor(
-                        [0.0], device=e.get_device(), requires_grad=e.requires_grad
-                    )
-                )
+                losses.append(torch.square(self.empty_loss).sum())
                 continue
             labels = d[f"{k}.label"]
             classifier = self.classifier[i]

@@ -76,13 +76,11 @@ end
 
 function loss(users, models, medium, metric, model_weights)
     @assert length(models) == length(model_weights)
-    planned_status = 3
-    if metric == "rating"
-        activation = identity
-    elseif metric in ["watch", "plantowatch"]
+    planned_status = 4
+    if metric == "watch"
         activation = logsoftmax
-    elseif metric == "drop"
-        activation = sigmoid
+    elseif metric in ["rating", "status"]
+        activation = identity
     else
         @assert false
     end
@@ -101,24 +99,14 @@ function loss(users, models, medium, metric, model_weights)
             if x["medium"] != medium
                 continue
             end
-            if metric == "rating"
-                if x["rating"] == 0
-                    continue
+            if metric == "watch"
+                if (x["status"] == 0 || x["status"] >= planned_status) && (x["rating"] == 0 || x["rating"] >= 5)
+                    push!(ys, (x["matchedid"] + 1, 1))
                 end
-                push!(ys, (x["matchedid"] + 1, x["rating"]))
-            elseif metric == "watch"
-                if x["status"] <= planned_status
-                    continue
+            elseif metric in ["rating", "status"]
+                if x[metric] > 0
+                    push!(ys, (x["matchedid"] + 1, x[metric]))
                 end
-                push!(ys, (x["matchedid"] + 1, 1))
-            elseif metric == "plantowatch"
-                if x["status"] != planned_status
-                    continue
-                end
-                push!(ys, (x["matchedid"] + 1, 1))
-            elseif metric == "drop"
-                v = (x["status"] > 0 && x["status"] < planned_status) ? 1 : 0
-                push!(ys, (x["matchedid"] + 1, v))
             else
                 @assert false
             end
@@ -130,12 +118,10 @@ function loss(users, models, medium, metric, model_weights)
         for (j, y) in ys
             p = sum([mp[j, i] * mw for (mp, mw) in zip(model_preds, model_weights)])
             weights += w
-            if metric == "rating"
-                losses += (p - y)^2 * w
-            elseif metric in ["watch", "plantowatch"]
+            if metric == "watch"
                 losses += -p * y * w
-            elseif metric == "drop"
-                losses += -(y * log(p) + (1 - y) * log(1 - p)) * w
+            elseif metric in ["rating", "status"]
+                losses += (p - y)^2 * w
             else
                 @assert false
             end
@@ -152,10 +138,10 @@ function regress(users, medium, metric)
     if metric == "rating"
         push!(alphas, ("bagofwords.$medium.$metric", "bagofwords.$medium.$metric"))
     end
-    if metric == "rating"
-        transform = identity
-    elseif metric in ["watch", "plantowatch", "drop"]
+    if metric == "watch"
         transform = softmax
+    elseif metric in ["rating", "status"]
+        transform = identity
     else
         @assert false
     end
@@ -179,7 +165,7 @@ function save_weights()
     ret = Dict()
     losses = Dict()
     for medium in [0, 1]
-        for metric in ["rating", "watch", "plantowatch", "drop"]
+        for metric in ["watch", "rating", "status"]
             coefs, loss = regress(users, medium, metric)
             ret["$medium.$metric"] = coefs
             losses["$medium.$metric"] = loss

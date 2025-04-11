@@ -13,23 +13,14 @@ include("../julia_utils/stdout.jl")
 
 const datadir = "../../data/training"
 const MEDIUM_MAP = Dict(0 => "manga", 1 => "anime")
+const metric = ARGS[1]
 
 @memoize function num_items(medium::Int)
     m = MEDIUM_MAP[medium]
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1).matchedid) + 1
 end
 
-function loss(x, y, w, metric)
-    safelog(x) = log(x .+ Float32(eps(Float64)))
-    if metric == :watch
-        lossfn = (x, y) -> -y .* safelog.(x)
-    elseif metric in [:rating, :status]
-        lossfn = (x, y) -> (x - y) .^ 2
-    else
-        @assert false
-    end
-    sum(lossfn(x, y) .* w) / sum(w)
-end
+loss(x, y, w) = sum((x - y) .^ 2 .* w) / sum(w)
 
 @kwdef struct RatingsDataset
     userid::Vector{Int32} = []
@@ -54,10 +45,10 @@ function get_data(split::String, medium::Int)
         push!(ratings, Vector{Vector{Float32}}(undef, length(fns)))
         Threads.@threads for (i, f) in collect(Iterators.enumerate(fns))
             user = MsgPack.unpack(read(f))
-            items = [x for x in user["items"] if x["medium"] == medium && x["rating"] != 0]
+            items = [x for x in user["items"] if x["medium"] == medium && x[metric] != 0]
             userids[end][i] = fill(userid_base + i, length(items))
             itemids[end][i] = [x["matchedid"] for x in items]
-            ratings[end][i] = [x["rating"] for x in items]
+            ratings[end][i] = [x[metric] for x in items]
         end
         userid_base += length(fns)
     end
@@ -230,7 +221,7 @@ function mse_and_beta(λ, training, test_input, test_output, medium)
     xw = (x .* sqrt.(w))
     yw = (y .* sqrt.(w))
     β = (xw'xw + 1.0f-9) \ xw'yw
-    L = loss(x * β, y, w, :rating)
+    L = loss(x * β, y, w)
     L, β
 end;
 
@@ -279,7 +270,7 @@ function save_model(medium::Int)
         "weight" => [β],
         "bias" => a .* β,
     )
-    outfn = "$datadir/baseline.$(medium).msgpack"
+    outfn = "$datadir/baseline.$(metric).$(medium).msgpack"
     open(outfn, "w") do f
         write(f, MsgPack.pack(d))
     end
@@ -287,7 +278,7 @@ function save_model(medium::Int)
     cmd = replace(
         template,
         "{INPUT}" => outfn,
-        "{OUTPUT}" => "baseline.$(medium).msgpack",
+        "{OUTPUT}" => "baseline.$(metric).$(medium).msgpack",
     )
     run(`sh -c $cmd`)
 end

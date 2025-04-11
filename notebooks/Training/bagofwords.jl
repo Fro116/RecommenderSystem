@@ -60,22 +60,12 @@ function get_data(data)
         else
             X["$(m)_watch"][idx] = 0
         end
-        if x["status"] == planned_status
-            X["$(m)_plantowatch"][idx] = 1
-        else
-            X["$(m)_plantowatch"][idx] = 0
-        end
-        if x["status"] > 0 && x["status"] < planned_status
-            X["$(m)_drop"][idx] = 1
-        else
-            X["$(m)_drop"][idx] = 0
-        end
-
+        # TODO test encoding status
     end
     for x in output_items
         m = x["medium"]
         idx = x["matchedid"] + 1
-        if x["status"] >= planned_status && (x["rating"] == 0 || x["rating"] >= 5)
+        if (x["status"] == 0 || x["status"] >= planned_status) && (x["rating"] == 0 || x["rating"] >= 5)
             Y["$(m)_watch"][idx] = 1
             W["$(m)_watch"][idx] = 1
         else

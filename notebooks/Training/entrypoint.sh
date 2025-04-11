@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euxo pipefail
-apt update && apt install git curl unzip -y
 cd /data
+apt update && apt install git curl unzip -y
 git clone https://github.com/Fro116/RecommenderSystem.git
 curl https://rclone.org/install.sh | bash
 mkdir -p ~/.config/rclone/

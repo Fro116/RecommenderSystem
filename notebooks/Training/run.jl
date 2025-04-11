@@ -18,11 +18,9 @@ end
 function get_active_sf_cluster()
     read_json(cmd) = JSON3.read(replace(read(cmd, String), r"(\w+): " => s"\"\1\": "))
     try
-        contracts = read_json(`sf contracts list --json`)
-        cluster_id = first(contracts)["cluster_id"]
         clusters = read_json(`sf clusters list --json`)
         for x in clusters
-            if x["contract"]["cluster_id"] == cluster_id
+            if x["contract"]["status"] == "active"
                 return x["name"]
             end
         end
@@ -45,7 +43,7 @@ function start_sfcompute(gpuhour_price)
     end
     should_retry = true
     try
-        h = 8
+        h = 7
         gpuhour_price = string(round(gpuhour_price, digits=2))
         run(`sf buy -d $(h)hr -n 8 -p $gpuhour_price -y`)
         logtag("RUN", "started sfcompute")
@@ -56,7 +54,13 @@ function start_sfcompute(gpuhour_price)
         end
         should_retry = false
         run(`sf clusters users add --cluster $cluster --user myuser`)
-        cmd = "cd ../../data/training && kubectl apply -f prod.yaml"
+        cmds = [
+            "sleep 60",
+            "kubectl delete jobs `kubectl get jobs -o custom-columns=:.metadata.name`",
+            "cd ../../data/training",
+            "kubectl apply -f prod.yaml",
+        ]
+        cmd = join(cmds, " && ")
         run(`sh -c $cmd`)
         sleep(h * 3600)
         return should_retry
@@ -83,7 +87,9 @@ function pretrain()
     for m in [0, 1]
         run(`julia media_relations.jl $m`)
     end
-    run(`julia baseline.jl`)
+    for metric in ["rating"]
+        run(`julia baseline.jl $metric`)
+    end
     run(`julia -t auto bagofwords.jl --pretrain`)
     run(`julia -t auto transformer.jl`)
     start_gpu()
