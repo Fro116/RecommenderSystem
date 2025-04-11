@@ -21,12 +21,10 @@ end
 
 function loss(x, y, w, metric)
     safelog(x) = log(x .+ Float32(eps(Float64)))
-    if metric == :rating
-        lossfn = (x, y) -> (x - y) .^ 2
-    elseif metric in [:watch, :plantowatch]
+    if metric == :watch
         lossfn = (x, y) -> -y .* safelog.(x)
-    elseif metric == :drop
-        lossfn = (x, y) -> -(y .* safelog.(x) + (1 .- y) .* safelog.(1 .- x))
+    elseif metric in [:rating, :status]
+        lossfn = (x, y) -> (x - y) .^ 2
     else
         @assert false
     end

@@ -70,7 +70,11 @@ function super_resolution(src, dst)
         qrun(`sh -c $cmd`)
         Threads.@threads for x in Glob.glob("$dst/*.png")
             stem = join(split(x, ".")[1:end-1], ".")
-            qrun(`cwebp -q 80 $stem.png -o $stem.$tag.webp`)
+            try
+                qrun(`cwebp -q 80 $stem.png -o $stem.$tag.webp`)
+            catch
+                logtag("IMAGES", "failed command cwebp -q 80 $stem.png -o $stem.$tag.webp")
+            end
         end
     end
 end

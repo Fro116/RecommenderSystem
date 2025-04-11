@@ -267,7 +267,7 @@ def reduce_mean(rank, x, w):
 
 
 def evaluate_metrics(rank, model, dataloader, baselines):
-    init = lambda metric: [0, 0, 0] if metric == "rating" else 0
+    init = lambda metric: [0, 0, 0] if metric in ["rating", "status"] else 0
     losses = [init(metric) for m in ALL_MEDIUMS for metric in ALL_METRICS]
     weights = [0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
     progress = tqdm(desc="Test batches", mininterval=1, disable=rank != 0)
@@ -318,10 +318,10 @@ def train_epoch(
             tloss = model(d, False)
             for i in range(len(tloss)):
                 w = float(d[f"{names[i]}.weight"].sum())
-                training_losses[i] += float(tloss[i]) * w
+                training_losses[i] += float(tloss[i].detach()) * w
                 training_weights[i] += w
             loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
-            if float(loss) == 0:
+            if float(loss.detach()) == 0:
                 continue
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -404,10 +404,9 @@ def make_task_weights():
     else:
         medium_weight = {finetune_medium: 1, 1-finetune_medium: 0}
     metric_weight = {
-        "rating": 1,
         "watch": 4,
-        "plantowatch": 1 / 4,
-        "drop": 1 / 4,
+        "rating": 1,
+        "status": 1 / 4,
     }
     weights = [
         medium_weight[x] * metric_weight[y] for x in ALL_MEDIUMS for y in ALL_METRICS
@@ -415,14 +414,12 @@ def make_task_weights():
     weights = [x / sum(weights) for x in weights]
     # rescale losses so each task is equally weighted
     scale = [
-        1.036553297051344,
         5.180758325289576,
-        5.87909245526433,
-        0.061069027408138736,
-        1.1299115263959014,
+        1.036553297051344,
+        1,
         3.515180369672557,
-        4.851891694665132,
-        0.0673615127350479,
+        1.1299115263959014,
+        1,
     ]
     return [(w / s) for (w, s) in zip(weights, scale)]
 
@@ -431,6 +428,7 @@ def get_logger(rank, name):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
     if rank != 0:
+        logger.propagate = False
         return logger
     formatter = logging.Formatter(
         "%(name)s:%(levelname)s:%(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
@@ -523,8 +521,9 @@ def train():
     config = {
         "num_layers": 4,
         "num_heads": 12,
+        "num_kv_heads": 12,
         "embed_size": 768,
-        "dropout": 0.1,
+        "intermediate_dim": None,
         "max_sequence_length": max_seq_len,
         "vocab_names": [
             "0_matchedid",
@@ -543,6 +542,7 @@ def train():
         "forward": "pretrain" if finetune is None else "finetune",
     }
     model = TransformerModel(config)
+    logger.info(f"Created model with {sum(p.numel() for p in model.parameters())} parameters")
     if finetune is not None:
         model.load_state_dict(torch.load(finetune, weights_only=True))
     model = model.to(rank)

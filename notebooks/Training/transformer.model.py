@@ -3,7 +3,7 @@ mask_val = -2
 reserved_vals = 2
 max_seq_len = 1024
 ALL_MEDIUMS = [0, 1]
-ALL_METRICS = ["rating", "watch", "plantowatch", "drop"]
+ALL_METRICS = ["watch", "rating", "status"]
 
 
 class DiscreteEmbed(nn.Module):
@@ -20,7 +20,7 @@ class DiscreteEmbed(nn.Module):
 
 
 class ContinuousEmbed(nn.Module):
-    def __init__(self, embed_size, dropout):
+    def __init__(self, embed_size):
         super(ContinuousEmbed, self).__init__()
         self.embedding = nn.Sequential(
             nn.Linear(1, embed_size),
@@ -47,8 +47,9 @@ class Llama3(nn.Module):
             vocab_size=0,
             num_layers=config["num_layers"],
             num_heads=config["num_heads"],
-            num_kv_heads=config["num_heads"],
+            num_kv_heads=config["num_kv_heads"],
             embed_dim=config["embed_size"],
+            intermediate_dim=config["intermediate_dim"],
             max_seq_len=config["max_sequence_length"],
         )
         self.layers = llama3.layers
@@ -72,9 +73,7 @@ class TransformerModel(nn.Module):
             if size is not None:
                 embeddings.append(DiscreteEmbed(size, config["embed_size"]))
             else:
-                embeddings.append(
-                    ContinuousEmbed(config["embed_size"], config["dropout"])
-                )
+                embeddings.append(ContinuousEmbed(config["embed_size"]))
         self.embed = CompositeEmbedding(embeddings)
 
         # create transformers
@@ -114,19 +113,17 @@ class TransformerModel(nn.Module):
 
         # create loss functions
         lossfn_map = {
-            "rating": self.mse,
             "watch": self.crossentropy,
-            "plantowatch": self.crossentropy,
-            "drop": self.binarycrossentropy,
+            "rating": self.mse,
+            "status": self.mse,
         }
         self.lossfns = [
             lossfn_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
         ]
         evaluate_map = {
-            "rating": self.moments,
             "watch": self.crossentropy,
-            "plantowatch": self.crossentropy,
-            "drop": self.binarycrossentropy,
+            "rating": self.moments,
+            "status": self.moments,
         }
         self.evaluatefns = [
             evaluate_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
@@ -153,17 +150,6 @@ class TransformerModel(nn.Module):
 
     def crossentropy(self, x, y, w):
         return (-x * y * w).sum() / w.sum()
-
-    def binarycrossentropy(self, x, y, w):
-        return (
-            torch.nn.functional.binary_cross_entropy_with_logits(
-                input=x,
-                target=y,
-                weight=w,
-                reduction="sum",
-            )
-            / w.sum()
-        )
 
     def to_embedding(self, d):
         inputs = [d[k] for k in self.config["vocab_names"]]

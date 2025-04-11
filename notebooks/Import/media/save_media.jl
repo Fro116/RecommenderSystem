@@ -4,7 +4,9 @@ include("../../julia_utils/stdout.jl")
 include("common.jl")
 
 function backup()
-    open("../../../logs/import/match_media.log", "w") do f
+    logdir = "../../../logs/import"
+    mkpath(logdir)
+    open("$logdir/match_media.log", "w") do f
         for fn in [
             "download_media.jl",
             "match_ids.jl",

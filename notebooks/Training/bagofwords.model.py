@@ -16,17 +16,15 @@ class BagOfWordsModel(nn.Module):
         self.classifier = nn.Linear(256, num_items[medium])
         self.logsoftmax = nn.LogSoftmax(dim=-1)
         lossfn_map = {
-            "rating": self.mse,
             "watch": self.crossentropy,
-            "plantowatch": self.crossentropy,
-            "drop": self.binarycrossentropy,
+            "rating": self.mse,
+            "status": self.mse,
         }
         self.lossfn = lossfn_map[metric]
         evaluate_map = {
-            "rating": self.moments,
             "watch": self.crossentropy,
-            "plantowatch": self.crossentropy,
-            "drop": self.binarycrossentropy,
+            "rating": self.moments,
+            "status": self.moments,
         }
         self.evaluatefn = evaluate_map[metric]
 
@@ -36,14 +34,6 @@ class BagOfWordsModel(nn.Module):
     def crossentropy(self, x, y, w):
         x = self.logsoftmax(x)
         return (-x * y * w).sum()
-
-    def binarycrossentropy(self, x, y, w):
-        return nn.functional.binary_cross_entropy_with_logits(
-            input=x,
-            target=y,
-            weight=w,
-            reduction="sum",
-        )
 
     def moments(self, x, y, w):
         return (

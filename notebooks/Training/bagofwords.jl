@@ -25,8 +25,8 @@ end
 
 const finetune, datadir = parse_args()
 const mediums = [0, 1]
-const metrics = ["rating", "watch", "plantowatch", "drop"]
-const planned_status = 3
+const metrics = ["watch", "rating", "status"]
+const planned_status = 4
 const medium_map = Dict(0 => "manga", 1 => "anime")
 
 @memoize function num_items(medium::Int)
@@ -75,6 +75,13 @@ function get_data(data)
     for x in output_items
         m = x["medium"]
         idx = x["matchedid"] + 1
+        if x["status"] >= planned_status && (x["rating"] == 0 || x["rating"] >= 5)
+            Y["$(m)_watch"][idx] = 1
+            W["$(m)_watch"][idx] = 1
+        else
+            Y["$(m)_watch"][idx] = 0
+            W["$(m)_watch"][idx] = 0
+        end
         if x["rating"] > 0
             Y["$(m)_rating"][idx] = x["rating"]
             W["$(m)_rating"][idx] = 1
@@ -82,26 +89,12 @@ function get_data(data)
             Y["$(m)_rating"][idx] = 0
             W["$(m)_rating"][idx] = 0
         end
-        if x["status"] > planned_status
-            Y["$(m)_watch"][idx] = 1
-            W["$(m)_watch"][idx] = 1
+        if x["status"] > 0
+            Y["$(m)_status"][idx] = x["status"]
+            W["$(m)_status"][idx] = 1
         else
-            Y["$(m)_watch"][idx] = 0
-            W["$(m)_watch"][idx] = 0
-        end
-        if x["status"] == planned_status
-            Y["$(m)_plantowatch"][idx] = 1
-            W["$(m)_plantowatch"][idx] = 1
-        else
-            Y["$(m)_plantowatch"][idx] = 0
-            W["$(m)_plantowatch"][idx] = 0
-        end
-        if x["status"] > 0 && x["status"] < planned_status
-            Y["$(m)_drop"][idx] = 1
-            W["$(m)_drop"][idx] = 1
-        else
-            Y["$(m)_drop"][idx] = 0
-            W["$(m)_drop"][idx] = 1
+            Y["$(m)_status"][idx] = 0
+            W["$(m)_status"][idx] = 0
         end
     end
     ret = Dict()

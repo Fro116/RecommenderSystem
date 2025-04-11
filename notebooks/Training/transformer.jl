@@ -11,8 +11,8 @@ import Random
 
 const datadir = "../../data/training"
 const mediums = [0, 1]
-const metrics = ["rating", "watch", "plantowatch", "drop"]
-const planned_status = 3
+const metrics = ["watch", "rating", "status"]
+const planned_status = 4
 const medium_map = Dict(0 => "manga", 1 => "anime")
 const min_ts = Dates.datetime2unix(Dates.DateTime("20000101", Dates.dateformat"yyyymmdd"))
 const max_ts = Dates.datetime2unix(
@@ -47,7 +47,7 @@ function get_data(data, userid)
     end
     d["userid"] = fill(Int32(userid), N)
     for m in [0, 1]
-        for metric in ["rating", "watch", "plantowatch", "drop"]
+        for metric in metrics
             d["$m.$metric.label"] = zeros(Float32, N)
             d["$m.$metric.weight"] = zeros(Float32, N)
         end
@@ -66,24 +66,17 @@ function get_data(data, userid)
         d["$(n)_distinctid"][i] = cls_val
         d["updated_at"][i] = clamp((x["updated_at"] - min_ts) / (max_ts - min_ts), 0, 1)
         d["source"][i] = data["user"]["source"]
+        if x["status"] >= planned_status && (x["rating"] == 0 || x["rating"] >= 5)
+            d["$m.watch.label"][i] = 1
+            d["$m.watch.weight"][i] = 1
+        end
         if x["rating"] > 0
             d["$m.rating.label"][i] = x["rating"]
             d["$m.rating.weight"][i] = 1
         end
-        if x["status"] > planned_status
-            d["$m.watch.label"][i] = 1
-            d["$m.watch.weight"][i] = 1
-        end
-        if x["status"] == planned_status
-            d["$m.plantowatch.label"][i] = 1
-            d["$m.plantowatch.weight"][i] = 1
-        end
-        if x["status"] > 0 && x["status"] < planned_status
-            d["$m.drop.label"][i] = 1
-            d["$m.drop.weight"][i] = 1
-        else
-            d["$m.drop.label"][i] = 0
-            d["$m.drop.weight"][i] = 1
+        if x["status"] > 0
+            d["$m.status.label"][i] = x["status"]
+            d["$m.status.weight"][i] = 1
         end
     end
     d

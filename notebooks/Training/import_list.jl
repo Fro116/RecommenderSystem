@@ -10,8 +10,8 @@ const STATUS_MAP = Dict{String,Int32}(
     "none" => 0,
     "wont_watch" => 1,
     "dropped" => 2,
-    "planned" => 3,
-    "on_hold" => 4,
+    "on_hold" => 3,
+    "planned" => 4,
     "currently_watching" => 5,
     "completed" => 6,
     "rewatching" => 7,
@@ -467,14 +467,14 @@ end
 
 function import_animeplanet_profile(data, reftime)
     function animeplanet_last_online(datestr, reftime)
-        if datestr in ["Currently online"]
+        if startswith(datestr, "Currently online")
             return reftime
         end
         if isnothing(datestr) || datestr in ["Hidden", "Last online: never"]
             return nothing
         end
         if !startswith(datestr, "Last online ")
-            logerror(datestr)
+            logerror("animeplanet_last_online: $datestr")
             return nothing
         end
         datestr = datestr[length("Last online ")+1:end]
