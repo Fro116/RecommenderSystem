@@ -12,7 +12,7 @@ import SparseArrays
 
 const datadir = "../../data/finetune"
 const mediums = [0, 1]
-const metrics = ["watch", "rating", "status"]
+const metrics = ["watch", "rating"]
 const planned_status = 4
 const medium_map = Dict(0 => "manga", 1 => "anime")
 const min_ts = Dates.datetime2unix(Dates.DateTime("20000101", Dates.dateformat"yyyymmdd"))
@@ -86,9 +86,9 @@ function get_data(data, userid)
         "0_distinctid" => zeros(Int32, max_seq_len),
         "1_matchedid" => zeros(Int32, max_seq_len),
         "1_distinctid" => zeros(Int32, max_seq_len),
-        "updated_at" => zeros(Float32, max_seq_len),
-        "delta_time" => zeros(Float32, max_seq_len),
         "source" => zeros(Int32, max_seq_len),
+        "time" => zeros(Float32, max_seq_len),
+        "delta_time" => zeros(Float32, max_seq_len),
     )
     input_fields = collect(keys(d))
     d["userid"] = zeros(Int32, max_seq_len)
@@ -125,12 +125,12 @@ function get_data(data, userid)
         d["$(m)_distinctid"][i] = x["distinctid"]
         d["$(n)_matchedid"][i] = cls_val
         d["$(n)_distinctid"][i] = cls_val
-        d["updated_at"][i] = clamp((x["updated_at"] - min_ts) / (max_ts - min_ts), 0, 1)
+        d["source"][i] = data["user"]["source"]
         if x["updated_at"] >= min_ts && x["updated_at"] <= max_ts
-            d["delta_time"][i-1] = (x["updated_at"] - last_ts) / (max_ts - min_ts)
+            d["time"][i] = x["updated_at"]
+            d["delta_time"][i-1] = x["updated_at"] - last_ts
             last_ts = x["updated_at"]
         end
-        d["source"][i] = data["user"]["source"]
         d["userid"][i] = userid
         d["mask_index"][i] = 0
     end
@@ -161,13 +161,6 @@ function get_data(data, userid)
         else
             Y["$(m)_watch"][idx] = 0
             W["$(m)_watch"][idx] = 0
-        end
-        if x["status"] > 0
-            Y["$(m)_status"][idx] = x["status"]
-            W["$(m)_status"][idx] = 1
-        else
-            Y["$(m)_status"][idx] = 0
-            W["$(m)_status"][idx] = 0
         end
         for metric in ["rating"]
             if x[metric] > 0

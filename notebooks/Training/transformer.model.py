@@ -134,7 +134,6 @@ class TransformerModel(nn.Module):
         self.evaluatefns = [
             evaluate_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
         ]
-        self.names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
         if config["forward"] == "pretrain":
             self.forward = self.pretrain_forward
         elif config["forward"] == "finetune":
@@ -224,16 +223,33 @@ class TransformerModel(nn.Module):
         embed = e[bp[0], bp[1], :]
         lossfns = self.evaluatefns if evaluate else self.lossfns
         losses = []
-        for i in range(len(lossfns)):
-            k = self.names[i]
-            weights = d[f"{k}.weight"]
-            if not torch.is_nonzero(weights.sum()):
-                losses.append(torch.square(self.empty_loss).sum())
-                continue
-            labels = d[f"{k}.label"]
-            classifier = self.classifier[i]
-            preds = classifier(embed)
-            losses.append(lossfns[i](preds, labels, weights))
+        i = -1
+        for medium in ALL_MEDIUMS:
+            for metric in ALL_METRICS:
+                i += 1
+                weights = d[f"{medium}.{metric}.weight"]
+                if not torch.is_nonzero(weights.sum()):
+                    losses.append(torch.square(self.empty_loss).sum())
+                    continue
+                classifier = self.classifier[i]
+                if metric == "watch":
+                    preds = classifier(embed)
+                    labels = d[f"{medium}.{metric}.label"]
+                elif metric == "rating":
+                    item_bp = torch.nonzero(weights, as_tuple=True)
+                    X = torch.cat(
+                        (
+                            embed[item_bp[0], :],
+                            self.embed.item_embeddings[medium](item_bp[1]),
+                        ),
+                        dim=-1,
+                    )
+                    preds = classifier(X).reshape(-1)
+                    labels = d[f"{medium}.{metric}.label"][item_bp[0], item_bp[1]]
+                    weights = weights[item_bp[0], item_bp[1]]
+                else:
+                    assert False
+                losses.append(lossfns[i](preds, labels, weights))
         return losses
 
     def embed_forward(self, d):

@@ -296,7 +296,7 @@ def reduce_mean(rank, x, w):
 
 
 def evaluate_metrics(rank, model, dataloader, baselines):
-    init = lambda metric: [0, 0, 0] if metric in ["rating", "status"] else 0
+    init = lambda metric: [0, 0, 0] if metric in ["rating"] else 0
     losses = [init(metric) for m in ALL_MEDIUMS for metric in ALL_METRICS]
     weights = [0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
     progress = tqdm(desc="Test batches", mininterval=1, disable=rank != 0)
@@ -361,7 +361,7 @@ def train_epoch(
     return reduce_mean(rank, training_losses, training_weights)
 
 
-def create_optimizer(model):
+def create_optimizer(model, config):
     param_dict = {pn: p for pn, p in model.named_parameters()}
     param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
     decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
@@ -371,7 +371,7 @@ def create_optimizer(model):
             {"params": decay_params, "weight_decay": 0.1},
             {"params": nodecay_params, "weight_decay": 0.0},
         ],
-        lr=2e-4 if finetune is None else 1e-7,
+        lr=config["learning_rate"],
         betas=(0.9, 0.95),
     )
 
@@ -411,20 +411,6 @@ def wsum(values, weights):
 
 
 def make_task_weights():
-    # TODO can we set this programatically?
-    if finetune_medium is None:
-        medium_weight = {0: 0, 1: 1}
-    else:
-        medium_weight = {finetune_medium: 1, 1 - finetune_medium: 0}
-    metric_weight = {
-        "watch": 1,
-        "rating": 1,
-        "status": 0,
-    }
-    weights = [
-        medium_weight[x] * metric_weight[y] for x in ALL_MEDIUMS for y in ALL_METRICS
-    ]
-    weights = [x / sum(weights) for x in weights]
     # rescale losses so each task is equally weighted
     scale = {
         0: {
@@ -437,6 +423,23 @@ def make_task_weights():
         },
     }
     scale = [scale[x][y] for x in ALL_MEDIUMS for y in ALL_METRICS]
+    # task balancing
+    if finetune is None:
+        medium_weight = {0: 0, 1: 1}
+        metric_weight = {
+            "watch": 1,
+            "rating": 0.1,
+        }
+    else:
+        medium_weight = {finetune_medium: 1, 1 - finetune_medium: 0}
+        metric_weight = {
+            "watch": 1,
+            "rating": 0.1,
+        }
+    weights = [
+        medium_weight[x] * metric_weight[y] for x in ALL_MEDIUMS for y in ALL_METRICS
+    ]
+    weights = [x / sum(weights) for x in weights]
     return [(w / s) for (w, s) in zip(weights, scale)]
 
 
@@ -491,6 +494,13 @@ def ddp_setup():
 
 
 def training_config():
+    if finetune is not None:
+        with open(f"{datadir}/transformer.config") as f:
+            config = json.load(f)
+            config["forward"] = "finetune"
+            config["lora"] = True
+            config["learning_rate"] = 1e-4
+            return config
     num_items = {
         x: int(pd.read_csv(f"{datadir}/{y}.csv").matchedid.max()) + 1
         for (x, y) in {0: "manga", 1: "anime"}.items()
@@ -514,8 +524,9 @@ def training_config():
         "causal": False,
         "min_ts": min_ts,
         "max_ts": max_ts,
-        "forward": "pretrain" if finetune is None else "finetune",
-        "lora": finetune is not None,
+        "learning_rate": 2e-4,
+        "forward": "pretrain",
+        "lora": False,
     }
 
 
@@ -525,7 +536,7 @@ def train():
     world_size = int(os.environ["WORLD_SIZE"])
     logger = get_logger(rank, "transformer")
     logger.setLevel(logging.DEBUG)
-    batch_size = 512 if finetune is None else 16
+    batch_size = 512 if finetune is None else 32
     num_epochs = 1024
     assert batch_size % world_size == 0
     baselines = get_baselines(rank)
@@ -574,7 +585,7 @@ def train():
     model = DDP(
         model, device_ids=[rank], output_device=rank, find_unused_parameters=True
     )
-    optimizer = create_optimizer(model)
+    optimizer = create_optimizer(model, config)
     scheduler = create_learning_rate_schedule(
         optimizer, batch_size * max_seq_len, num_epochs
     )
