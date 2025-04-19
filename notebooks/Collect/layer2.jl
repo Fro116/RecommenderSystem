@@ -1836,12 +1836,23 @@ function animeplanet_get_list(
     page::Integer,
     expand_pagelimit::Bool,
 )
+    if expand_pagelimit
+        params = Dict("per_page" => 560)
+        url = string(
+            HTTP.URI("https://www.anime-planet.com/users/$username/$medium"; query = params),
+        )
+        r = request(resource, "GET", url, Dict("sessionid" => sessionid))
+        text = parse_animeplanet_response(resource, r, x -> !occursin("<title>Search Results for $username", x))
+        if text isa HTTP.Response
+            logstatus("animeplanet_get_list", text, url)
+            return text
+        end
+        ret = Dict("nextpage" => page)
+        return HTTP.Response(200, encode(ret, :msgpack)...)
+    end
     params = Dict{String,Any}("sort" => "user_updated", "order" => "desc")
     if page != 1
         params["page"] = page
-    end
-    if expand_pagelimit
-        params = Dict("per_page" => 560)
     end
     url = string(
         HTTP.URI("https://www.anime-planet.com/users/$username/$medium"; query = params),
@@ -1862,10 +1873,9 @@ function animeplanet_get_list(
     ])
     next_page = page + 1 in page_numbers
     if default_pagelimit && next_page
-        ret = Dict("extend_pagelimit" => true)
+        ret = Dict("expand_pagelimit" => true, "nextpage" => page)
         return HTTP.Response(200, encode(ret, :msgpack)...)
     end
-
     function get_score(line)
         matches = extract(line, """<div class='ttRating'>""", "</div>", multiple = true)
         if isempty(matches)
@@ -1873,7 +1883,6 @@ function animeplanet_get_list(
         end
         parse(Float64, only(matches))
     end
-
     function get_progress(line)
         if medium == "manga"
             m = extract(line, """</span> """, " chs<", optional = true)
@@ -1887,7 +1896,6 @@ function animeplanet_get_list(
         end
         parse(Int, m)
     end
-
     item_order = 0
     if page != 1
         item_order += 560 * (page - 1)
@@ -1913,7 +1921,10 @@ function animeplanet_get_list(
         end
         prevline = line
     end
-    ret = Dict("entries" => entries, "next" => next_page)
+    ret = Dict{String, Any}("entries" => entries)
+    if next_page
+        ret["nextpage"] = page + 1
+    end
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 

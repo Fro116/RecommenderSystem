@@ -1100,16 +1100,13 @@ function get_animeplanet_entries(medium::String, username::String)
                 return NOT_FOUND::Errors
             end
             data = decode(s)
-            if get(data, "extend_pagelimit", false)
-                expand_pagelimit = true
-                continue
-            end
-            expand_pagelimit = false
-            append!(entries, data["entries"])
-            if !data["next"]
+            expand_pagelimit = get(data, "expand_pagelimit", false)
+            append!(entries, get(data, "entries", []))
+            if "nextpage" in keys(data)
+                page = data["nextpage"]
+            else
                 return entries
             end
-            page += 1
         end
     finally
         request("resources", Dict("method" => "put", "token" => token))
