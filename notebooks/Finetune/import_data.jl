@@ -12,6 +12,7 @@ include("../Training/import_list.jl")
 
 const METRICS = ["rating", "watch", "plantowatch", "drop"]
 const SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
+const list_tag = ARGS[1]
 const datadir = "../../data/finetune"
 
 function blue_green_tag()
@@ -42,14 +43,16 @@ function download_data()
         ["media_relations.$m.jld2" for m in [0, 1]],
         ["baseline.$metric.$m.msgpack" for metric in ["rating"] for m in [0, 1]],
         ["bagofwords.$m.$metric.$stem" for m in [0, 1] for metric in ["rating"] for stem in ["csv", "pt"]],
-        ["transformer.$stem" for stem in ["csv", "pt"]],
+        ["transformer.$stem" for stem in ["csv", "pt", "config"]],
         ["images.csv"],
     )
     for fn in files
         cmd = "$download/training/$tag/$fn $datadir/$fn"
         run(`sh -c $cmd`)
     end
-    run(`rclone --retries=10 copyto r2:rsys/database/lists/latest $datadir/list_tag`)
+    open("$datadir/list_tag", "w") do f
+        write(f, list_tag)
+    end
     tag = read("$datadir/list_tag", String)
     run(`rclone --retries=10 copyto r2:rsys/database/lists/$tag/lists.csv.zstd $datadir/lists.csv.zstd`)
     run(`unzstd $datadir/lists.csv.zstd`)
@@ -95,7 +98,7 @@ function gen_splits()
                 recent_days = 1
                 outdir = test_dir
             else
-                recent_days = 7
+                recent_days = 1
                 outdir = train_dir
             end
             recent_ts = max_ts - 86400 * recent_days

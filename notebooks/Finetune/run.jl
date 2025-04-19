@@ -1,3 +1,5 @@
+const list_tag = ARGS[1]
+
 function torchrun(cmd)
     cmd = "cd ../Training && $cmd || (sleep 10 && $cmd) || (sleep 60 && $cmd)"
     run(`sh -c $cmd`)
@@ -16,7 +18,7 @@ function blue_green_deploy()
 end
 
 function finetune()
-    run(`julia import_data.jl`)
+    run(`julia import_data.jl $list_tag`)
     run(`julia transformer.jl`)
     for m in [0, 1]
         torchrun("torchrun --standalone --nproc_per_node=1 transformer.py --datadir ../../data/finetune --finetune ../../data/finetune/transformer.pt --finetune_medium $m")

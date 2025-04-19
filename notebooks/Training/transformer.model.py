@@ -119,6 +119,12 @@ class TransformerModel(nn.Module):
         )
         self.empty_loss = nn.Parameter(torch.tensor(0.))
 
+        if config["lora"]:
+            for name, param in self.embed.named_parameters():
+                param.requires_grad = False
+            for name, param in self.classifier.named_parameters():
+                param.requires_grad = False
+
         # create loss functions
         lossfn_map = {
             "watch": self.crossentropy,

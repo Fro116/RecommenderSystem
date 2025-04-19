@@ -418,8 +418,8 @@ def make_task_weights():
             "rating": 1.2371406205358377,
         },
         1: {
-            "watch": 3.2170518025452397,
-            "rating": 1.0569478898429487,
+            "watch": 3.157225522146773,
+            "rating": 1.0656737615337866,
         },
     }
     scale = [scale[x][y] for x in ALL_MEDIUMS for y in ALL_METRICS]
@@ -428,14 +428,14 @@ def make_task_weights():
         medium_weight = {0: 0, 1: 1}
         metric_weight = {
             "watch": 1,
-            "rating": 0.1,
+            "rating": 0.25,
         }
     else:
         medium_weight = {finetune_medium: 1, 1 - finetune_medium: 0}
-        metric_weight = {
-            "watch": 1,
-            "rating": 0.1,
-        }
+    metric_weight = {
+        "watch": 1,
+        "rating": 0.25,
+    }
     weights = [
         medium_weight[x] * metric_weight[y] for x in ALL_MEDIUMS for y in ALL_METRICS
     ]
