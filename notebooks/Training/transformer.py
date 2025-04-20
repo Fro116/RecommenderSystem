@@ -233,7 +233,6 @@ def to_device(data, rank, baselines):
                     )
     else:
         # mask
-        # TODO try masking cls token
         # TODO try masking strategies
         mask = (torch.rand(data["userid"].shape, device=rank) < mask_rate) & (
             d["time"] != cls_val
@@ -425,11 +424,7 @@ def make_task_weights():
     scale = [scale[x][y] for x in ALL_MEDIUMS for y in ALL_METRICS]
     # task balancing
     if finetune is None:
-        medium_weight = {0: 0, 1: 1}
-        metric_weight = {
-            "watch": 1,
-            "rating": 0.25,
-        }
+        medium_weight = {0: 0.25, 1: 1}
     else:
         medium_weight = {finetune_medium: 1, 1 - finetune_medium: 0}
     metric_weight = {
@@ -505,6 +500,10 @@ def training_config():
         x: int(pd.read_csv(f"{datadir}/{y}.csv").matchedid.max()) + 1
         for (x, y) in {0: "manga", 1: "anime"}.items()
     }
+    num_distinct_items = {
+        x: int(pd.read_csv(f"{datadir}/{y}.csv").distinctid.max()) + 1
+        for (x, y) in {0: "manga", 1: "anime"}.items()
+    }
     min_ts = datetime.datetime.strptime("20000101", "%Y%m%d").timestamp()
     with open(os.path.join(datadir, "latest"), "r") as f:
         max_ts = datetime.datetime.strptime(f.read().strip(), "%Y%m%d").timestamp()
@@ -513,11 +512,14 @@ def training_config():
         "num_heads": 32,
         "num_kv_heads": 16,
         "embed_dim": 2048,
-        "intermediate_dim": None,
+        "intermediate_dim": None, # TODO 8192
+        "distinctid_dim": 128,
         "max_sequence_length": max_seq_len,
         "vocab_sizes": {
             "0_matchedid": num_items[0],
             "1_matchedid": num_items[1],
+            "0_distinctid": num_distinct_items[0],
+            "1_distinctid": num_distinct_items[1],
             "status": 8,
         },
         "reserved_vals": 2,

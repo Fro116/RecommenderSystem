@@ -39,7 +39,6 @@ function get_data(data, userid)
         "0_distinctid" => Vector{Int32}(undef, N),
         "1_matchedid" => Vector{Int32}(undef, N),
         "1_distinctid" => Vector{Int32}(undef, N),
-        "source" => Vector{Int32}(undef, N),
         "time" => zeros(Float64, N),
         "delta_time" => zeros(Float64, N),
     )
@@ -66,7 +65,6 @@ function get_data(data, userid)
         d["$(m)_distinctid"][i] = x["distinctid"]
         d["$(n)_matchedid"][i] = cls_val
         d["$(n)_distinctid"][i] = cls_val
-        d["source"][i] = data["user"]["source"]
         if x["updated_at"] >= min_ts && x["updated_at"] <= max_ts
             d["time"][i] = x["updated_at"]
             d["delta_time"][i-1] = x["updated_at"] - last_ts

@@ -191,7 +191,6 @@ def predict_transformer(users):
         "0_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
         "1_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
         "1_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
-        "source": np.zeros((len(users), max_len), dtype=np.int32),
         "time": np.zeros((len(users), max_len), dtype=np.float64),
         "delta_time": np.zeros((len(users), max_len), dtype=np.float64),
     }
@@ -223,7 +222,6 @@ def predict_transformer(users):
             d[f"{m}_distinctid"][u, i] = x["distinctid"]
             d[f"{n}_matchedid"][u, i] = cls_val
             d[f"{n}_distinctid"][u, i] = cls_val
-            d["source"][u, i] = users[u]["user"]["source"]
             if x["updated_at"] >= min_ts and x["updated_at"] <= max_ts: # TODO think about max_ts
                 d["time"][u, i] = x["updated_at"]
                 d["delta_time"][u, i-1] = x["updated_at"] - last_ts

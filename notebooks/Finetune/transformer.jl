@@ -86,7 +86,6 @@ function get_data(data, userid)
         "0_distinctid" => zeros(Int32, max_seq_len),
         "1_matchedid" => zeros(Int32, max_seq_len),
         "1_distinctid" => zeros(Int32, max_seq_len),
-        "source" => zeros(Int32, max_seq_len),
         "time" => zeros(Float32, max_seq_len),
         "delta_time" => zeros(Float32, max_seq_len),
     )
@@ -125,7 +124,6 @@ function get_data(data, userid)
         d["$(m)_distinctid"][i] = x["distinctid"]
         d["$(n)_matchedid"][i] = cls_val
         d["$(n)_distinctid"][i] = cls_val
-        d["source"][i] = data["user"]["source"]
         if x["updated_at"] >= min_ts && x["updated_at"] <= max_ts
             d["time"][i] = x["updated_at"]
             d["delta_time"][i-1] = x["updated_at"] - last_ts

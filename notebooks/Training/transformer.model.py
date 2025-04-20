@@ -19,24 +19,52 @@ class InputEmbedding(nn.Module):
                 for m in ALL_MEDIUMS
             ]
         )
+        self.distinctid_embeddings = nn.ModuleList(
+            [
+                nn.Embedding(
+                    config["vocab_sizes"][f"{m}_distinctid"] + config["reserved_vals"],
+                    config["distinctid_dim"],
+                )
+                for m in ALL_MEDIUMS
+            ]
+        )
+        self.periodic_time_cos = nn.Parameter(torch.zeros(4))
+        self.periodic_time_sin = nn.Parameter(torch.zeros(4))
         N = sum(
             [
                 config["embed_dim"],
-                config["embed_dim"],
-                1,
+                config["distinctid_dim"],
+                1, # rating
                 (config["vocab_sizes"]["status"] + config["reserved_vals"]),
-                1,
-                1,
+                1, # time
+                1, # delta time
+                1, # progress
+                4, # periodic time cos
+                4, # periodic time sin
             ]
         )
         self.linear = nn.Linear(N, config["embed_dim"])
 
     def forward(self, d):
         config = self.config
-        item_embs = [
-            self.item_embeddings[m](d[f"{m}_matchedid"] + config["reserved_vals"])
-            for m in ALL_MEDIUMS
-        ]
+        item_emb_0 = self.item_embeddings[0](
+            d["0_matchedid"] + config["reserved_vals"]
+        )
+        item_emb_1 = self.item_embeddings[1](
+            d["1_matchedid"] + config["reserved_vals"]
+        )
+        item_emb = torch.where(
+            (d["0_matchedid"] >= 0).unsqueeze(-1), item_emb_0, item_emb_1
+        )
+        distinctid_emb_0 = self.distinctid_embeddings[0](
+            d["0_matchedid"] + config["reserved_vals"]
+        )
+        distinctid_emb_1 = self.distinctid_embeddings[1](
+            d["1_matchedid"] + config["reserved_vals"]
+        )
+        distinctid_emb = torch.where(
+            (d["0_matchedid"] >= 0).unsqueeze(-1), distinctid_emb_0, distinctid_emb_1
+        )
         rating_emb = d["rating"].reshape(*d["rating"].shape, 1)
         status_emb = torch.nn.functional.one_hot(
             (d["status"] + config["reserved_vals"]).to(torch.int64),
@@ -44,13 +72,20 @@ class InputEmbedding(nn.Module):
         )
         time_emb = d["time"].reshape(*d["time"].shape, 1)
         delta_time_emb = d["delta_time"].reshape(*d["time"].shape, 1)
+        progress_emb = d["progress"].reshape(*d["progress"].shape, 1)
+        periodic_time_cos_emb = torch.cos(d["periodic_time"] + self.periodic_time_cos)
+        periodic_time_sin_emb = torch.sin(d["periodic_time"] + self.periodic_time_sin)
         emb = torch.cat(
             (
-                *item_embs,
+                item_emb,
+                distinctid_emb,
                 rating_emb,
                 status_emb,
                 time_emb,
                 delta_time_emb,
+                progress_emb,
+                periodic_time_cos_emb,
+                periodic_time_sin_emb,
             ),
             dim=-1,
         )
@@ -92,54 +127,40 @@ class Llama3(nn.Module):
 class TransformerModel(nn.Module):
     def __init__(self, config):
         super(TransformerModel, self).__init__()
+        # create model
         self.config = config
         self.embed = InputEmbedding(config)
         self.transformers = Llama3(config)
-        def create_head(medium, metric):
-            if metric == "watch":
-                x = self.embed.item_embeddings[medium]
-                weight_tied_linear = nn.Linear(*reversed(x.weight.shape))
-                x.weight = weight_tied_linear.weight
-                return nn.Sequential(weight_tied_linear, nn.LogSoftmax(dim=-1))
-            elif metric == "rating":
-                return nn.Sequential(
-                    nn.Linear(2 * config["embed_dim"], config["embed_dim"]),
-                    nn.GELU(),
-                    nn.Linear(config["embed_dim"], 1),
-                )
-            else:
-                assert False
-            return nn.Sequential(*base)
-        self.classifier = nn.ModuleList(
-            [
-                create_head(medium, metric)
-                for medium in ALL_MEDIUMS
-                for metric in ALL_METRICS
-            ]
-        )
-        self.empty_loss = nn.Parameter(torch.tensor(0.))
 
+        def create_lm_head(medium):
+            x = self.embed.item_embeddings[medium]
+            weight_tied_linear = nn.Linear(*reversed(x.weight.shape))
+            x.weight = weight_tied_linear.weight
+            return nn.Sequential(weight_tied_linear, nn.LogSoftmax(dim=-1))
+
+        self.watch_heads = nn.ModuleList(
+            [create_lm_head(medium) for medium in ALL_MEDIUMS]
+        )
+        self.rating_head = nn.Sequential(
+            nn.Linear(2 * config["embed_dim"], config["embed_dim"]),
+            nn.GELU(),
+            nn.Linear(config["embed_dim"], 1),
+        )
+        self.empty_loss = nn.Parameter(torch.tensor(0.0))
         if config["lora"]:
             for name, param in self.embed.named_parameters():
                 param.requires_grad = False
             for name, param in self.classifier.named_parameters():
                 param.requires_grad = False
-
         # create loss functions
-        lossfn_map = {
+        self.lossfn_map = {
             "watch": self.crossentropy,
             "rating": self.mse,
         }
-        self.lossfns = [
-            lossfn_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
-        ]
-        evaluate_map = {
+        self.evaluate_map = {
             "watch": self.crossentropy,
             "rating": self.moments,
         }
-        self.evaluatefns = [
-            evaluate_map[metric] for _ in ALL_MEDIUMS for metric in ALL_METRICS
-        ]
         if config["forward"] == "pretrain":
             self.forward = self.pretrain_forward
         elif config["forward"] == "finetune":
@@ -163,12 +184,24 @@ class TransformerModel(nn.Module):
         return (-x * y * w).sum() / w.sum()
 
     def to_embedding(self, d):
+        # linear time embedding
         min_ts = self.config["min_ts"]
         max_ts = self.config["max_ts"]
         ts = d["time"].clip(min_ts, max_ts)
         d["time"] = ((ts - min_ts) / (max_ts - min_ts)).to(torch.float32)
         dts = d["delta_time"].clip(0, max_ts - min_ts)
         d["delta_time"] = (dts / (max_ts - min_ts)).to(torch.float32)
+        # periodic time embedding
+        periodic_ts = ts.reshape(*ts.shape, 1)
+        secs_in_day = 86400
+        secs_in_week = secs_in_day * 7
+        secs_in_year = secs_in_day * 365.25
+        secs_in_season = secs_in_year / 4
+        periods = [secs_in_day, secs_in_week, secs_in_season, secs_in_year]
+        periodic_ts = torch.cat([2 * np.pi * periodic_ts / p for p in periods], dim=-1)
+        d["periodic_time"] = periodic_ts.to(torch.float32)
+        # other features
+        d["progress"] = d["progress"].clip(0, 1)
         userid = d["userid"]
         m, n = userid.shape
 
@@ -188,12 +221,9 @@ class TransformerModel(nn.Module):
 
     def pretrain_forward(self, d, evaluate):
         e = self.to_embedding(d)
-        lossfns = self.evaluatefns if evaluate else self.lossfns
         losses = []
-        i = -1
         for medium in ALL_MEDIUMS:
             for metric in ALL_METRICS:
-                i += 1
                 weights = d[f"{medium}.{metric}.weight"]
                 if not torch.is_nonzero(weights.sum()):
                     losses.append(torch.square(self.empty_loss).sum())
@@ -206,21 +236,29 @@ class TransformerModel(nn.Module):
                 labels = labels[bp[0], bp[1]]
                 positions = positions[bp[0], bp[1]]
                 weights = weights[bp[0], bp[1]]
-                classifier = self.classifier[i]
                 if metric == "watch":
-                    preds = classifier(embed).gather(dim=-1, index=positions).reshape(-1)
+                    preds = (
+                        self.watch_heads[medium](embed)
+                        .gather(dim=-1, index=positions)
+                        .reshape(-1)
+                    )
                 elif metric == "rating":
                     X = torch.cat(
                         (
                             embed,
-                            self.embed.item_embeddings[medium](positions.squeeze(dim=1)),
+                            self.embed.item_embeddings[medium](
+                                positions.squeeze(dim=1)
+                            ),
                         ),
                         dim=-1,
                     )
-                    preds = classifier(X).reshape(-1)
+                    preds = self.rating_head(X).reshape(-1)
                 else:
                     assert False
-                losses.append(lossfns[i](preds, labels, weights))
+                lossfn = (
+                    self.evaluate_map[metric] if evaluate else self.lossfn_map[metric]
+                )
+                losses.append(lossfn(preds, labels, weights))
         return losses
 
     def finetune_forward(self, d, evaluate):
@@ -229,17 +267,14 @@ class TransformerModel(nn.Module):
         embed = e[bp[0], bp[1], :]
         lossfns = self.evaluatefns if evaluate else self.lossfns
         losses = []
-        i = -1
         for medium in ALL_MEDIUMS:
             for metric in ALL_METRICS:
-                i += 1
                 weights = d[f"{medium}.{metric}.weight"]
                 if not torch.is_nonzero(weights.sum()):
                     losses.append(torch.square(self.empty_loss).sum())
                     continue
-                classifier = self.classifier[i]
                 if metric == "watch":
-                    preds = classifier(embed)
+                    preds = self.watch_heads[medium](embed)
                     labels = d[f"{medium}.{metric}.label"]
                 elif metric == "rating":
                     item_bp = torch.nonzero(weights, as_tuple=True)
@@ -250,12 +285,15 @@ class TransformerModel(nn.Module):
                         ),
                         dim=-1,
                     )
-                    preds = classifier(X).reshape(-1)
+                    preds = self.rating_head(X).reshape(-1)
                     labels = d[f"{medium}.{metric}.label"][item_bp[0], item_bp[1]]
                     weights = weights[item_bp[0], item_bp[1]]
                 else:
                     assert False
-                losses.append(lossfns[i](preds, labels, weights))
+                lossfn = (
+                    self.evaluate_map[metric] if evaluate else self.lossfn_map[metric]
+                )
+                losses.append(lossfn(preds, labels, weights))
         return losses
 
     def embed_forward(self, d):
