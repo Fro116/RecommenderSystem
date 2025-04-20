@@ -1,111 +1,55 @@
 import h5py
 import msgpack
 import numpy as np
-import pandas as pd
 import torch
-import torch.nn as nn
-import torchtune.models.llama3
-import warnings
 
-warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
+datadir = "../../data/finetune"
 
 
-with open("../Training/bagofwords.model.py") as f:
-    exec(f.read())
-
-with open("../Training/transformer.model.py") as f:
-    exec(f.read())
-
-
-def register_bagofwords(medium, metric):
-    m = BagOfWordsModel(datadir, medium, metric)
-    fn = f"{datadir}/bagofwords.{medium}.{metric}.finetune.pt"
-    m.load_state_dict(torch.load(fn, weights_only=True, map_location="cpu"))
-    return {
-        "name": f"bagofwords.{medium}.{metric}",
-        "bias": m.classifier.bias.detach().numpy(),
-        "weight": m.classifier.weight.detach().numpy(),
-    }
-
-
-def register_baseline(medium, metric):
-    with open(f"{datadir}/baseline.rating.{medium}.msgpack", "rb") as f:
+def register_baseline(medium):
+    metric = "rating"
+    with open(f"{datadir}/baseline.{metric}.{medium}.msgpack", "rb") as f:
         baseline = msgpack.unpackb(f.read(), strict_map_key=False)
-        baseline["bias"] = np.array(baseline["bias"])
-        baseline["weight"] = np.array([baseline["weight"]])
-        if metric not in ["rating"]:
-            baseline["bias"] *= 0
-            baseline["weight"] *= 0            
         return {
-            "name": f"baseline.{medium}.{metric}",
-            "bias": baseline["bias"],
-            "weight": baseline["weight"],
+            f"baseline.{medium}.{metric}.weight": np.array(baseline["weight"]),
+            f"baseline.{medium}.{metric}.bias": np.array(baseline["bias"]),
         }
 
 
-def register_transformer(medium, metric):
-    # TODO serialize config
-    num_items = {
-        x: pd.read_csv(f"{datadir}/{y}.csv").matchedid.max() + 1
-        for (x, y) in {0: "manga", 1: "anime"}.items()
-    }
-    config = {
-        "num_layers": 4,
-        "num_heads": 12,
-        "num_kv_heads": 12,
-        "embed_size": 768,
-        "intermediate_dim": None,
-        "max_sequence_length": max_seq_len,
-        "vocab_names": [
-            "0_matchedid",
-            "1_matchedid",
-            "rating",
-            "status",
-            "updated_at",
-            "delta_time",
-        ],
-        "vocab_sizes": [
-            num_items[0],
-            num_items[1],
-            None,
-            8,
-            None,
-            None,
-        ],
-        "forward": "finetune",
-    }
-    m = TransformerModel(config)
-    fn = f"{datadir}/transformer.{medium}.finetune.pt"
-    m.load_state_dict(torch.load(fn, weights_only=True, map_location="cpu"))
-    classifier = m.classifier[m.names.index(f"{medium}.{metric}")]
-    M1 = classifier[0]
-    M2 = classifier[1]
-    M = M2.weight @ M1.weight
-    b = M2.weight @ M1.bias + M2.bias
-    M = M[: num_items[medium], :]
-    b = b[: num_items[medium]]
+def register_bagofwords(medium):
+    metric = "rating"
+    fn = f"{datadir}/bagofwords.{medium}.{metric}.finetune.pt"
+    d = torch.load(fn, weights_only=True, map_location="cpu")
     return {
-        "name": f"transformer.{medium}.{metric}",
-        "bias": b.detach().numpy(),
-        "weight": M.detach().numpy(),
+        f"bagofwords.{medium}.{metric}.weight": d["classifier.weight"].numpy(),
+        f"bagofwords.{medium}.{metric}.bias": d["classifier.bias"].numpy(),
     }
 
+
+def register_transformer(medium):
+    fn = f"{datadir}/transformer.{medium}.finetune.pt"
+    d = torch.load(fn, weights_only=True, map_location="cpu")
+    m = medium
+    watch = 2 * m
+    rating = 2 * m + 1
+    return {
+        f"transformer.{m}.embedding": d[f"classifier.{watch}.0.weight"].numpy(),
+        f"transformer.{m}.watch.bias": d[f"classifier.{watch}.0.bias"].numpy(),
+        f"transformer.{m}.rating.weight.1": d[f"classifier.{rating}.0.weight"].numpy(),
+        f"transformer.{m}.rating.bias.1": d[f"classifier.{rating}.0.bias"].numpy(),
+        f"transformer.{m}.rating.weight.2": d[f"classifier.{rating}.2.weight"].numpy(),
+        f"transformer.{m}.rating.bias.2": d[f"classifier.{rating}.2.bias"].numpy(),
+    }
 
 def register():
-    mediums = [0, 1]
-    metrics = ["watch", "rating", "status"]
-    models = []
-    for medium in mediums:
-        for metric in metrics:
-            models.append(register_transformer(medium, metric))
-            models.append(register_baseline(medium, metric))
-        for metric in ["rating"]:
-            models.append(register_bagofwords(medium, metric))
-
+    ret = {}
+    for m in [0, 1]:
+        ret.update(register_baseline(m))
+        ret.update(register_bagofwords(m))
+        ret.update(register_transformer(m))
     with h5py.File(f"{datadir}/model.registry.h5", "w") as hf:
-        for x in models:
-            hf.create_dataset(f'{x["name"]}.bias', data=x["bias"])
-            hf.create_dataset(f'{x["name"]}.weight', data=x["weight"])
+        for k, v in ret.items():
+            hf.create_dataset(k, data=v)
 
 
 datadir = "../../data/finetune"

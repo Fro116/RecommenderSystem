@@ -139,7 +139,7 @@ function get_data(data, userid)
         d[k][i] = mask_val
     end    
     d["userid"][i] = userid
-    d["delta_time"][i-1] = (max_ts - last_ts) / (max_ts - min_ts)
+    d["delta_time"][i-1] = max_ts - last_ts
     d["mask_index"][i] = 1
     for metric in ["rating"]
         d[metric][i] = 0

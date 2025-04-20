@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import datetime
+import json
 import logging
 import os
 import queue
@@ -19,6 +20,7 @@ import torch
 import torch.nn as nn
 import torchtune.models.llama3
 from torch.nn.attention.flex_attention import create_block_mask, and_masks
+from torchtune.modules.peft import get_adapter_params, set_trainable_params
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 import warnings
@@ -182,7 +184,8 @@ def predict_bagofwords(users):
 
 
 def predict_transformer(users):
-    max_len = max(min(max_seq_len, len(x["items"]) + 2) for x in users)
+    extra_tokens = 2 # cls and mask
+    max_len = max(min(max_seq_len, len(x["items"]) + extra_tokens) for x in users)
     d = {
         "status": np.zeros((len(users), max_len), dtype=np.int32),
         "rating": np.zeros((len(users), max_len), dtype=np.float32),
@@ -191,9 +194,9 @@ def predict_transformer(users):
         "0_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
         "1_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
         "1_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
-        "updated_at": np.zeros((len(users), max_len), dtype=np.float32),
-        "delta_time": np.zeros((len(users), max_len), dtype=np.float32),
         "source": np.zeros((len(users), max_len), dtype=np.int32),
+        "time": np.zeros((len(users), max_len), dtype=np.float64),
+        "delta_time": np.zeros((len(users), max_len), dtype=np.float64),
     }
     input_fields = list(d.keys())
     d["userid"] = np.zeros((len(users), max_len), dtype=np.int32)
@@ -207,11 +210,9 @@ def predict_transformer(users):
             d[k][u, 0] = cls_val
         d["userid"][u, 0] = userid
         d["rating"][u, 0] = 0
-        skipped = 0
         items = users[u]["items"]
-        while len(items) > max_len - 2:
-            items = items[1:]
-            skipped += 1
+        if len(items) > max_len - extra_tokens:
+            items = items[-(max_len - extra_tokens):]
         last_ts = min_ts
         i = 0
         for x in items:
@@ -225,31 +226,26 @@ def predict_transformer(users):
             d[f"{m}_distinctid"][u, i] = x["distinctid"]
             d[f"{n}_matchedid"][u, i] = cls_val
             d[f"{n}_distinctid"][u, i] = cls_val
-            d["updated_at"][u, i] = np.clip(
-                (x["updated_at"] - min_ts) / (max_ts - min_ts), 0, 1
-            )
-            if x["updated_at"] >= min_ts and x["updated_at"] <= max_ts: # TODO think about max_ts
-                d["delta_time"][u, i-1] = (x["updated_at"] - last_ts) / (max_ts - min_ts)
-                last_ts = x["updated_at"]
             d["source"][u, i] = users[u]["user"]["source"]
+            if x["updated_at"] >= min_ts and x["updated_at"] <= max_ts: # TODO think about max_ts
+                d["time"][u, i] = x["updated_at"]
+                d["delta_time"][u, i-1] = x["updated_at"] - last_ts
+                last_ts = x["updated_at"]
             d["userid"][u, i] = userid
             d["mask_index"][u, i] = 0
         i += 1
         for k in input_fields:
             d[k][u, i] = mask_val
         d["userid"][u, i] = userid
-        d["delta_time"][u, i-1] = (max_ts - last_ts) / (max_ts - min_ts)
+        d["delta_time"][u, i-1] = max_ts - last_ts
         d["rating"][u, i] = 0
-        if causal:
-            d["mask_index"][u, i-1] = 1
-        else:
-            d["mask_index"][u, i] = 1
+        d["mask_index"][u, i] = 1
     d = {k: torch.tensor(v).to(device) for k, v in d.items()}
     ret = {}
     for medium in mediums:
         with torch.no_grad():
             with torch.amp.autocast(device, dtype=torch.bfloat16):
-                e = models[f"transformer.{medium}"](d).to("cpu")
+                e = models[f"transformer.{medium}"](d.copy()).to("cpu")
                 ret[f"transformer.{medium}"] = e
     ret = [{k: v[i, :].tolist() for k, v in ret.items()} for i in range(len(users))]
     return ret
@@ -303,36 +299,10 @@ def load_bagofwords_model(medium, metric):
 
 
 def load_transformer_model(medium):
-    # TODO serialize config
-    num_items = {
-        x: pd.read_csv(f"{datadir}/{y}.csv").matchedid.max() + 1
-        for (x, y) in {0: "manga", 1: "anime"}.items()
-    }
-    config = {
-        "num_layers": 4,
-        "num_heads": 12,
-        "num_kv_heads": 12,
-        "embed_size": 768,
-        "intermediate_dim": None,
-        "max_sequence_length": max_seq_len,
-        "vocab_names": [
-            "0_matchedid",
-            "1_matchedid",
-            "rating",
-            "status",
-            "updated_at",
-            "delta_time",
-        ],
-        "vocab_sizes": [
-            num_items[0],
-            num_items[1],
-            None,
-            8,
-            None,
-            None,
-        ],
-        "forward": "embed",
-    }
+    with open(f"{datadir}/transformer.config") as f:
+        config = json.load(f)
+        config["lora"] = True
+        config["forward"] = "embed"
     m = TransformerModel(config)
     fn = f"{datadir}/transformer.{medium}.finetune.pt"
     m.load_state_dict(torch.load(fn, weights_only=True, map_location=device))
@@ -343,9 +313,9 @@ def load_transformer_model(medium):
 
 logging.warning("STARTUP BEGIN")
 starttime = time.time()
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda"
 mediums = [0, 1]
-metrics = ["watch", "rating", "status"]
+metrics = ["watch", "rating"]
 bagofwords_metrics = ["rating"]
 datadir = "../../data/finetune"
 models = {}
@@ -360,7 +330,7 @@ num_items = {
 planned_status = 4
 baselines = get_baselines(device)
 request_buffer = RequestBuffer(
-    batch_size=256, timeout_seconds=0.01, max_queue_size=1024
+    batch_size=32, timeout_seconds=0.01, max_queue_size=1024
 )
 with open(f"{datadir}/latest") as f:
     version = f.read()
@@ -374,7 +344,6 @@ max_ts = int(
     .replace(tzinfo=datetime.timezone.utc)
     .timestamp()
 )
-causal = False
 predict([{"user": {"source": "mal"}, "items": []}])
 logging.warning(f"STARTUP END AFTER {time.time() - starttime}s")
 app = FastAPI()
