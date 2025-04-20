@@ -1,5 +1,3 @@
-const list_tag = ARGS[1]
-
 function torchrun(cmd)
     cmd = "cd ../Training && $cmd || (sleep 10 && $cmd) || (sleep 60 && $cmd)"
     run(`sh -c $cmd`)
@@ -18,6 +16,7 @@ function blue_green_deploy()
 end
 
 function finetune()
+    list_tag = ARGS[1]
     run(`julia import_data.jl $list_tag`)
     run(`julia transformer.jl`)
     for m in [0, 1]

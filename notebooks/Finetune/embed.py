@@ -129,11 +129,8 @@ def predict_baseline(users):
         d = {}
         biases = get_user_bias(users[u])
         for m in mediums:
-            for metric in metrics:
-                if metric == "rating":
-                    d[f"baseline.{m}.{metric}"] = [biases[metric][m]]
-                else:
-                    d[f"baseline.{m}.{metric}"] = [0]
+            for metric in ["rating"]:
+                d[f"baseline.{m}.{metric}"] = [biases[metric][m]]
         ret.append(d)
         for x in users[u]["items"]:
             for metric in ["rating"]:

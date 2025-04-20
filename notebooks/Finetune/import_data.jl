@@ -79,6 +79,7 @@ function gen_splits()
         max_df_ts = maximum(parse.(Float64, df.db_refreshed_at))
         max_ts = max(max_ts, max_df_ts)
     end
+    # TODO think about timezone skew between db_refreshed_at and updated_at
     logtag("IMPORT_DATA", "using max_ts of $max_ts")
     rm("$datadir/users", recursive = true, force = true)
     @showprogress for (idx, f) in

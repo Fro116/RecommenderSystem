@@ -2,9 +2,6 @@ module embed
 
 import Base64
 import Oxygen
-import JLD2
-import NNlib: logsoftmax, sigmoid
-import SparseArrays
 include("../Training/import_list.jl")
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
@@ -142,7 +139,14 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     elseif action["type"] == "refresh_user"
         username = sanitize(action["username"])
         source = action["source"]
-        if !refresh_user(source, username)
+        idx = nothing
+        for (i, x) in Iterators.enumerate(state["users"])
+            if x["username"] == username && x["source"] == source
+                idx = i
+                break
+            end
+        end
+        if isnothing(idx) || !refresh_user(source, username)
             return HTTP.Response(200, encode(Dict(), :json, encoding)...)
         end
         r_embed = HTTP.post(
@@ -161,7 +165,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     else
         @assert false
     end
-    view, total = compute(state, d["pagination"])
+    view, total = render(state, d["pagination"])
     ret = Dict(
         "state" => Base64.base64encode(MsgPack.pack(state)),
         "view" => view,

@@ -13,11 +13,10 @@ function embed_py(basedir::String)
     copy("notebooks/Finetune/embed.py", app)
     mediums = [0, 1]
     files = vcat(
-        ["manga.csv", "anime.csv"],
-        ["latest", "training_tag"],
+        ["manga.csv", "anime.csv", "latest", "training_tag", "transformer.config"],
+        ["baseline.$metric.$m.msgpack" for m in mediums for metric in ["rating"]],
         ["bagofwords.$m.$metric.finetune.pt" for m in mediums for metric in ["rating"]],
         ["transformer.$m.finetune.pt" for m in mediums],
-        ["baseline.$metric.$m.msgpack" for m in mediums for metric in ["rating"]],
     )
     for f in files
         copy("data/finetune/$f", app)

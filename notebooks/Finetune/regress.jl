@@ -48,10 +48,9 @@ function get_users()
     stop_server(port)
     for u in rets
         for (k, v) in u["embeds"]
-            if k == "version"
-                continue
+            if typeof(v) == Vector{Any}
+                u["embeds"][k] = Float32.(v)
             end
-            u["embeds"][k] = Vector{Float32}(v)
         end
     end
     rets
@@ -135,6 +134,7 @@ function rating_regress(users, registry, medium)
                 registry["bagofwords.$m.rating.weight"][idx, :]' *
                 u["embeds"]["bagofwords.$m.rating"] +
                 registry["bagofwords.$m.rating.bias"][idx]
+            # todo vectorize to align with render.jl
             p_transformer = let
                 a = registry["transformer.$m.embedding"][idx, :]
                 h = vcat(u["embeds"]["transformer.$m"], a)

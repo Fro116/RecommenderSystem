@@ -1,5 +1,5 @@
 # RecommenderSystem
-This is a recommender system for anime and manga that is trained on over 1.5 billion user-item interactions from MyAnimeList, AniList, Kitsu, and Anime-Planet. See `notebooks/README.ipynb` for usage instructions.
+This is a recommender system for anime and manga that is trained on over 1.5 billion user-item interactions from MyAnimeList, AniList, Kitsu, and Anime-Planet.
 
 Details on the recommender system can be found by inspecting the source code at `notebooks`. The main steps are
 1. Stitching multiple snapshots of a user's list to create a timestamped history of interactions
@@ -7,7 +7,6 @@ Details on the recommender system can be found by inspecting the source code at 
 3. Finetuning the model on recent data to predict, for each (user, item) pair:
    * the probability that this item is the user's next positive interaction
    * the user's rating for the item
-   * the user's watching status
 
 Once trained, the models are containerized and deployed on gpu instances. A website, which is currently in private beta, queries the endpoint and lets users view their recommendations. The models are continuously updated to incorporate new items as they release and to reduce temporal drift.
 
