@@ -22,6 +22,7 @@ dependencies = [
     ("MsgPack", "1.2.1"),
     ("NBInclude", "2.4.0"),
     ("NNlib", "0.9.26"),
+    ("OpenCV", "4.6.1"),
     ("Optim", "1.10.0"),
     ("Oxygen", "1.5.15"),
     ("ProgressMeter", "1.10.2"),

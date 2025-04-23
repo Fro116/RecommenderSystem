@@ -75,7 +75,7 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
         setError('');
       }
 
-      const limit = isMobile ? 10 : 25;
+      const limit = isMobile ? 12 : 24;
       const extendedPayload = { ...payload, pagination: { offset, limit } };
       const payloadString = JSON.stringify(extendedPayload);
       const compressedPayload = pako.gzip(payloadString);

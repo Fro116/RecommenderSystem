@@ -47,9 +47,7 @@ end
 
 @memoize function get_missing_images()
     error_images = [
-        (1, "404.1.medium.webp", 1174, 1702),
         (1, "404.1.large.webp", 2348, 3404),
-        (2, "404.2.medium.webp", 798, 1156),
         (2, "404.2.large.webp", 1596, 2312),
     ]
     groups = Dict()

@@ -2,6 +2,8 @@ import CSV
 import DataFrames
 import Images
 import Glob
+import Logging
+import OpenCV
 import ProgressMeter: @showprogress
 import Random
 
@@ -51,15 +53,33 @@ function get_diffs()
     matched = intersect(src_images, dst_images)
     to_add = ["$k.$(src_exts[k])" for k in setdiff(src_images, dst_images)]
     to_delete =
-        ["$k.$m.webp" for k in setdiff(dst_images, src_images) for m in ["medium", "large"]]
+        ["$k.$m.webp" for k in setdiff(dst_images, src_images) for m in ["large"]]
     matched, to_add, to_delete
+end
+
+function downsample(images)
+    @showprogress for name in images
+        fn = "$datadir/images/$name"
+        while true
+            img = OpenCV.imread(fn)
+            width, height = OpenCV.size(img)[end-1:end]
+            should_downsample = height >= 2000 || width >= 2000
+            if !should_downsample
+                break
+            end
+            width = Int32(div(width, 2))
+            height = Int32(div(height, 2))
+            img = OpenCV.resize(img, OpenCV.Size(width, height))
+            OpenCV.imwrite(fn, img)
+        end
+    end
 end
 
 function super_resolution(src, dst)
     @assert isdir(src) && isdir(dst)
     abssrc = abspath(src)
     absdst = abspath(dst)
-    models = Dict("medium" => "noise_scale2x", "large" => "noise_scale4x")
+    models = Dict("large" => "noise_scale4x")
     for (tag, model) in models
         cmds = [
             "cd $basedir/../nunif",
@@ -81,6 +101,7 @@ end
 
 function sr_images(images)
     tmpdir = "$datadir/tmp"
+    rm("$datadir/srimages", recursive=true, force=true)
     mkpath("$datadir/srimages")
     @showprogress for batch in collect(Iterators.partition(images, 1000))
         rm(tmpdir, recursive = true, force = true)
@@ -93,11 +114,11 @@ function sr_images(images)
         super_resolution("$tmpdir/src", "$tmpdir/dst")
         for i = 1:length(batch)
             name, ext = split(batch[i], ".")
-            for x in ["medium", "large"]
+            for x in ["large"]
                 if !ispath("$tmpdir/dst/$i.$x.webp")
                     logtag(
                         "IMAGES",
-                        "super_resolution of $name to $tmpdir/dst/$i.$x.webp failed",
+                        "super_resolution of $name.$ext to $tmpdir/dst/$i.$x.webp failed",
                     )
                     continue
                 end
@@ -110,7 +131,7 @@ end
 function save_image_metadata(to_add, to_delete)
     df = CSV.read("$datadir/images.csv", DataFrames.DataFrame)
     df = filter(x -> x.saved, df)
-    sizes = ["medium", "large"]
+    sizes = ["large"]
     rows = Any[nothing for _ = 1:DataFrames.nrow(df)*length(sizes)]
     Threads.@threads for i = 1:DataFrames.nrow(df)
         source = df.source[i]
@@ -145,9 +166,16 @@ function save_image_metadata(to_add, to_delete)
 end
 
 function upload_images(to_add, to_delete)
-    qrun(`rclone --retries=10 copyto $datadir/srimages r2:cdn/images/cards`)
-    @showprogress for fn in to_delete
-        qrun(`rclone --retries=10 delete r2:cdn/images/cards/$fn`)
+    if !isempty(to_add) && !isempty(readdir("$datadir/srimages"))
+        run(`rclone -Pv --retries=10 copyto $datadir/srimages r2:cdn/images/cards`)
+    end
+    if !isempty(to_delete))
+        open("$datadir/todelete", "w") do f
+            for fn in to_delete
+                write(f, "$fn\n")
+            end
+        end
+        run(`rclone -Pv --retries=10 delete r2:cdn/images/cards --files-from=$datadir/todelete --no-traverse`)
     end
     qrun(
         `rclone --retries=10 copyto $datadir/srimages.csv r2:rsys/database/import/images.csv`,
@@ -163,6 +191,7 @@ function encode_images()
         "IMAGES",
         "keeping $(length(matched)) adding $(length(to_add)) and deleting $(length(to_delete))",
     )
+    downsample(to_add)
     sr_images(to_add)
     save_image_metadata(to_add, to_delete)
     upload_images(to_add, to_delete)

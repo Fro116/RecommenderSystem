@@ -4,8 +4,27 @@ include("../julia_utils/multithreading.jl")
 include("../julia_utils/scheduling.jl")
 include("../julia_utils/stdout.jl")
 
+function archive(date)
+    logtag("BACKUP", "archive $date")
+    datadir = "../../data/collect/archive"
+    rm(datadir, recursive=true, force=true)
+    mkpath(datadir)
+    bucket = read("../../secrets/gcp.bucket.backup.txt", String)
+    download_cmd = "rclone --retries=10 copyto r2:rsys/database/collect/$date $datadir/$date"
+    if !endswith(date, "01")
+        download_cmd *= " --exclude images.tar"
+    end
+    cmds = [
+        download_cmd,
+        "gcloud auth login --quiet --cred-file=../../secrets/gcp.auth.json",
+        "gcloud storage cp -r $datadir/$date $bucket/$date",
+    ]
+    cmd = join(cmds, " && ")
+    run(`sh -c $cmd`)
+end
+
 function backup()
-    logtag("BACKUP", "DATABASES")
+    logtag("BACKUP", "databases")
     tables = [
         "mal_userids",
         "mal_users",
@@ -43,6 +62,7 @@ function backup()
     save = replace(save_template, "{FILE}" => "latest")
     cmd = "echo -n $date $save"
     run(`sh -c $cmd`)
+    archive(date)
 end
 
 @scheduled "BACKUP" "01:00" @handle_errors backup()

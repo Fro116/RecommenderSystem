@@ -2,7 +2,6 @@ import CSV
 import DataFrames
 import Glob
 import Memoize: @memoize
-import ProgressMeter
 import ProgressMeter: @showprogress
 
 include("../../julia_utils/http.jl")
