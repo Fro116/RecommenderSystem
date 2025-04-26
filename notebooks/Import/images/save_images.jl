@@ -169,7 +169,7 @@ function upload_images(to_add, to_delete)
     if !isempty(to_add) && !isempty(readdir("$datadir/srimages"))
         run(`rclone -Pv --retries=10 copyto $datadir/srimages r2:cdn/images/cards`)
     end
-    if !isempty(to_delete))
+    if !isempty(to_delete)
         open("$datadir/todelete", "w") do f
             for fn in to_delete
                 write(f, "$fn\n")

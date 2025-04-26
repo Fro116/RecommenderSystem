@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # julia
 RUN curl -fsSL https://install.julialang.org | sh -s -- -y
 ENV PATH="/root/.juliaup/bin:$PATH"
-ENV julia_version=1.11.2
+ENV julia_version=1.11.5
 RUN juliaup add $julia_version && juliaup default $julia_version
 COPY requirements.jl .
 RUN julia requirements.jl

@@ -229,4 +229,3 @@ function save_lists(datetag)
 end
 
 save_lists(ARGS[1])
-
