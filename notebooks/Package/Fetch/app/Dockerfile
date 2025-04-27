@@ -21,7 +21,7 @@ RUN julia requirements.jl
 COPY layer1 layer1
 COPY layer2 layer2
 COPY layer3 layer3
-COPY layer4 layer4
+COPY database database
 
 COPY compile.sh compile.jl .
 RUN ./compile.sh

@@ -23,3 +23,14 @@ CREATE TABLE autocomplete_users (
     data BYTEA
 );
 CREATE UNIQUE INDEX autocomplete_users_source_prefix_idx ON autocomplete_users (source, prefix);
+
+CREATE TABLE user_embeddings (
+    source TEXT,
+    username TEXT,
+    userid BIGINT,
+    training_tag INTEGER,
+    finetune_tag INTEGER,
+    data BYTEA,
+    db_refreshed_at DOUBLE PRECISION
+);
+CREATE UNIQUE INDEX user_embeddings_source_lower_username_coalesce_userid_idx ON user_embeddings (source, lower(username), coalesce(userid, -1));

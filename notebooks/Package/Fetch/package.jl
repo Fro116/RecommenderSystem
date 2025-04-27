@@ -35,18 +35,20 @@ function layer3(basedir::String)
     copy("secrets", app)
 end
 
-function layer4(basedir::String)
-    app = "$basedir/layer4"
+function database(basedir::String)
+    app = "$basedir/database"
     if ispath(app)
         rm(app; recursive = true)
     end
-    copy("notebooks/Collect/layer4.jl", app)
+    copy("notebooks/Inference/database.jl", app)
+    copy("notebooks/Inference/database_internals.jl", app)
     copy("notebooks/julia_utils", app)
     copy("secrets", app)
 end
 
 function build(basedir::String, name::String, tag::String, args::String)
     run(`docker build --network host -t $name $basedir`)
+    exit(1)
     repo = read("secrets/gcp.docker.txt", String)
     project = read("secrets/gcp.project.txt", String)
     region = read("secrets/gcp.region.txt", String)
@@ -79,6 +81,6 @@ cp("notebooks/Package/Fetch/app", basedir, force = true)
 layer1(basedir)
 layer2(basedir)
 layer3(basedir)
-layer4(basedir)
+database(basedir)
 const tag = Dates.format(Dates.today(), "yyyymmdd")
 build(basedir, "fetch", tag, "--set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --cpu=1 --memory=2Gi --min=1 --max-instances=1")
