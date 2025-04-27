@@ -220,7 +220,6 @@ function save_lists(datetag)
         "mlr --csv cat *.csv > lists.csv",
         "zstd lists.csv -o lists.csv.zstd",
         "rclone --retries=10 copyto lists.csv.zstd r2:rsys/database/lists/$tag/lists.csv.zstd",
-        "rclone --retries=10 copyto latest r2:rsys/database/lists/latest",
         "rm $files",
     ]
     cmd = join(cmds, " && ")

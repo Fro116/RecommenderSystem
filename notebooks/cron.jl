@@ -14,23 +14,29 @@ function get_directories(db)
     [x for x in dirs if x <= latest]
 end
 
-function import_dbs()
+function import_lists()
     tags_to_import = sort(collect(setdiff(Set.(get_directories.(["collect", "lists"]))...)))
     for tag in tags_to_import
-        runcmd("cd Import/lists && julia save_lists.jl $tag")
+        runcmd("cd Import/lists && julia save.jl $tag")
     end
+end
+
+function import_dbs()
     for x in ["autocomplete", "images", "media"]
         runcmd("cd Import/$x && julia save_$(x).jl")
     end
 end
 
 function cron()
-    import_dbs()
     day = Dates.day(Dates.today())
-    if day in [1, 8, 15, 22]
-        runcmd("cd Training && julia run.jl")
+    import_lists()
+    if day in [4, 11, 18, 25]
+        import_dbs()
     end
-    runcmd("cd Finetune && julia run.jl")
+    # if day in [1, 15]
+    #     runcmd("cd Training && julia run.jl")
+    # end
+    # runcmd("cd Finetune && julia run.jl")
 end
 
-@scheduled "CRON" "2:00" @handle_errors cron()
+@scheduled "CRON" "2:30" @handle_errors cron()

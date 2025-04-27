@@ -17,9 +17,7 @@ end
 
 function get_directories(db::AbstractString)
     str = read(`rclone lsf r2:rsys/database/$db`, String)
-    dirs = [chop(x) for x in split(str) if endswith(x, "/")]
-    latest = read(`rclone cat r2:rsys/database/$db/latest`, String)
-    [x for x in dirs if x <= latest]
+    [chop(x) for x in split(str) if endswith(x, "/")]
 end
 
 function import_list(datetag::AbstractString, name::AbstractString)
@@ -44,7 +42,8 @@ function import_lists(datetag::AbstractString)
     else
         import_list(tags_to_import[idx-1], "histories.csv")
     end
-    import_list(datetag, "lists.csv")
+    import_list(datetag, "add.csv")
+    mv("$datetag/add.csv", "$datetag/lists.csv")
 end
 
 function partition(name::AbstractString)
