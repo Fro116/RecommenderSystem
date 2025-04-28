@@ -39,8 +39,6 @@ function load_resources()::Vector{Resource}
         proxy_df = CSV.read(
             path,
             DataFrames.DataFrame,
-            header = ["host", "port", "username", "password"],
-            delim = ':',
         )
         for (host, port, username, password) in
             zip(proxy_df.host, proxy_df.port, proxy_df.username, proxy_df.password)
@@ -150,6 +148,19 @@ function reclaim(r::Resources)
         t = time()
         global LAST_RECLAIM
         LAST_RECLAIM = t
+        for loc in keys(r.index)
+            delta = 0
+            li = length(r.index[loc])
+            lq = length(r.queue[loc])
+            if li > 0
+                k = first(r.index[loc])
+                m = r.resources[k]
+                delta = ratelimit_delta(m, k["ratelimit"], RATELIMIT_WINDOW)
+            else
+                delta = 0
+            end
+            logtag("RESOURCES", "location $loc has $li resources and $lq tasks with a wait delay of $delta")
+        end
         for k in Set(keys(r.resources))
             m = r.resources[k]
             if !isnothing(m.checkout_time) && t - m.checkout_time > RECLAIM_TIMEOUT
@@ -168,12 +179,12 @@ function take!(r::Resources, location::String, timeout::Real)
         if start - LAST_RECLAIM > RECLAIM_TIMEOUT
             reclaim(r)
         end
-        push!(RESOURCES.queue[location], uuid)
+        push!(r.queue[location], uuid)
     end
     try
         while true
             val = lock(r.lock) do
-                task_id = first(RESOURCES.queue[location])
+                task_id = first(r.queue[location])
                 if task_id != uuid
                     return nothing
                 end
@@ -203,7 +214,7 @@ function take!(r::Resources, location::String, timeout::Real)
         end
     finally
         lock(r.lock) do
-            arr = RESOURCES.queue[location]
+            arr = r.queue[location]
             deleteat!(arr, findfirst(x -> x == uuid, arr))
         end
     end
