@@ -54,6 +54,10 @@ function get_col(x, source::AbstractString, key::AbstractString, max_ts::Union{F
             return x["score"]
         elseif key == "status"
             return x["status"]
+        elseif key == "progress"
+            return x["progress"]
+        elseif key == "progress_volumes"
+            return x["num_volumes_read"]
         end
     elseif source == "anilist"
         if key == "created_at"
@@ -64,6 +68,10 @@ function get_col(x, source::AbstractString, key::AbstractString, max_ts::Union{F
             return x["score"]
         elseif key == "status"
             return x["status"]
+        elseif key == "progress"
+            return x["progress"]
+        elseif key == "progress_volumes"
+            return x["progressvolumes"]
         end
     elseif source == "kitsu"
         if key == "created_at"
@@ -74,6 +82,10 @@ function get_col(x, source::AbstractString, key::AbstractString, max_ts::Union{F
             return x["rating"]
         elseif key == "status"
             return x["status"]
+        elseif key == "progress"
+            return x["progress"]
+        elseif key == "progress_volumes"
+            return x["progress"]
         end
     elseif source == "animeplanet"
         if key == "created_at"
@@ -84,6 +96,10 @@ function get_col(x, source::AbstractString, key::AbstractString, max_ts::Union{F
             return x["score"]
         elseif key == "status"
             return x["status"]
+        elseif key == "progress"
+            return x["progress"]
+        elseif key == "progress_volumes"
+            return x["progress"]
         end
     end
     @assert false "$source $key"
@@ -115,6 +131,8 @@ end
 function is_same_item(x, y, source::AbstractString)::Bool
     get_col(x, source, "rating", nothing) == get_col(y, source, "rating", nothing) &&
         get_col(x, source, "status", nothing) == get_col(y, source, "status", nothing) &&
+        get_col(x, source, "progress", nothing) == get_col(y, source, "progress", nothing) &&
+        get_col(x, source, "progress_volumes", nothing) == get_col(y, source, "progress_volumes", nothing) &&
         x["history_min_ts"] < y["history_max_ts"] + ts_epsilon/2 &&
         y["history_min_ts"] < x["history_max_ts"] + ts_epsilon/2
 end

@@ -31,21 +31,6 @@ function import_list(datetag::AbstractString, name::AbstractString)
     run(`sh -c $cmd`)
 end
 
-function import_lists(datetag::AbstractString)
-    tags_to_import = sort(get_directories("lists"))
-    idx = findfirst(==(datetag), tags_to_import)
-    if idx == 1
-        logtag("HISTORIES", "$datetag has no previous histories")
-        open("$datadir/histories.csv", "w") do f
-            write(f, "source,username,userid,data,db_refreshed_at\n")
-        end
-    else
-        import_list(tags_to_import[idx-1], "histories.csv")
-    end
-    import_list(datetag, "add.csv")
-    mv("$datetag/add.csv", "$datetag/lists.csv")
-end
-
 function partition(name::AbstractString)
     outdir = "$datadir/$name"
     mkpath(outdir)
@@ -60,7 +45,12 @@ function partition(name::AbstractString)
             end
             continue
         end
-        k = (row[cols["source"]], lowercase(row[cols["username"]]), row[cols["userid"]])
+        if !isempty(row[cols["userid"]])
+            # match across name changes
+            k = ("userid", row[cols["source"]], row[cols["userid"]])
+        else
+            k = ("username", row[cols["source"]], lowercase(row[cols["username"]]))
+        end
         key = string(shahash(k))
         part = key[end-1:end]
         if !ispath("$outdir/$part")
@@ -71,6 +61,7 @@ function partition(name::AbstractString)
         end
     end
     ProgressMeter.finish!(p)
+    rm("$datadir/$name.csv")
 end
 
 function advance_histories(datetag::AbstractString)
@@ -78,11 +69,9 @@ function advance_histories(datetag::AbstractString)
         line = read(fn, String)
         split(line, r",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)")
     end
-
-    # import new users
     @showprogress for outdir in readdir("$datadir/lists")
-        if !ispath("$datadir/merged/$outdir")
-            mkpath("$datadir/merged/$outdir")
+        if !ispath("$datadir/histories/$outdir")
+            mkpath("$datadir/histories/$outdir")
         end
         Threads.@threads for fn in readdir("$datadir/lists/$outdir")
             source, username, userid, data, db_refreshed_at =
@@ -93,8 +82,8 @@ function advance_histories(datetag::AbstractString)
                 h_source, h_username, h_userid, h_data, h_db_refreshed_at =
                     read_user("$datadir/histories/$outdir/$fn")
                 @assert h_source == source &&
-                        lowercase(h_username) == lowercase(username) &&
-                        h_userid == userid
+                        (lowercase(h_username) == lowercase(username) ||
+                        h_userid == userid)
                 if h_db_refreshed_at == db_refreshed_at
                     update = false
                 else
@@ -127,39 +116,24 @@ function advance_histories(datetag::AbstractString)
                 write_data,
                 db_refreshed_at,
             ]
-            open("$datadir/merged/$outdir/$fn", "w") do f
+            open("$datadir/histories/$outdir/$fn", "w") do f
                 write(f, join(data, ","))
-            end
-        end
-    end
-    # copy existing users
-    @showprogress for outdir in readdir("$datadir/histories")
-        if !ispath("$datadir/merged/$outdir")
-            mkpath("$datadir/merged/$outdir")
-        end
-        Threads.@threads for fn in readdir("$datadir/histories/$outdir")
-            if !ispath("$datadir/lists/$outdir/$fn")
-                cp("$datadir/histories/$outdir/$fn", "$datadir/merged/$outdir/$fn")
             end
         end
     end
 end
 
 function upload_histories(datetag::AbstractString)
-    for x in ["lists", "histories"]
-        rm("$datadir/$x.csv")
-        rm("$datadir/x", recursive=true, force=true)
+    open("$datadir/new_histories.header.csv", "w") do f
+        write(f, "source,username,userid,data,db_refreshed_at\n")
     end
-    open("$datadir/new_histories.csv", "w") do f
-        write(f, "source,username,userid,data,db_refreshed_at")
-    end
-    Threads.@threads for outdir in readdir("$datadir/merged")
-        cmd = "find $datadir/merged/$outdir/ -maxdepth 1 -type f -print0 | xargs -0 awk '1' > $datadir/new_histories.$outdir.csv"
+    Threads.@threads for outdir in readdir("$datadir/histories")
+        cmd = "find $datadir/histories/$outdir/ -maxdepth 1 -type f -print0 | xargs -0 awk '1' > $datadir/new_histories.$outdir.csv"
         run(`sh -c $cmd`)
     end
     cmds = [
-        "cat $datadir/new_histories.csv $datadir/new_histories.*.csv > $datadir/merged.csv",
-        "zstd $datadir/merged.csv -o $datadir/new_histories.csv.zstd",
+        "cat $datadir/new_histories.header.csv $datadir/new_histories.*.csv > $datadir/new_histories.csv",
+        "zstd $datadir/new_histories.csv -o $datadir/new_histories.csv.zstd",
         "rm $datadir/new_histories*.csv",
         "rclone -Pv --retries=10 copyto $datadir/new_histories.csv.zstd r2:rsys/database/lists/$datetag/histories.csv.zstd",
     ]
@@ -167,15 +141,33 @@ function upload_histories(datetag::AbstractString)
     run(`sh -c $cmd`)
 end
 
-function save_histories(datetag::AbstractString)
-    logtag("HISTORIES", "saving $datetag")
+function save_histories(startdate::AbstractString, enddate::AbstractString)
+    logtag("HISTORIES", "saving histories from $startdate to $enddate")
     rm(datadir, recursive = true, force = true)
     mkpath(datadir)
-    import_lists(datetag)
+    list_tags = sort(get_directories("lists"))
+    sidx = findfirst(==(startdate), list_tags)
+    eidx = findfirst(==(enddate), list_tags)
+    @assert !isnothing(sidx) && !isnothing(eidx)
+    if sidx == 1
+        logtag("HISTORIES", "$startdate has no previous histories")
+        open("$datadir/histories.csv", "w") do f
+            write(f, "source,username,userid,data,db_refreshed_at\n")
+        end
+    else
+        import_list(list_tags[sidx-1], "histories.csv")
+    end
     partition("histories")
-    partition("lists")
-    advance_histories(datetag)
-    upload_histories(datetag)
+    for i in sidx:eidx
+        datetag = list_tags[i]
+        logtag("HISTORIES", "importing $datetag")
+        import_list(datetag, "add.csv")
+        mv("$datadir/add.csv", "$datadir/lists.csv")
+        partition("lists")
+        advance_histories(datetag)
+        rm("$datadir/lists", recursive = true, force = true)
+    end
+    upload_histories(enddate)
 end
 
-save_histories(ARGS[1])
+save_histories(ARGS[1], ARGS[2])

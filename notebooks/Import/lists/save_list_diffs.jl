@@ -28,7 +28,7 @@ function import_lists(datetag::AbstractString)
     tags_to_import = sort(get_directories("lists"))
     idx = findfirst(==(datetag), tags_to_import)
     if idx == 1
-        logtag("ARCHIVE", "$datetag has no previous lists")
+        logtag("DIFFS", "$datetag has no previous lists")
         open("$datadir/previous.csv", "w") do f
             write(f, "source,username,userid,data,db_refreshed_at\n")
         end
@@ -127,7 +127,7 @@ function upload_diffs(datetag::AbstractString)
 end
 
 function archive_lists(datetag::AbstractString)
-    logtag("ARCHIVE", "saving $datetag")
+    logtag("DIFFS", "saving $datetag")
     rm(datadir, recursive = true, force = true)
     mkpath(datadir)
     import_lists(datetag)
