@@ -124,7 +124,7 @@ function advance_histories(datetag::AbstractString)
 end
 
 function upload_histories(datetag::AbstractString)
-    open("$datadir/new_histories.header.csv", "w") do f
+    open("$datadir/new_histories.header", "w") do f
         write(f, "source,username,userid,data,db_refreshed_at\n")
     end
     Threads.@threads for outdir in readdir("$datadir/histories")
@@ -132,7 +132,7 @@ function upload_histories(datetag::AbstractString)
         run(`sh -c $cmd`)
     end
     cmds = [
-        "cat $datadir/new_histories.header.csv $datadir/new_histories.*.csv > $datadir/new_histories.csv",
+        "cat $datadir/new_histories.header $datadir/new_histories.*.csv > $datadir/new_histories.csv",
         "zstd $datadir/new_histories.csv -o $datadir/new_histories.csv.zstd",
         "rm $datadir/new_histories*.csv",
         "rclone -Pv --retries=10 copyto $datadir/new_histories.csv.zstd r2:rsys/database/lists/$datetag/histories.csv.zstd",
@@ -168,6 +168,7 @@ function save_histories(startdate::AbstractString, enddate::AbstractString)
         rm("$datadir/lists", recursive = true, force = true)
     end
     upload_histories(enddate)
+    rm(datadir, recursive = true, force = true)
 end
 
 save_histories(ARGS[1], ARGS[2])

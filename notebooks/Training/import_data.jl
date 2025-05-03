@@ -12,17 +12,20 @@ const MEDIUMS = ["manga", "anime"]
 const SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
 const datadir = "../../data/training"
 
-function download_data()
+function download_data(datetag::AbstractString)
     rm(datadir, force = true, recursive = true)
     mkpath(datadir)
-    run(`rclone --retries=10 copyto r2:rsys/database/lists/latest $datadir/list_tag`)
+    open("$datadir/list_tag", "w") do f
+        write(f, datetag)
+    end
     tag = read("$datadir/list_tag", String)
-    run(`rclone --retries=10 copyto r2:rsys/database/lists/$tag/lists.csv.zstd $datadir/lists.csv.zstd`)
-    run(`unzstd $datadir/lists.csv.zstd`)
+    run(`rclone --retries=10 copyto r2:rsys/database/lists/$tag/histories.csv.zstd $datadir/histories.csv.zstd`)
+    run(`unzstd $datadir/histories.csv.zstd`)
+    run(`rm $datadir/histories.csv.zstd`)
     run(
-        `mlr --csv split -n 1000000 --prefix $datadir/lists $datadir/lists.csv`,
+        `mlr --csv split -n 1000000 --prefix $datadir/histories $datadir/histories.csv`,
     )
-    rm("$datadir/lists.csv")
+    rm("$datadir/histories.csv")
     retrieval = "rclone --retries=10 copyto r2:rsys/database/import"
     files = vcat(
         ["$m.groups.csv" for m in MEDIUMS],
@@ -180,11 +183,20 @@ function get_relations()
     )
 end
 
+function num_items(m::AbstractString, source::AbstractString)
+    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1)
+    filter!(x -> x.source == source, df)
+    n = length(Set(df.matchedid))
+    logtag("IMPORT_DATA", "num_items($m, $source) = $n")
+    n
+end
+
 function gen_splits()
     min_items = 5
+    max_items = Dict(s => num_items.(MEDIUMS, s) for s in SOURCES) # TODO study clip threshold
     test_perc = 0.01
     @showprogress for (idx, f) in
-                      Iterators.enumerate(Glob.glob("$datadir/lists_*.csv"))
+                      Iterators.enumerate(Glob.glob("$datadir/histories_*.csv"))
         train_dir = "$datadir/users/training/$idx"
         test_dir = "$datadir/users/test/$idx"
         unused_dir = "$datadir/users/unused/$idx"
@@ -192,7 +204,15 @@ function gen_splits()
         df = Random.shuffle(read_csv(f))
         Threads.@threads for i = 1:DataFrames.nrow(df)
             user = import_user(df.source[i], decompress(df.data[i]), parse(Float32, df.db_refreshed_at[i]))
-            if length(user["items"]) < min_items
+            n_items = zeros(Int, length(MEDIUMS))
+            for x in user["items"]
+                n_items[x["medium"]+1] += 1
+            end
+            if sum(n_items) < min_items
+                outdir = unused_dir
+            elseif any(n_items .> max_items[df.source[i]])
+                k = (df.source[i], df.username[i], df.userid[i])
+                logerror("skipping user $i: $k with $n_items > $(max_items[df.source[i]]) items")
                 outdir = unused_dir
             else
                 outdir = rand() < test_perc ? test_dir : train_dir
@@ -205,8 +225,8 @@ function gen_splits()
     end
 end
 
-function import_data()
-    download_data()
+function import_data(datetag::AbstractString)
+    download_data(datetag)
     for m in MEDIUMS
         CSV.write("$datadir/$m.csv", get_media_groups(m))
     end
@@ -222,10 +242,10 @@ function import_data()
         cmd = replace(
             save_template,
             "{INPUT}" => "$datadir/$f",
-            "{OUTPUT}" => "$date/$f",
+            "{OUTPUT}" => "$datetag/$f",
         )
         run(`sh -c $cmd`)
     end
 end
 
-import_data()
+import_data(ARGS[1])

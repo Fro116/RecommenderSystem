@@ -10,33 +10,26 @@ const STATUS_MAP = Dict{String,Int32}(
     "none" => 0,
     "wont_watch" => 1,
     "dropped" => 2,
-    "on_hold" => 3,
-    "planned" => 4,
-    "currently_watching" => 5,
-    "completed" => 6,
-    "rewatching" => 7,
+    "deleted" => 3,
+    "on_hold" => 4,
+    "planned" => 5,
+    "currently_watching" => 6,
+    "completed" => 7,
+    "rewatching" => 8,
 )
 
 const MEDIUM_MAP = Dict{String,Int32}("manga" => 0, "anime" => 1)
 
-const SOURCE_MAP = Dict{String,Int32}(
-    "mal" => 0,
-    "anilist" => 1,
-    "kitsu" => 2,
-    "animeplanet" => 3,
-)
-const GENDER_MAP = Dict{String,Int32}(
-    "male" => 0,
-    "female" => 1,
-    "other" => 2,
-)
+const SOURCE_MAP =
+    Dict{String,Int32}("mal" => 0, "anilist" => 1, "kitsu" => 2, "animeplanet" => 3)
+const GENDER_MAP = Dict{String,Int32}("male" => 0, "female" => 1, "other" => 2)
 
 @memoize function get_media_progress(medium)
     df = CSV.read(
         "$datadir/$medium.csv",
         DataFrames.DataFrame,
         types = Dict("itemid" => String),
-        ntasks=1,
+        ntasks = 1,
     )
     d = Dict()
     for i = 1:DataFrames.nrow(df)
@@ -107,16 +100,16 @@ function create_item!(source, medium, itemid, item)
         logerror("invalid rating for $item")
         item["rating"] = 0
     end
-    if item["update_order"] < 0
-        logerror("invalid update_order for $item")
-        item["update_order"] = 0
-    end
-    if item["updated_at"] <= 0
-        item["updated_at"] = 0
-    elseif item["updated_at"] < Dates.datetime2unix(Dates.DateTime(2000, 1, 1)) ||
-           item["updated_at"] > time() + 86400
-        logerror("invalid updated_at for $item")
-        item["updated_at"] = 0
+    for k in ["updated_at", "history_min_ts", "history_max_ts"]
+        if item[k] <= 0
+            item[k] = 0
+        elseif item[k] < Dates.datetime2unix(Dates.DateTime(2000, 1, 1)) ||
+               item[k] > time() + 86400
+            if k != "history_min_ts" # TODO remove after regenerating histories
+                logerror("invalid $k for $item $(item[k])")
+                item[k] = 0
+            end
+        end
     end
     if item["progress"] < 0 || item["progress"] > 1
         logerror("invalid progress for $item")
@@ -125,6 +118,9 @@ function create_item!(source, medium, itemid, item)
     d = get(get_media_progress(medium), (source, string(itemid)), Dict())
     item["distinctid"] = get(d, "distinctid", 0)
     item["matchedid"] = get(d, "matchedid", 0)
+    @assert (item["history_tag"] in ["infer", "delete"]) ||
+            Dates.datetime2unix(Dates.DateTime(item["history_tag"], "yyyymmdd")) <
+            time() + 86400
 end
 
 function import_mal_profile(data, reftime)
@@ -183,11 +179,7 @@ function import_mal_profile(data, reftime)
         if isnothing(x)
             return nothing
         end
-        gender = Dict(
-            "Male" => "male",
-            "Female" => "female",
-            "Non-Binary" => "other"
-        )[x]
+        gender = Dict("Male" => "male", "Female" => "female", "Non-Binary" => "other")[x]
         GENDER_MAP[gender]
     end
 
@@ -244,7 +236,6 @@ function import_mal_user(data, reftime)
                 Dates.datetime2unix(
                     Dates.DateTime(x["updated_at"], "yyyy-mm-ddTHH:MM:SS+00:00"),
                 ),
-            "update_order" => 0,
             "progress" => get_progress(
                 source,
                 x["medium"],
@@ -253,11 +244,14 @@ function import_mal_user(data, reftime)
                 x["progress"],
                 x["num_volumes_read"],
             ),
+            "history_min_ts" => x["history_min_ts"],
+            "history_max_ts" => x["history_max_ts"],
+            "history_tag" => x["history_tag"],
         )
         create_item!(source, x["medium"], x["itemid"], item)
         push!(items, item)
     end
-    sort!(items, by=x -> (x["updated_at"], x["update_order"]))
+    sort!(items, by = x -> (x["history_max_ts"], x["history_min_ts"]))
     Dict("user" => user, "items" => items)
 end
 
@@ -290,7 +284,8 @@ function import_anilist_profile(data, reftime)
         nothing
     end
     function anilist_avatar(x)
-        default_imgs = ["https://s4.anilist.co/file/anilistcdn/user/avatar/large/default.png"]
+        default_imgs =
+            ["https://s4.anilist.co/file/anilistcdn/user/avatar/large/default.png"]
         if x in default_imgs
             return nothing
         end
@@ -331,7 +326,6 @@ function import_anilist_user(data, reftime)
             "status" => STATUS_MAP[status_map[x["status"]]],
             "rating" => convert(Float32, x["score"]),
             "updated_at" => convert(Float32, something(x["updatedat"], 0)),
-            "update_order" => 0,
             "progress" => get_progress(
                 source,
                 x["medium"],
@@ -340,11 +334,14 @@ function import_anilist_user(data, reftime)
                 x["progress"],
                 x["progressvolumes"],
             ),
+            "history_min_ts" => x["history_min_ts"],
+            "history_max_ts" => x["history_max_ts"],
+            "history_tag" => x["history_tag"],
         )
         create_item!(source, x["medium"], x["itemid"], item)
         push!(items, item)
     end
-    sort!(items, by=x -> (x["updated_at"], x["update_order"]))
+    sort!(items, by = x -> (x["history_max_ts"], x["history_min_ts"]))
     Dict("user" => user, "items" => items)
 end
 
@@ -448,7 +445,6 @@ function import_kitsu_user(data, reftime)
             "status" => STATUS_MAP[status_map[x["status"]]],
             "rating" => convert(Float32, something(x["ratingtwenty"], 0)) / 2,
             "updated_at" => import_kitsu_time(x["updatedat"]),
-            "update_order" => 0,
             "progress" => get_progress(
                 source,
                 x["medium"],
@@ -457,20 +453,26 @@ function import_kitsu_user(data, reftime)
                 x["progress"],
                 nothing,
             ),
+            "history_min_ts" => x["history_min_ts"],
+            "history_max_ts" => x["history_max_ts"],
+            "history_tag" => x["history_tag"],
         )
         create_item!(source, x["medium"], x["itemid"], item)
         push!(items, item)
     end
-    sort!(items, by=x -> (x["updated_at"], x["update_order"]))
+    sort!(items, by = x -> (x["history_max_ts"], x["history_min_ts"]))
     Dict("user" => user, "items" => items)
 end
 
 function import_animeplanet_profile(data, reftime)
     function animeplanet_last_online(datestr, reftime)
+        if isnothing(datestr)
+            return nothing
+        end
         if startswith(datestr, "Currently online")
             return reftime
         end
-        if isnothing(datestr) || datestr in ["Hidden", "Last online: never"]
+        if datestr in ["Hidden", "Last online: never"]
             return nothing
         end
         if !startswith(datestr, "Last online ")
@@ -571,7 +573,6 @@ function import_animeplanet_user(data, reftime)
             "status" => STATUS_MAP[status_map[x["status"]]],
             "rating" => convert(Float32, something(x["score"], 0)) * 2,
             "updated_at" => something(x["updated_at"], 0),
-            "update_order" => something(x["item_order"], Inf),
             "progress" => get_progress(
                 source,
                 x["medium"],
@@ -580,17 +581,14 @@ function import_animeplanet_user(data, reftime)
                 x["progress"],
                 nothing,
             ),
+            "history_min_ts" => x["history_min_ts"],
+            "history_max_ts" => x["history_max_ts"],
+            "history_tag" => x["history_tag"],
         )
         create_item!(source, x["medium"], x["itemid"], item)
         push!(items, item)
     end
-    sort!(items, by=x -> (x["medium"], -x["update_order"]))
-    update_order = 1
-    for x in items
-        x["update_order"] = update_order
-        update_order += 1
-    end
-    sort!(items, by=x -> (x["updated_at"], x["update_order"]))
+    sort!(items, by = x -> (x["history_max_ts"], x["history_min_ts"]))
     Dict("user" => user, "items" => items)
 end
 

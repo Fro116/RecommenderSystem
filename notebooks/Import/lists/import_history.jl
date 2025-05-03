@@ -124,7 +124,7 @@ function infer_history(user, source::AbstractString, db_refreshed_at::Float64)
     sort!(items, by = x -> (x["history_max_ts"], x["history_min_ts"]))
     user = copy(user)
     user["items"] = items
-    user["user"]["history_ts"] = 0.0
+    user["user"]["history_ts"] = min_ts
     user
 end
 
@@ -183,7 +183,7 @@ function update_history(
         # set min_ts
         sort!(items, by = x -> -x["item_order"])
         for m in ["manga", "anime"]
-            ts_lower_bound = 0
+            ts_lower_bound = min_ts
             for x in items
                 if x["medium"] != m
                     continue
@@ -209,7 +209,7 @@ function update_history(
                 x["history_min_ts"] = ts
                 x["history_max_ts"] = ts
             else
-                x["history_min_ts"] = 0
+                x["history_min_ts"] = min_ts
                 x["history_max_ts"] = db_refreshed_at
             end
         end
