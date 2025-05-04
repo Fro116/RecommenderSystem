@@ -5,7 +5,8 @@ import JLD2
 import Memoize: @memoize
 import MsgPack
 import ProgressMeter: @showprogress
-import SparseArrays;
+import SparseArrays
+include("history_tools.jl")
 const datadir = "../../data/training"
 
 @memoize function num_items(medium::Int)
@@ -144,7 +145,7 @@ function save_related(medium)
 end
 
 function save_recaps(medium)
-    # M[i, j] = 1 if i and j are in the same franchise
+    # M[i, j] = 1 if i and j are the same story
     relations = Set([
         "alternative_version",
         "summary",
@@ -170,6 +171,7 @@ end
         histories = [Int32[] for _ = 1:length(users)]
         Threads.@threads for t = 1:length(users)
             user = MsgPack.unpack(read(users[t]))
+            project_earliest!(user)
             for x in user["items"]
                 if x["medium"] != medium
                     continue

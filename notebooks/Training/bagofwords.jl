@@ -9,6 +9,8 @@ import ProgressMeter: @showprogress
 import Random
 import SparseArrays
 
+include("history_tools.jl")
+
 function parse_args()
     @assert length(ARGS) == 1
     if only(ARGS) == "--pretrain"
@@ -26,7 +28,7 @@ end
 const finetune, datadir = parse_args()
 const mediums = [0, 1]
 const metrics = ["watch", "rating", "status"]
-const planned_status = 4
+const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
 
 @memoize function num_items(medium::Int)
@@ -35,6 +37,7 @@ const medium_map = Dict(0 => "manga", 1 => "anime")
 end
 
 function get_data(data)
+    project_latest!(data)
     X = Dict()
     Y = Dict()
     W = Dict()

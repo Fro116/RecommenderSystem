@@ -10,6 +10,7 @@ import Random
 import StatsBase
 
 include("../julia_utils/stdout.jl")
+include("history_tools.jl")
 
 const datadir = "../../data/training"
 const MEDIUM_MAP = Dict(0 => "manga", 1 => "anime")
@@ -45,7 +46,12 @@ function get_data(split::String, medium::Int)
         push!(ratings, Vector{Vector{Float32}}(undef, length(fns)))
         Threads.@threads for (i, f) in collect(Iterators.enumerate(fns))
             user = MsgPack.unpack(read(f))
-            items = [x for x in user["items"] if x["medium"] == medium && x[metric] != 0]
+            project_latest!(user)
+            items = [
+                x for x in user["items"]
+                if x["medium"] == medium && x[metric] != 0
+                && x["history_tag"] ∉ ["infer", "delete"]
+            ]
             userids[end][i] = fill(userid_base + i, length(items))
             itemids[end][i] = [x["matchedid"] for x in items]
             ratings[end][i] = [x[metric] for x in items]

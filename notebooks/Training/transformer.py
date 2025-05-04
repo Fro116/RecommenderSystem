@@ -520,7 +520,7 @@ def training_config():
             "1_matchedid": num_items[1],
             "0_distinctid": num_distinct_items[0],
             "1_distinctid": num_distinct_items[1],
-            "status": 8,
+            "status": 9,
         },
         "reserved_vals": 2,
         "causal": False,

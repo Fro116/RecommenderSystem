@@ -12,7 +12,7 @@ import Random
 const datadir = "../../data/training"
 const mediums = [0, 1]
 const metrics = ["watch", "rating", "status"]
-const planned_status = 4
+const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
 const min_ts = Dates.datetime2unix(Dates.DateTime("20000101", Dates.dateformat"yyyymmdd"))
 const max_ts = Dates.datetime2unix(
@@ -22,6 +22,7 @@ const max_seq_len = 1024
 const batch_size = 64 * max_seq_len
 
 include("../julia_utils/stdout.jl")
+include("history_tools.jl")
 
 @memoize function num_items(medium::Int)
     m = medium_map[medium]
@@ -29,6 +30,7 @@ include("../julia_utils/stdout.jl")
 end
 
 function get_data(data, userid)
+    project!(data)
     cls_val = -1
     N = length(data["items"]) + 1
     d = Dict(
@@ -65,11 +67,9 @@ function get_data(data, userid)
         d["$(m)_distinctid"][i] = x["distinctid"]
         d["$(n)_matchedid"][i] = cls_val
         d["$(n)_distinctid"][i] = cls_val
-        if x["updated_at"] >= min_ts && x["updated_at"] <= max_ts
-            d["time"][i] = x["updated_at"]
-            d["delta_time"][i-1] = x["updated_at"] - last_ts
-            last_ts = x["updated_at"]
-        end
+        d["time"][i] = x["history_max_ts"]
+        d["delta_time"][i-1] = x["history_max_ts"] - last_ts
+        last_ts = x["history_max_ts"]
         if (x["status"] == 0 || x["status"] >= planned_status) && (x["rating"] == 0 || x["rating"] >= 5)
             d["$m.watch.label"][i] = 1
             d["$m.watch.weight"][i] = 1

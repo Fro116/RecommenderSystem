@@ -80,7 +80,7 @@ function get_media_groups(medium::AbstractString)
     sort!(df, :count, rev = true)
     df[!, :distinctid] .= 0
     df[!, :matchedid] .= 0
-    min_count = 100
+    min_count = 100 # todo account for fake watches
     distinctid = 0
     groupmap = Dict()
     for i = 1:DataFrames.nrow(df)
