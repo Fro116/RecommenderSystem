@@ -38,6 +38,9 @@ end
 
 function get_data(data)
     project_latest!(data)
+    if finetune
+        project!(data, "test_items")
+    end
     X = Dict()
     Y = Dict()
     W = Dict()

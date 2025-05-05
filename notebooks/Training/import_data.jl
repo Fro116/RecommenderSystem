@@ -194,6 +194,7 @@ end
 function gen_splits()
     min_items = 5
     max_items = Dict(s => num_items.(MEDIUMS, s) for s in SOURCES) # TODO study clip threshold
+    # TODO keep users that pass max_items because of plantowatch status
     test_perc = 0.01
     @showprogress for (idx, f) in
                       Iterators.enumerate(Glob.glob("$datadir/histories_*.csv"))
@@ -203,7 +204,7 @@ function gen_splits()
         mkpath.([train_dir, test_dir, unused_dir])
         df = Random.shuffle(read_csv(f))
         Threads.@threads for i = 1:DataFrames.nrow(df)
-            user = import_user(df.source[i], decompress(df.data[i]), parse(Float32, df.db_refreshed_at[i]))
+            user = import_user(df.source[i], decompress(df.data[i]), parse(Float64, df.db_refreshed_at[i]))
             n_items = zeros(Int, length(MEDIUMS))
             for x in user["items"]
                 n_items[x["medium"]+1] += 1
@@ -216,6 +217,9 @@ function gen_splits()
                 outdir = unused_dir
             else
                 outdir = rand() < test_perc ? test_dir : train_dir
+            end
+            if outdir == unused_dir
+                continue
             end
             open("$outdir/$i.msgpack", "w") do g
                 write(g, MsgPack.pack(user))
@@ -231,13 +235,9 @@ function import_data(datetag::AbstractString)
         CSV.write("$datadir/$m.csv", get_media_groups(m))
     end
     CSV.write("$datadir/media_relations.csv", get_relations())
-    date = Dates.format(Dates.today(), "yyyymmdd")
-    open("$datadir/latest", "w") do f
-        write(f, date)
-    end
     gen_splits()
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}"
-    files = vcat(["$m.csv" for m in MEDIUMS], ["latest", "images.csv"])
+    files = vcat(["$m.csv" for m in MEDIUMS], ["list_tag", "images.csv"])
     for f in files
         cmd = replace(
             save_template,

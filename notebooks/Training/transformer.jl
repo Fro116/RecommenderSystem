@@ -15,9 +15,6 @@ const metrics = ["watch", "rating", "status"]
 const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
 const min_ts = Dates.datetime2unix(Dates.DateTime("20000101", Dates.dateformat"yyyymmdd"))
-const max_ts = Dates.datetime2unix(
-    Dates.DateTime(read("$datadir/latest", String), Dates.dateformat"yyyymmdd"),
-)
 const max_seq_len = 1024
 const batch_size = 64 * max_seq_len
 

@@ -476,10 +476,10 @@ def upload(rank, logger):
     if rank != 0 or finetune is not None:
         return
     logger.info("uploading model")
-    with open(os.path.join(datadir, "latest"), "r") as f:
-        latest = f.read()
+    with open(os.path.join(datadir, "list_tag"), "r") as f:
+        list_tag = f.read()
     for suffix in ["pt", "csv", "config"]:
-        cmd =  f"rclone --retries=10 copyto {datadir}/transformer.{suffix} r2:rsys/database/training/{latest}/transformer.{suffix}"
+        cmd =  f"rclone --retries=10 copyto {datadir}/transformer.{suffix} r2:rsys/database/training/{list_tag}/transformer.{suffix}"
         os.system(cmd)
 
 
@@ -505,7 +505,7 @@ def training_config():
         for (x, y) in {0: "manga", 1: "anime"}.items()
     }
     min_ts = datetime.datetime.strptime("20000101", "%Y%m%d").timestamp()
-    with open(os.path.join(datadir, "latest"), "r") as f:
+    with open(os.path.join(datadir, "list_tag"), "r") as f:
         max_ts = datetime.datetime.strptime(f.read().strip(), "%Y%m%d").timestamp()
     return {
         "num_layers": 8,
@@ -628,14 +628,17 @@ def train():
         checkpoint(model, stopper.save_model, test_loss, epoch)
         if stopper.early_stop:
             break
-    destroy_process_group()
+    try:
+        destroy_process_group()
+    except Exception as e:
+        logger.info(f"Destroying process group failed with {e}")
     upload(rank, logger)
 
 
 def download():
     template = "tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto r2:rsys/database/training/$tag"
     files = (
-        ["transformer", "latest"]
+        ["transformer", "list_tag"]
         + [f"{m}.csv" for m in ["manga", "anime"]]
         + [f"baseline.{metric}.{m}.msgpack" for metric in ["rating"] for m in [0, 1]]
     )

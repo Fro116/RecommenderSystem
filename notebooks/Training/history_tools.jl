@@ -34,9 +34,9 @@ function project_latest!(user)
     user["items"] = items
 end
 
-function project!(user)
+function project!(user, key="items")
     deleted_status = 3
-    for x in user["items"]
+    for x in user[key]
         tag = x["history_tag"]
         if tag == "infer"
             x["status"] = 0

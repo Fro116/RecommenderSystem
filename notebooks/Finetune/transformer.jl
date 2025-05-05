@@ -13,13 +13,15 @@ import SparseArrays
 const datadir = "../../data/finetune"
 const mediums = [0, 1]
 const metrics = ["watch", "rating"]
-const planned_status = 4
+const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
 const min_ts = Dates.datetime2unix(Dates.DateTime("20000101", Dates.dateformat"yyyymmdd"))
 const max_ts = Dates.datetime2unix(
-    Dates.DateTime(read("$datadir/latest", String), Dates.dateformat"yyyymmdd"),
-) # TODO think about times > max_ts
+    Dates.DateTime(read("$datadir/finetune_tag", String), Dates.dateformat"yyyymmdd"),
+) + 86400
 const max_seq_len = 1024
+
+include("../Training/history_tools.jl")
 
 @memoize function num_items(medium::Int)
     m = medium_map[medium]
@@ -74,6 +76,8 @@ function get_user_bias(data)
 end
 
 function get_data(data, userid)
+    project!(data)
+    project!(data, "test_items")
     biases = get_user_bias(data)
     reserved_vals = 2
     cls_val = -1
@@ -124,11 +128,9 @@ function get_data(data, userid)
         d["$(m)_distinctid"][i] = x["distinctid"]
         d["$(n)_matchedid"][i] = cls_val
         d["$(n)_distinctid"][i] = cls_val
-        if x["updated_at"] >= min_ts && x["updated_at"] <= max_ts
-            d["time"][i] = x["updated_at"]
-            d["delta_time"][i-1] = x["updated_at"] - last_ts
-            last_ts = x["updated_at"]
-        end
+        d["time"][i] = x["history_max_ts"]
+        d["delta_time"][i-1] = x["history_max_ts"] - last_ts
+        last_ts = x["history_max_ts"]
         d["userid"][i] = userid
         d["mask_index"][i] = 0
     end

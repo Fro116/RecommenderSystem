@@ -10,9 +10,7 @@ import ProgressMeter: @showprogress
 include("../julia_utils/stdout.jl")
 include("../Training/import_list.jl")
 
-const METRICS = ["rating", "watch", "plantowatch", "drop"]
 const SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
-const list_tag = ARGS[1]
 const datadir = "../../data/finetune"
 
 function blue_green_tag()
@@ -31,7 +29,7 @@ function blue_green_tag()
     Dict("blue" => "green", "green" => "blue")[curtag]
 end
 
-function download_data()
+function download_data(finetune_tag::AbstractString)
     rm(datadir, force = true, recursive = true)
     mkpath(datadir)
     download = "rclone --retries=10 copyto r2:rsys/database"
@@ -50,31 +48,37 @@ function download_data()
         cmd = "$download/training/$tag/$fn $datadir/$fn"
         run(`sh -c $cmd`)
     end
-    open("$datadir/list_tag", "w") do f
-        write(f, list_tag)
+    open("$datadir/finetune_tag", "w") do f
+        write(f, finetune_tag)
     end
-    tag = read("$datadir/list_tag", String)
-    run(`rclone --retries=10 copyto r2:rsys/database/lists/$tag/lists.csv.zstd $datadir/lists.csv.zstd`)
-    run(`unzstd $datadir/lists.csv.zstd`)
+    tag = read("$datadir/finetune_tag", String)
+    run(`rclone --retries=10 copyto r2:rsys/database/lists/$tag/histories.csv.zstd $datadir/histories.csv.zstd`)
+    run(`unzstd $datadir/histories.csv.zstd`)
     run(
-        `mlr --csv split -n 1000000 --prefix $datadir/lists $datadir/lists.csv`,
+        `mlr --csv split -n 1000000 --prefix $datadir/histories $datadir/histories.csv`,
     )
-    rm("$datadir/lists.csv")
-    date = Dates.format(Dates.today(), "yyyymmdd")
-    open("$datadir/latest", "w") do f
-        write(f, date)
-    end
+    rm("$datadir/histories.csv")
     open("$datadir/bluegreen", "w") do f
         write(f, blue_green_tag())
     end
 end
 
+function num_items(m::AbstractString, source::AbstractString)
+    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1)
+    filter!(x -> x.source == source, df)
+    n = length(Set(df.matchedid))
+    logtag("IMPORT_DATA", "num_items($m, $source) = $n")
+    n
+end
+
 function gen_splits()
-    recent_items = 5
+    mediums = ["manga", "anime"]
+    recent_items = 5 # TODO test more items
     min_items = 5
-    test_perc = 0.1
+    max_items = Dict(s => num_items.(mediums, s) for s in SOURCES) # TODO study clip threshold
+    test_perc = 0.1 # TODO test smaller test_perc
     max_ts = -Inf
-    @showprogress for f in Glob.glob("$datadir/lists_*.csv")
+    @showprogress for f in Glob.glob("$datadir/histories_*.csv")
         df = read_csv(f)
         max_df_ts = maximum(parse.(Float64, df.db_refreshed_at))
         max_ts = max(max_ts, max_df_ts)
@@ -83,30 +87,43 @@ function gen_splits()
     logtag("IMPORT_DATA", "using max_ts of $max_ts")
     rm("$datadir/users", recursive = true, force = true)
     @showprogress for (idx, f) in
-                      Iterators.enumerate(Glob.glob("$datadir/lists_*.csv"))
+                      Iterators.enumerate(Glob.glob("$datadir/histories_*.csv"))
         train_dir = "$datadir/users/training/$idx"
         test_dir = "$datadir/users/test/$idx"
         unused_dir = "$datadir/users/unused/$idx"
         mkpath.([train_dir, test_dir, unused_dir])
         df = Random.shuffle(read_csv(f))
         Threads.@threads for i = 1:DataFrames.nrow(df)
-            ts = parse(Float64, df.db_refreshed_at[i])
-            user = import_user(df.source[i], decompress(df.data[i]), ts)
-            if length(user["items"]) < min_items
+            user = import_user(df.source[i], decompress(df.data[i]), parse(Float64, df.db_refreshed_at[i]))
+            n_items = zeros(Int, length(mediums))
+            for x in user["items"]
+                n_items[x["medium"]+1] += 1
+            end
+            if sum(n_items) < min_items
+                recent_days = 0
+                outdir = unused_dir
+            elseif any(n_items .> max_items[df.source[i]])
+                k = (df.source[i], df.username[i], df.userid[i])
+                logerror("skipping user $i: $k with $n_items > $(max_items[df.source[i]]) items")
                 recent_days = 0
                 outdir = unused_dir
             elseif rand() < test_perc
                 recent_days = 1
                 outdir = test_dir
             else
-                recent_days = 1
+                recent_days = 1 # TODO test more days
                 outdir = train_dir
             end
             recent_ts = max_ts - 86400 * recent_days
             old_items = []
             new_items = []
+            skip_deletes = true
             for x in reverse(user["items"])
-                if x["updated_at"] > recent_ts && length(new_items) < recent_items
+                if skip_deletes && x["history_tag"] == "delete"
+                    continue
+                end
+                skip_deletes = false
+                if x["history_max_ts"] > recent_ts && length(new_items) < recent_items
                     push!(new_items, x)
                 else
                     push!(old_items, x)
@@ -114,6 +131,9 @@ function gen_splits()
             end
             if isempty(new_items)
                 outdir = unused_dir
+            end
+            if outdir == unused_dir
+                continue
             end
             user["items"] = reverse(old_items)
             user["test_items"] = reverse(new_items)
@@ -125,5 +145,5 @@ function gen_splits()
     end
 end
 
-download_data()
+download_data(ARGS[1])
 gen_splits()

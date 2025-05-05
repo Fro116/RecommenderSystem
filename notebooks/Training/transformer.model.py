@@ -148,10 +148,9 @@ class TransformerModel(nn.Module):
         )
         self.empty_loss = nn.Parameter(torch.tensor(0.0))
         if config["lora"]:
-            for name, param in self.embed.named_parameters():
-                param.requires_grad = False
-            for name, param in self.classifier.named_parameters():
-                param.requires_grad = False
+            for layer in [self.embed, self.watch_heads, self.rating_head]:
+                for _, param in layer.named_parameters():
+                    param.requires_grad = False
         # create loss functions
         self.lossfn_map = {
             "watch": self.crossentropy,
@@ -265,7 +264,6 @@ class TransformerModel(nn.Module):
         e = self.to_embedding(d)
         bp = torch.nonzero(d["mask_index"], as_tuple=True)
         embed = e[bp[0], bp[1], :]
-        lossfns = self.evaluatefns if evaluate else self.lossfns
         losses = []
         for medium in ALL_MEDIUMS:
             for metric in ALL_METRICS:

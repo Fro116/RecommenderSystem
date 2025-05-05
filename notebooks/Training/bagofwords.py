@@ -295,14 +295,10 @@ def upload(rank, logger):
     if rank != 0 or finetune is not None:
         return
     logger.info("uploading model")
-    template = "tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
+    with open(os.path.join(datadir, "list_tag"), "r") as f:
+        list_tag = f.read()
     for suffix in ["pt", "csv"]:
-        cmd = template.replace(
-            "{INPUT}", f"{datadir}/bagofwords.{medium}.{metric}.{suffix}"
-        ).replace(
-            "{OUTPUT}",
-            f"bagofwords.{medium}.{metric}.{suffix}",
-        )
+        cmd =  f"rclone --retries=10 copyto {datadir}/bagofwords.{medium}.{metric}.{suffix} r2:rsys/database/training/{list_tag}/bagofwords.{medium}.{metric}.{suffix}"
         os.system(cmd)
 
 
@@ -375,7 +371,7 @@ def download():
     assert finetune is None
     template = "tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto r2:rsys/database/training/$tag"
     files = (
-        ["bagofwords"] +
+        ["bagofwords", "list_tag"] +
         [f"{m}.csv" for m in ["manga", "anime"]] +
         [f"baseline.{m}.msgpack" for m in [0, 1]]
     )
