@@ -12,7 +12,7 @@ import Random
 const datadir = "../../data/training"
 const mediums = [0, 1]
 const metrics = ["watch", "rating", "status"]
-const planned_status = 5
+const currently_watching_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
 const min_ts = Dates.datetime2unix(Dates.DateTime("20000101", Dates.dateformat"yyyymmdd"))
 const max_seq_len = 1024
@@ -24,6 +24,27 @@ include("history_tools.jl")
 @memoize function num_items(medium::Int)
     m = medium_map[medium]
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1).matchedid) + 1
+end
+
+@memoize function get_baselines()
+    baselines = Dict()
+    for metric in ["rating"]
+        baselines[metric] = Dict()
+        for m in [0, 1]
+            b = open("$datadir/baseline.$metric.$m.msgpack") do f
+                MsgPack.unpack(read(f))
+            end
+            d = Dict()
+            d["params"] = convert.(Float32, b["params"]["λ"])
+            d["weight"] = convert(Float32, only(b["weight"]))
+            d["a"] = convert.(Float32, b["params"]["a"])
+            item_counts = b["params"]["item_counts"]
+            item_counts = Int32[get(item_counts, x, 1) for x = 0:length(b["params"]["a"])-1]
+            d["item_counts"] = item_counts
+            baselines[metric][m] = d
+        end
+    end
+    baselines
 end
 
 function get_data(data, userid)
@@ -39,7 +60,6 @@ function get_data(data, userid)
         "1_matchedid" => Vector{Int32}(undef, N),
         "1_distinctid" => Vector{Int32}(undef, N),
         "time" => zeros(Float64, N),
-        "delta_time" => zeros(Float64, N),
     )
     for k in keys(d)
         d[k][1] = cls_val
@@ -51,31 +71,30 @@ function get_data(data, userid)
             d["$m.$metric.weight"] = zeros(Float32, N)
         end
     end
-    last_ts = min_ts
     i = 1
     for x in data["items"]
         i += 1
-        d["status"][i] = x["status"]
-        d["rating"][i] = x["rating"]
-        d["progress"][i] = x["progress"]
         m = x["medium"]
         n = 1 - x["medium"]
+        d["status"][i] = x["status"]
+        d["rating"][i] = x["rating"] - get_baselines()["rating"][m]["a"][x["matchedid"]+1]
+        d["progress"][i] = x["progress"]
         d["$(m)_matchedid"][i] = x["matchedid"]
         d["$(m)_distinctid"][i] = x["distinctid"]
         d["$(n)_matchedid"][i] = cls_val
         d["$(n)_distinctid"][i] = cls_val
         d["time"][i] = x["history_max_ts"]
-        d["delta_time"][i-1] = x["history_max_ts"] - last_ts
-        last_ts = x["history_max_ts"]
-        if (x["status"] == 0 || x["status"] >= planned_status) && (x["rating"] == 0 || x["rating"] >= 5)
+        new_watch = (x["status"] >= currently_watching_status) && (isnothing(x["history_status"]) || x["history_status"] < currently_watching_status)
+        inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
+        if new_watch || inferred_watch
             d["$m.watch.label"][i] = 1
             d["$m.watch.weight"][i] = 1
         end
-        if x["rating"] > 0
-            d["$m.rating.label"][i] = x["rating"]
+        if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
+            d["$m.rating.label"][i] = d["rating"][i]
             d["$m.rating.weight"][i] = 1
         end
-        if x["status"] > 0
+        if (x["status"] > 0) && (x["status"] != x["history_status"])
             d["$m.status.label"][i] = x["status"]
             d["$m.status.weight"][i] = 1
         end
@@ -184,13 +203,7 @@ function upload()
     run(`sh -c $cmd`)
 end
 
-function set_random_seed()
-    tag = read("$datadir/latest", String)
-    Random.seed!(tag)
-end
-
 rm("$datadir/transformer", recursive = true, force = true)
-set_random_seed()
 save_data("test")
 save_data("training")
 upload()

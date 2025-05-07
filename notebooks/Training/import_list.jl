@@ -105,10 +105,8 @@ function create_item!(source, medium, itemid, item)
             item[k] = 0
         elseif item[k] < Dates.datetime2unix(Dates.DateTime(2000, 1, 1)) ||
                item[k] > time() + 86400
-            if k != "history_min_ts" # TODO remove after regenerating histories
-                logerror("invalid $k for $item $(item[k])")
-                item[k] = 0
-            end
+            logerror("invalid $k for $item $(item[k])")
+            item[k] = 0
         end
     end
     if item["progress"] < 0 || item["progress"] > 1
@@ -602,6 +600,51 @@ function import_profile(source, data, reftime)
     fns[source](data, reftime)
 end
 
+function annotate_with_last_state!(user)
+    # remove acausal deleted items
+    max_history_tag = ""
+    for x in user["items"]
+        tag = x["history_tag"]
+        if tag in ["infer", "delete"]
+            continue
+        end
+        max_history_tag = max(max_history_tag, tag)
+    end
+    items = []
+    for x in user["items"]
+        if x["history_tag"] == max_history_tag && x["history_tag"] == "delete"
+            continue
+        end
+        push!(items, x)
+    end
+    # set metrics for custom tags
+    deleted_status = 3
+    for x in items
+        tag = x["history_tag"]
+        if tag == "infer"
+            x["status"] = 0
+            x["rating"] = 0
+            x["progress"] = 0
+        elseif tag == "delete"
+            x["status"] = deleted_status
+            x["rating"] = 0
+        end
+    end
+    # record last item state
+    snapshot = Dict()
+    for x in items
+        k = (x["medium"], x["matchedid"])
+        if k in keys(snapshot)
+            x["history_status"], x["history_rating"] = snapshot[k]
+        else
+            x["history_status"] = nothing
+            x["history_rating"] = nothing
+        end
+        snapshot[k] = (x["status"], x["rating"])
+    end
+    user["items"] = items
+end
+
 function import_user(source, data, reftime)
     fns = Dict(
         "mal" => import_mal_user,
@@ -609,5 +652,7 @@ function import_user(source, data, reftime)
         "kitsu" => import_kitsu_user,
         "animeplanet" => import_animeplanet_user,
     )
-    fns[source](data, reftime)
+    user = fns[source](data, reftime)
+    annotate_with_last_state!(user)
+    user
 end

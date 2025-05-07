@@ -71,6 +71,62 @@ function num_items(m::AbstractString, source::AbstractString)
     n
 end
 
+function project!(user)
+    # remove acausal deleted items
+    max_history_tag = ""
+    for x in user["items"]
+        tag = x["history_tag"]
+        if tag in ["infer", "delete"]
+            continue
+        end
+        max_history_tag = max(max_history_tag, tag)
+    end
+    items = []
+    for x in user["items"]
+        if x["history_tag"] == max_history_tag && x["history_tag"] == "delete"
+            continue
+        end
+        push!(items, x)
+    end
+    # set metrics for custom tags
+    deleted_status = 3
+    for x in items
+        tag = x["history_tag"]
+        if tag == "infer"
+            x["status"] = 0
+            x["rating"] = 0
+            x["progress"] = 0
+        elseif tag == "delete"
+            x["status"] = deleted_status
+            x["rating"] = 0
+        end
+    end
+    # don't predict watched items
+    prev_snapshot = Dict()
+    for x in items
+        if x["history_tag"] == max_history_tag
+            continue
+        end
+        k = (x["medium"], x["matchedid"])
+        if x["history_tag"] == "delete"
+            delete!(prev_snapshot, k)
+        else
+            prev_snapshot[k] = x["status"]
+        end
+    end
+    planned_status = 5
+    for x in items
+        predict = true
+        k = (x["medium"], x["matchedid"])
+        if k in keys(prev_snapshot) && prev_snapshot[k] != planned_status
+            predict = false
+        end
+        x["history_predict"] = predict
+    end
+    user["items"] = items
+end
+
+
 function gen_splits()
     mediums = ["manga", "anime"]
     recent_items = 5 # TODO test more items
@@ -114,16 +170,15 @@ function gen_splits()
                 recent_days = 1 # TODO test more days
                 outdir = train_dir
             end
+            project!(user)
             recent_ts = max_ts - 86400 * recent_days
             old_items = []
             new_items = []
-            skip_deletes = true
             for x in reverse(user["items"])
-                if skip_deletes && x["history_tag"] == "delete"
-                    continue
-                end
-                skip_deletes = false
                 if x["history_max_ts"] > recent_ts && length(new_items) < recent_items
+                    if !x["history_predict"]
+                        continue
+                    end
                     push!(new_items, x)
                 else
                     push!(old_items, x)

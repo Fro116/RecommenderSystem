@@ -192,9 +192,10 @@ function num_items(m::AbstractString, source::AbstractString)
 end
 
 function gen_splits()
+    # TODO study min/max thresholds
     min_items = 5
-    max_items = Dict(s => num_items.(MEDIUMS, s) for s in SOURCES) # TODO study clip threshold
-    # TODO keep users that pass max_items because of plantowatch status
+    max_items = Dict(s => num_items.(MEDIUMS, s) for s in SOURCES)
+    # TODO keep users that pass max_items because of plantowatch/drop status
     test_perc = 0.01
     @showprogress for (idx, f) in
                       Iterators.enumerate(Glob.glob("$datadir/histories_*.csv"))
@@ -205,11 +206,15 @@ function gen_splits()
         df = Random.shuffle(read_csv(f))
         Threads.@threads for i = 1:DataFrames.nrow(df)
             user = import_user(df.source[i], decompress(df.data[i]), parse(Float64, df.db_refreshed_at[i]))
+            n_predict = 0
             n_items = zeros(Int, length(MEDIUMS))
             for x in user["items"]
                 n_items[x["medium"]+1] += 1
+                if x["status"] != x["history_status"] || x["rating"] != x["history_rating"]
+                    n_predict += 1
+                end
             end
-            if sum(n_items) < min_items
+            if n_predict < min_items
                 outdir = unused_dir
             elseif any(n_items .> max_items[df.source[i]])
                 k = (df.source[i], df.username[i], df.userid[i])

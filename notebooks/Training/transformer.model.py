@@ -200,7 +200,6 @@ class TransformerModel(nn.Module):
         periodic_ts = torch.cat([2 * np.pi * periodic_ts / p for p in periods], dim=-1)
         d["periodic_time"] = periodic_ts.to(torch.float32)
         # other features
-        d["progress"] = d["progress"].clip(0, 1)
         userid = d["userid"]
         m, n = userid.shape
 

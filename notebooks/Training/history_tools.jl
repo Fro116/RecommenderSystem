@@ -34,17 +34,14 @@ function project_latest!(user)
     user["items"] = items
 end
 
-function project!(user, key="items")
-    deleted_status = 3
-    for x in user[key]
-        tag = x["history_tag"]
-        if tag == "infer"
-            x["status"] = 0
-            x["rating"] = 0
-            x["progress"] = 0
-        elseif tag == "delete"
-            x["status"] = deleted_status
-            x["rating"] = 0
+function project!(user)
+    items = []
+    for x in user["items"]
+        if x["history_status"] == x["status"] && x["history_rating"] == x["rating"]
+            # TODO try not skipping
+            continue
         end
+        push!(items, x)
     end
+    user["items"] = items
 end

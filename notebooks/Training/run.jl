@@ -82,31 +82,31 @@ function start_gpu()
     end
 end
 
-function pretrain()
-    run(`julia import_data.jl`)
+function pretrain(datetag::AbstractString)
+    run(`julia import_data.jl $datetag`)
     for m in [0, 1]
         run(`julia media_relations.jl $m`)
     end
     for metric in ["rating"]
         run(`julia baseline.jl $metric`)
     end
-    run(`julia -t auto bagofwords.jl --pretrain`)
-    run(`julia -t auto transformer.jl`)
-    start_gpu()
-    latest = read("../../data/training/latest", String)
-    success = read(
-        `rclone --retries=10 ls r2:rsys/database/training/$latest/bagofwords.1.rating.pt`,
-        String,
-    )
-    if isempty(success)
-        logerror("gpu training failed")
-        return
-    end
-    cmd = "rclone --retries=10 copyto ../../data/training/latest r2:rsys/database/training/latest"
-    run(`sh -c $cmd`)
-    cleanup =
-        raw"rclone lsd r2:rsys/database/training/ | sort | head -n -2 | awk '{print $NF}' | xargs -I {} rclone purge r2:rsys/database/training/{}"
-    run(`sh -c $cleanup`)
+    # run(`julia -t auto bagofwords.jl --pretrain`)
+    # run(`julia -t auto transformer.jl`)
+    # start_gpu()
+    # list_tag = read("../../data/training/list_tag", String)
+    # success = read(
+    #     `rclone --retries=10 ls r2:rsys/database/training/$list_tag/bagofwords.1.rating.pt`,
+    #     String,
+    # )
+    # if isempty(success)
+    #     logerror("gpu training failed")
+    #     return
+    # end
+    # cmd = "rclone --retries=10 copyto ../../data/training/list_tag r2:rsys/database/training/latest"
+    # run(`sh -c $cmd`)
+    # cleanup =
+    #     raw"rclone lsd r2:rsys/database/training/ | sort | head -n -2 | awk '{print $NF}' | xargs -I {} rclone purge r2:rsys/database/training/{}"
+    # run(`sh -c $cleanup`)
 end
 
-pretrain()
+pretrain(ARGS[1])

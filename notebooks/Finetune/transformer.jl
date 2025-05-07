@@ -77,7 +77,6 @@ end
 
 function get_data(data, userid)
     project!(data)
-    project!(data, "test_items")
     biases = get_user_bias(data)
     reserved_vals = 2
     cls_val = -1

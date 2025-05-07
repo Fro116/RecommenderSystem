@@ -207,7 +207,7 @@ def shift_left(x):
     return y
 
 
-def to_device(data, rank, baselines):
+def to_device(data, rank):
     d = {}
     for k in data:
         if k == "mask_rate":
@@ -216,6 +216,7 @@ def to_device(data, rank, baselines):
             causal = data[k]
         else:
             d[k] = data[k].to(rank).to_dense()
+    d["delta_time"] = (shift_left(d["time"]) - d["time"]) * (d["userid"] == shift_left(d["userid"]))
     if finetune is not None:
         if causal:
             d["mask_index"] = shift_left(d["mask_index"])
@@ -248,29 +249,6 @@ def to_device(data, rank, baselines):
             if k in ["userid"]:
                 continue
             d[k][mask] = mask_val
-        # residualize
-        for metric in ["rating"]:
-            rmask = d[metric] > 0
-            for m in ALL_MEDIUMS:
-                base = baselines[metric][m]
-                _, λ_u, _, λ_wu, λ_wa = base["params"]
-                idx = d[f"{m}_matchedid"].clip(0).to(torch.int64)
-                a = torch.gather(base["a"], 0, idx)
-                acount = torch.gather(base["item_counts"], 0, idx)
-                rating_mask = (d[f"{m}_matchedid"] >= 0) * rmask
-                ucount = scatter_add(rating_mask.to(torch.float32), d["userid"])
-                w = (ucount.clip(1) ** λ_wu * acount**λ_wa) * rating_mask
-                denom = scatter_add(w, d["userid"]) + np.exp(λ_u)
-                numer = scatter_add((d[metric] - a) * w, d["userid"])
-                bias = numer / denom
-                beta = base["weight"]
-                if metric in ALL_METRICS:
-                    label_idx = d[f"{m}.{metric}.position"].clip(0).to(torch.int64)
-                    label_rating_pred = bias + torch.gather(base["a"], 0, label_idx)
-                    label_rating_mask = d[f"{m}.{metric}.weight"] > 0
-                    d[f"{m}.{metric}.label"] -= beta * label_rating_pred * label_rating_mask
-                d[metric] = d[metric] - beta * (bias + a) * rating_mask
-            d[metric] *= rmask
     for k in d:
         d[k] = d[k].reshape(-1, max_seq_len)
     return d
@@ -294,7 +272,7 @@ def reduce_mean(rank, x, w):
     return [float(a) / float(b) if float(b) != 0 else 0 for (a, b) in zip(x, w)]
 
 
-def evaluate_metrics(rank, model, dataloader, baselines):
+def evaluate_metrics(rank, model, dataloader):
     init = lambda metric: [0, 0, 0] if metric in ["rating"] else 0
     losses = [init(metric) for m in ALL_MEDIUMS for metric in ALL_METRICS]
     weights = [0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
@@ -304,7 +282,7 @@ def evaluate_metrics(rank, model, dataloader, baselines):
     for data in dataloader:
         with torch.no_grad():
             with torch.amp.autocast(f"cuda:{rank}", dtype=torch.bfloat16):
-                d = to_device(data, rank, baselines)
+                d = to_device(data, rank)
                 loss = model(d, True)
             for i in range(len(losses)):
                 w = float(d[f"{names[i]}.weight"].sum())
@@ -333,7 +311,6 @@ def train_epoch(
     scheduler,
     scaler,
     task_weights,
-    baselines,
 ):
     training_losses = [0.0 for _ in range(len(task_weights))]
     training_weights = [0.0 for _ in range(len(task_weights))]
@@ -342,7 +319,7 @@ def train_epoch(
     for data in dataloader:
         optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(f"cuda:{rank}", dtype=torch.bfloat16):
-            d = to_device(data, rank, baselines)
+            d = to_device(data, rank)
             tloss = model(d, False)
             for i in range(len(tloss)):
                 w = float(d[f"{names[i]}.weight"].sum())
@@ -541,7 +518,6 @@ def train():
     batch_size = 512 if finetune is None else 32
     num_epochs = 1024
     assert batch_size % world_size == 0
-    baselines = get_baselines(rank)
     config = training_config()
 
     def TransformerDataset(x):
@@ -598,7 +574,7 @@ def train():
         else EarlyStopper(patience=1, rtol=0.001)
     )
     task_weights = make_task_weights()
-    get_loss = lambda x: evaluate_metrics(rank, x, dataloaders["test"], baselines)
+    get_loss = lambda x: evaluate_metrics(rank, x, dataloaders["test"])
     checkpoint = lambda m, s, l, e: checkpoint_model(rank, m, config, s, l, e, task_weights)
     initial_loss = get_loss(model)
     logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")
@@ -613,7 +589,6 @@ def train():
             scheduler,
             scaler,
             task_weights,
-            baselines,
         )
         logger.info(
             f"Epoch: {epoch}, Training Loss:"
@@ -640,30 +615,9 @@ def download():
     files = (
         ["transformer", "list_tag"]
         + [f"{m}.csv" for m in ["manga", "anime"]]
-        + [f"baseline.{metric}.{m}.msgpack" for metric in ["rating"] for m in [0, 1]]
     )
     for data in files:
         os.system(f"{template}/{data} {datadir}/{data}")
-
-
-def get_baselines(rank):
-    baselines = {}
-    for metric in ["rating"]:
-        baselines[metric] = {}
-        for m in [0, 1]:
-            with open(f"{datadir}/baseline.{metric}.{m}.msgpack", "rb") as f:
-                baseline = msgpack.unpackb(f.read(), strict_map_key=False)
-                d = {}
-                d["params"] = baseline["params"]["λ"]
-                d["weight"] = baseline["weight"][0]
-                d["a"] = torch.tensor(baseline["params"]["a"]).to(rank)
-                item_counts = baseline["params"]["item_counts"]
-                item_counts = [
-                    item_counts.get(x, 1) for x in range(len(baseline["params"]["a"]))
-                ]
-                d["item_counts"] = torch.tensor(item_counts).to(rank)
-                baselines[metric][m] = d
-    return baselines
 
 
 parser = argparse.ArgumentParser()
