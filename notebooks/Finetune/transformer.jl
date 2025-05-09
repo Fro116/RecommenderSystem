@@ -62,7 +62,7 @@ function get_data(data, userid)
         "0_distinctid" => zeros(Int32, max_seq_len),
         "1_matchedid" => zeros(Int32, max_seq_len),
         "1_distinctid" => zeros(Int32, max_seq_len),
-        "time" => zeros(Float32, max_seq_len),
+        "time" => zeros(Float64, max_seq_len),
     )
     input_fields = collect(keys(d))
     d["userid"] = zeros(Int32, max_seq_len)

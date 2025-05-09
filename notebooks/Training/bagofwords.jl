@@ -49,9 +49,7 @@ function get_data(data)
             W["$(m)_$(metric)"] = Dict{Int32,Float32}()
         end
     end
-    input_items = data["items"]
-    output_items = finetune ? data["test_items"] : data["items"]
-    for x in input_items
+    for x in data["items"]
         m = x["medium"]
         idx = x["matchedid"] + 1
         if x["rating"] > 0
@@ -64,12 +62,17 @@ function get_data(data)
         else
             X["$(m)_watch"][idx] = 0
         end
-        # TODO test encoding status
     end
-    for x in output_items
+    output_items = finetune ? data["test_items"] : data["items"]
+    for x in reverse(output_items)
         m = x["medium"]
         idx = x["matchedid"] + 1
-        if x["rating"] > 0
+        if finetune
+            predict_rating = (x["rating"] > 0) && (x["rating"] != x["history_rating"])
+        else
+            predict_rating = x["rating"] > 0
+        end
+        if predict_rating
             Y["$(m)_rating"][idx] = x["rating"]
             W["$(m)_rating"][idx] = 1
         else

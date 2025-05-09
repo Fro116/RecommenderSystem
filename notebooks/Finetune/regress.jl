@@ -76,7 +76,7 @@ function get_registry()
 end
 
 function watch_loss(users, registry, medium)
-    planned_status = 4
+    planned_status = 5
     m = medium
     losses = 0.0
     weights = 0.0
@@ -87,8 +87,11 @@ function watch_loss(users, registry, medium)
             if x["medium"] != m
                 continue
             end
-            if (x["status"] == 0 || x["status"] >= planned_status) &&
-               (x["rating"] == 0 || x["rating"] >= 5)
+            inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
+            new_watch =
+                (x["status"] > planned_status) &&
+                (isnothing(x["history_status"]) || x["history_status"] <= planned_status)
+            if inferred_watch || new_watch
                 push!(ys, x["matchedid"] + 1)
             end
         end
@@ -111,6 +114,7 @@ end
 function rating_regress(users, registry, medium)
     x_baseline = Float32[]
     x_bagofwords = Float32[]
+    x_transformer_baseline = Float32[]
     x_transformer = Float32[]
     y = Float32[]
     w = Float32[]
@@ -122,7 +126,8 @@ function rating_regress(users, registry, medium)
             if x["medium"] != m
                 continue
             end
-            if x["rating"] == 0
+            predict_rating = (x["rating"] > 0) && (x["rating"] != x["history_rating"])
+            if !predict_rating
                 continue
             end
             idx = x["matchedid"] + 1
@@ -134,7 +139,6 @@ function rating_regress(users, registry, medium)
                 registry["bagofwords.$m.rating.weight"][idx, :]' *
                 u["embeds"]["bagofwords.$m.rating"] +
                 registry["bagofwords.$m.rating.bias"][idx]
-            # todo vectorize to align with render.jl
             p_transformer = let
                 a = registry["transformer.$m.embedding"][idx, :]
                 h = vcat(u["embeds"]["transformer.$m"], a)
@@ -145,8 +149,10 @@ function rating_regress(users, registry, medium)
                 registry["transformer.$m.rating.weight.2"]' * h +
                 only(registry["transformer.$m.rating.bias.2"])
             end
+            p_transformer_baseline = registry["baseline.$m.rating.bias"][idx]
             push!(x_baseline, p_baseline)
             push!(x_bagofwords, p_bagofwords)
+            push!(x_transformer_baseline, p_transformer_baseline)
             push!(x_transformer, p_transformer)
             push!(y, x["rating"])
             count += 1
@@ -155,7 +161,7 @@ function rating_regress(users, registry, medium)
             push!(w, 1 / count)
         end
     end
-    X = reduce(hcat, [x_baseline, x_bagofwords, x_transformer])
+    X = reduce(hcat, [x_baseline, x_bagofwords, x_transformer_baseline, x_transformer])
     β = (X .* sqrt.(w)) \ (y .* sqrt.(w))
     loss = sum((X * β - y) .^ 2 .* w) / sum(w)
     β, loss

@@ -101,8 +101,30 @@ class RequestBuffer:
                             time.time(),
                         )
 
+def project_latest(user):
+    max_history_tag = ""
+    for x in user["items"]:
+        tag = x["history_tag"]
+        if tag in ["infer", "delete"]:
+            continue
+        max_history_tag = max(max_history_tag, tag)
+    items = []
+    for x in user["items"]:
+        if x["history_tag"] == max_history_tag:
+            items.append(x)
+    return items
 
-def get_user_bias(data):
+
+def project(user):
+    items = []
+    for x in user["items"]:
+        if (x["history_status"] == x["status"]) and (x["history_rating"] == x["rating"]):
+            continue
+        items.append(x)
+    return items
+
+
+def get_user_bias(items):
     biases = {}
     for metric in ["rating"]:
         biases[metric] = {}
@@ -111,8 +133,8 @@ def get_user_bias(data):
             _, λ_u, _, λ_wu, λ_wa = base["params"]
             numer = 0
             denom = np.exp(λ_u)
-            ucount = len([x for x in data["items"] if x[metric] > 0 and x["medium"] == m])
-            for x in data["items"]:
+            ucount = len([x for x in items if x[metric] > 0 and x["medium"] == m])
+            for x in items:
                 if x["medium"] != m or x[metric] == 0:
                     continue
                 acount = base["item_counts"][x["matchedid"]]
@@ -126,21 +148,13 @@ def get_user_bias(data):
 def predict_baseline(users):
     ret = []
     for u in range(len(users)):
+        items = project_latest(users[u])
         d = {}
-        biases = get_user_bias(users[u])
+        biases = get_user_bias(items)
         for m in mediums:
             for metric in ["rating"]:
                 d[f"baseline.{m}.{metric}"] = [biases[metric][m]]
         ret.append(d)
-        for x in users[u]["items"]:
-            for metric in ["rating"]:
-                if x[metric] > 0:
-                    m = x["medium"]
-                    bl = baselines[metric][m]
-                    pred = (biases[metric][m] + bl["a"][x["matchedid"]]) * bl["weight"]
-                    x[f"{metric}.resid"] = x[metric] - pred
-                else:
-                    x[f"{metric}.resid"] = 0
     return ret
 
 
@@ -149,18 +163,22 @@ def predict_bagofwords(users):
     for m in mediums:
         for metric in ["rating", "watch"]:
             X[f"{m}_{metric}"] = np.zeros((len(users), num_items[m]), dtype=np.float32)
-    for i, u in enumerate(users):
-        for x in u["items"]:
+    for u in range(len(users)):
+        items = project_latest(users[u])
+        biases = get_user_bias(items)
+        for x in items:
             m = x["medium"]
             idx = x["matchedid"]
             if x["rating"] > 0:
-                X[f"{m}_rating"][i, idx] = x["rating.resid"]
+                bl = baselines["rating"][m]
+                pred = (biases["rating"][m] + bl["a"][idx]) * bl["weight"]
+                X[f"{m}_rating"][u, idx] = x["rating"] - pred
             else:
-                X[f"{m}_rating"][i, idx] = 0
+                X[f"{m}_rating"][u, idx] = 0
             if x["status"] > planned_status:
-                X[f"{m}_watch"][i, idx] = 1
+                X[f"{m}_watch"][u, idx] = 1
             else:
-                X[f"{m}_watch"][i, idx] = 0
+                X[f"{m}_watch"][u, idx] = 0
     data = {k: torch.tensor(v) for k, v in X.items()}
     ret = {}
     d = {}
@@ -180,9 +198,15 @@ def predict_bagofwords(users):
     return ret
 
 
+def shift_left(x):
+    y = torch.zeros_like(x)
+    y[..., :-1] = x[..., 1:]
+    return y
+
+
 def predict_transformer(users):
     extra_tokens = 2 # cls and mask
-    max_len = max(min(max_seq_len, len(x["items"]) + extra_tokens) for x in users)
+    max_len = max_seq_len
     d = {
         "status": np.zeros((len(users), max_len), dtype=np.int32),
         "rating": np.zeros((len(users), max_len), dtype=np.float32),
@@ -192,50 +216,48 @@ def predict_transformer(users):
         "1_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
         "1_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
         "time": np.zeros((len(users), max_len), dtype=np.float64),
-        "delta_time": np.zeros((len(users), max_len), dtype=np.float64),
     }
     input_fields = list(d.keys())
     d["userid"] = np.zeros((len(users), max_len), dtype=np.int32)
     d["mask_index"] = np.zeros((len(users), max_len), dtype=np.int32)
-    user_biases = []
     for u in range(len(users)):
-        biases = get_user_bias(users[u])
-        user_biases.append(biases)
         userid = u + 1
         for k in input_fields:
             d[k][u, 0] = cls_val
         d["userid"][u, 0] = userid
-        d["rating"][u, 0] = 0
-        items = users[u]["items"]
+        items = project(users[u])
         if len(items) > max_len - extra_tokens:
             items = items[-(max_len - extra_tokens):]
-        last_ts = min_ts
         i = 0
         for x in items:
             i += 1
             m = x["medium"]
             n = 1 - x["medium"]
-            d["status"][u, i] = x["status"]
-            d["rating"][u, i] = x["rating.resid"]
-            d["progress"][u, i] = x["progress"]
+            # item features
             d[f"{m}_matchedid"][u, i] = x["matchedid"]
             d[f"{m}_distinctid"][u, i] = x["distinctid"]
             d[f"{n}_matchedid"][u, i] = cls_val
             d[f"{n}_distinctid"][u, i] = cls_val
-            if x["updated_at"] >= min_ts and x["updated_at"] <= max_ts: # TODO think about max_ts
-                d["time"][u, i] = x["updated_at"]
-                d["delta_time"][u, i-1] = x["updated_at"] - last_ts
-                last_ts = x["updated_at"]
+            d["time"][u, i] = x["history_max_ts"]
+            # action features
+            d["status"][u, i] = x["status"]
+            if x["rating"] == 0:
+                rating = 0
+            else:
+                rating = x["rating"] - baselines["rating"][m]["a"][x["matchedid"]]
+            d["rating"][u, i] = rating
+            d["progress"][u, i] = x["progress"]
+            # targets
             d["userid"][u, i] = userid
             d["mask_index"][u, i] = 0
         i += 1
         for k in input_fields:
             d[k][u, i] = mask_val
+        d["time"][u, i] = max_ts
         d["userid"][u, i] = userid
-        d["delta_time"][u, i-1] = max_ts - last_ts
-        d["rating"][u, i] = 0
         d["mask_index"][u, i] = 1
     d = {k: torch.tensor(v).to(device) for k, v in d.items()}
+    d["delta_time"] = (shift_left(d["time"]) - d["time"]) * (d["userid"] == shift_left(d["userid"]))
     ret = {}
     for medium in mediums:
         with torch.no_grad():
@@ -252,8 +274,8 @@ def predict(users):
 
     ret = [{"version": version} for _ in users]
     ret = merge(ret, predict_baseline(users))
-    ret = merge(ret, predict_bagofwords(users))
     ret = merge(ret, predict_transformer(users))
+    ret = merge(ret, predict_bagofwords(users))
     return ret
 
 
@@ -302,6 +324,7 @@ def load_transformer_model(medium):
     fn = f"{datadir}/transformer.{medium}.finetune.pt"
     m.load_state_dict(torch.load(fn, weights_only=True, map_location=device))
     m = m.to(device)
+    m = torch.compile(m)
     m.eval()
     return m
 
@@ -322,12 +345,12 @@ num_items = {
     m: pd.read_csv(f"{datadir}/{n}.csv").matchedid.max() + 1
     for m, n in [(0, "manga"), (1, "anime")]
 }
-planned_status = 4
+planned_status = 5
 baselines = get_baselines(device)
 request_buffer = RequestBuffer(
     batch_size=32, timeout_seconds=0.01, max_queue_size=1024
 )
-with open(f"{datadir}/latest") as f:
+with open(f"{datadir}/finetune_tag") as f:
     version = f.read()
 min_ts = int(
     datetime.datetime.strptime("20000101", "%Y%m%d")
@@ -338,7 +361,7 @@ max_ts = int(
     datetime.datetime.strptime(version, "%Y%m%d")
     .replace(tzinfo=datetime.timezone.utc)
     .timestamp()
-)
+) + 86400
 predict([{"user": {"source": "mal"}, "items": []}])
 logging.warning(f"STARTUP END AFTER {time.time() - starttime}s")
 app = FastAPI()
