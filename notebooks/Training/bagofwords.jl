@@ -27,7 +27,7 @@ end
 
 const finetune, datadir = parse_args()
 const mediums = [0, 1]
-const metrics = ["watch", "rating", "status"]
+const metrics = ["rating"]
 const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
 
@@ -38,15 +38,13 @@ end
 
 function get_data(data)
     project_latest!(data)
-    if finetune
-        project!(data, "test_items")
-    end
     X = Dict()
     Y = Dict()
     W = Dict()
     for m in mediums
+        X["$(m)_rating"] = Dict{Int32,Float32}()
+        X["$(m)_watch"] = Dict{Int32,Float32}()
         for metric in metrics
-            X["$(m)_$(metric)"] = Dict{Int32,Float32}()
             Y["$(m)_$(metric)"] = Dict{Int32,Float32}()
             W["$(m)_$(metric)"] = Dict{Int32,Float32}()
         end
@@ -71,13 +69,6 @@ function get_data(data)
     for x in output_items
         m = x["medium"]
         idx = x["matchedid"] + 1
-        if (x["status"] == 0 || x["status"] >= planned_status) && (x["rating"] == 0 || x["rating"] >= 5)
-            Y["$(m)_watch"][idx] = 1
-            W["$(m)_watch"][idx] = 1
-        else
-            Y["$(m)_watch"][idx] = 0
-            W["$(m)_watch"][idx] = 0
-        end
         if x["rating"] > 0
             Y["$(m)_rating"][idx] = x["rating"]
             W["$(m)_rating"][idx] = 1
@@ -85,19 +76,14 @@ function get_data(data)
             Y["$(m)_rating"][idx] = 0
             W["$(m)_rating"][idx] = 0
         end
-        if x["status"] > 0
-            Y["$(m)_status"][idx] = x["status"]
-            W["$(m)_status"][idx] = 1
-        else
-            Y["$(m)_status"][idx] = 0
-            W["$(m)_status"][idx] = 0
-        end
     end
     ret = Dict()
     for m in mediums
+        ret["X_$(m)_rating"] =
+            SparseArrays.sparsevec(X["$(m)_rating"], num_items(m))
+        ret["X_$(m)_watch"] =
+            SparseArrays.sparsevec(X["$(m)_watch"], num_items(m))
         for metric in metrics
-            ret["X_$(m)_$(metric)"] =
-                SparseArrays.sparsevec(X["$(m)_$(metric)"], num_items(m))
             ret["Y_$(m)_$(metric)"] =
                 SparseArrays.sparsevec(Y["$(m)_$(metric)"], num_items(m))
             ret["W_$(m)_$(metric)"] =

@@ -1,5 +1,6 @@
 import JSON3
 include("../julia_utils/stdout.jl")
+include("../julia_utils/multithreading.jl")
 
 function get_gpu_args()
     image = "pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel"
@@ -15,21 +16,35 @@ function get_gpu_args()
     image, entrypoint
 end
 
-function get_active_sf_cluster()
-    read_json(cmd) = JSON3.read(replace(read(cmd, String), r"(\w+): " => s"\"\1\": "))
+function read_json(cmd::Cmd)
+    text = try
+        read(cmd, String)
+    catch
+        logerror("read_json: could not run $cmd")
+        return nothing
+    end
     try
-        clusters = read_json(`sf clusters list --json`)
-        for x in clusters
-            if x["contract"]["status"] == "active"
-                return x["name"]
-            end
-        end
-    catch e
+        return JSON3.read(replace(text, r"(\w+): " => s"\"\1\": "))
+    catch
+        logerror("read_json: could not parse $text")
         return nothing
     end
 end
 
-function start_sfcompute(gpuhour_price)
+function get_active_sf_cluster()
+    clusters = read_json(`sf clusters list --json`)
+    if isnothing(clusters)
+        return nothing
+    end
+    for x in clusters
+        if x["contract"]["status"] == "active"
+            return x["name"]
+        end
+    end
+end
+
+# returns true on success
+function start_sfcompute(gpuhour_price::Real)::Bool
     image, entrypoint = get_gpu_args()
     yaml = read("entrypoint.yaml", String)
     yaml = replace(yaml, "{IMAGE}" => image, "{ENTRYPOINT}" => entrypoint)
@@ -41,20 +56,25 @@ function start_sfcompute(gpuhour_price)
         logerror("start_sfcompute already launched cluster")
         return false
     end
-    should_retry = true
+    runtime_hours = 17
+    gpuhour_price = string(round(gpuhour_price, digits=2))
     try
-        h = 7
-        gpuhour_price = string(round(gpuhour_price, digits=2))
-        run(`sf buy -d $(h)hr -n 8 -p $gpuhour_price -y`)
-        logtag("RUN", "started sfcompute")
-        sleep(60)
-        cluster = get_active_sf_cluster()
-        if isnothing(cluster)
-            return should_retry # order did not get filled
-        end
-        should_retry = false
-        run(`sf clusters users add --cluster $cluster --user myuser`)
+        logtag("RUN", "ordering sfcompute for $runtime_hours hours at price \$$gpuhour_price/gpuhour")
+        run(`sf buy -d $(runtime_hours)hr -n 8 -p $gpuhour_price -y`)
+        logtag("RUN", "starting sfcompute...")
+    catch e
+        logerror("start_sfcompute: error $e")
+        reutrn false
+    end
+    sleep(60) # wait for cluster to spin up
+    cluster = get_active_sf_cluster()
+    if isnothing(cluster)
+        logerror("start_sfcompute: no cluster found. Perhaps the order was not filled.")
+        return false
+    end
+    try
         cmds = [
+            "sf clusters users add --cluster $cluster --user myuser",
             "sleep 60",
             "kubectl delete jobs `kubectl get jobs -o custom-columns=:.metadata.name`",
             "cd ../../data/training",
@@ -62,23 +82,21 @@ function start_sfcompute(gpuhour_price)
         ]
         cmd = join(cmds, " && ")
         run(`sh -c $cmd`)
-        sleep(h * 3600)
-        return should_retry
+        sleep(runtime_hours * 3600)
     catch e
-        logerror("start_sfcompute error $e")
-        return should_retry
+        logerror("start_sfcompute: recieved error $e when connecting to cluster")
+        return false
     end
+    true
 end
 
-function start_gpu()
-    price = 3
-    while true
-        should_retry = start_sfcompute(price)
-        if !should_retry
-            return
-        end
-        logtag("RUN", "waiting for available gpus...")
-        sleep(600)
+function train_bagofwords()
+    run(`julia -t auto bagofwords.jl --pretrain`)
+    for m in [0, 1]
+        metric = "rating"
+        cmd="torchrun --standalone --nproc_per_node=1 bagofwords.py --datadir ../../data/training --medium $m --metric $metric"
+        cmd = "$cmd || (sleep 10 && $cmd) || (sleep 60 && $cmd)"
+        run(`sh -c $cmd`)
     end
 end
 
@@ -90,23 +108,30 @@ function pretrain(datetag::AbstractString)
     for metric in ["rating"]
         run(`julia baseline.jl $metric`)
     end
-    # run(`julia -t auto bagofwords.jl --pretrain`)
-    # run(`julia -t auto transformer.jl`)
-    # start_gpu()
-    # list_tag = read("../../data/training/list_tag", String)
-    # success = read(
-    #     `rclone --retries=10 ls r2:rsys/database/training/$list_tag/bagofwords.1.rating.pt`,
-    #     String,
-    # )
-    # if isempty(success)
-    #     logerror("gpu training failed")
-    #     return
-    # end
-    # cmd = "rclone --retries=10 copyto ../../data/training/list_tag r2:rsys/database/training/latest"
-    # run(`sh -c $cmd`)
-    # cleanup =
-    #     raw"rclone lsd r2:rsys/database/training/ | sort | head -n -2 | awk '{print $NF}' | xargs -I {} rclone purge r2:rsys/database/training/{}"
-    # run(`sh -c $cleanup`)
+    run(`julia -t auto transformer.jl`)
+    t = @handle_errors Threads.@spawn start_sfcompute(3.00)
+    train_bagofwords()
+    sfcompute_success = fetch(t)
+    if !sfcompute_success
+        logerror("sfcompute training failed")
+        return
+    end
+    list_tag = read("../../data/training/list_tag", String)
+    for f in ["transformer.pt", "bagofwords.0.rating.pt", "bagofwords.1.rating.pt"]
+        success = read(
+            `rclone --retries=10 ls r2:rsys/database/training/$list_tag/$f`,
+            String,
+        )
+        if isempty(success)
+            logerror("gpu training failed")
+            return
+        end
+    end
+    cmd = "rclone --retries=10 copyto ../../data/training/list_tag r2:rsys/database/training/latest"
+    run(`sh -c $cmd`)
+    cleanup =
+        raw"rclone lsd r2:rsys/database/training/ | sort | head -n -2 | awk '{print $NF}' | xargs -I {} rclone purge r2:rsys/database/training/{}"
+    run(`sh -c $cleanup`)
 end
 
 pretrain(ARGS[1])

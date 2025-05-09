@@ -132,7 +132,7 @@ class FinetuneDataset(IterableDataset):
             f"{m}.{metric}.{x}"
             for x in ["label", "weight"]
             for m in ALL_MEDIUMS
-            for metric in ALL_METRICS
+            for metric in ["watch", "rating", "status"]
         ]
         self.shuffle = shuffle
         self.causal = causal

@@ -20,10 +20,3 @@ cd RecommenderSystem/notebooks/Training/
 python transformer.py --datadir ../../data/training --download
 cmd="torchrun --standalone --nproc_per_node=8 transformer.py --datadir ../../data/training"
 $cmd || (sleep 10 && $cmd) || (sleep 60 && $cmd)
-python bagofwords.py --datadir ../../data/training --download
-for m in 0 1; do
-for metric in rating; do
-    cmd="torchrun --standalone --nproc_per_node=8 bagofwords.py --datadir ../../data/training --medium $m --metric $metric"
-    $cmd || (sleep 10 && $cmd) || (sleep 60 && $cmd)
-done
-done

@@ -12,10 +12,9 @@ import SparseArrays
 
 const datadir = "../../data/finetune"
 const mediums = [0, 1]
-const metrics = ["watch", "rating"]
+const metrics = ["watch", "rating", "status"]
 const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
-const min_ts = Dates.datetime2unix(Dates.DateTime("20000101", Dates.dateformat"yyyymmdd"))
 const max_ts = Dates.datetime2unix(
     Dates.DateTime(read("$datadir/finetune_tag", String), Dates.dateformat"yyyymmdd"),
 ) + 86400
@@ -49,38 +48,12 @@ end
     baselines
 end
 
-function get_user_bias(data)
-    baselines = get_baselines()
-    biases = Dict()
-    for metric in ["rating"]
-        biases[metric] = Dict()
-        for m in [0, 1]
-            base = baselines[metric][m]
-            _, λ_u, _, λ_wu, λ_wa = base["params"]
-            numer = 0
-            denom = exp(λ_u)
-            ucount = length([x for x in data["items"] if x[metric] > 0 && x["medium"] == m])
-            for x in data["items"]
-                if x["medium"] != m || x[metric] == 0
-                    continue
-                end
-                acount = base["item_counts"][x["matchedid"]+1]
-                w = ucount^λ_wu * acount^λ_wa
-                numer += (x[metric] - base["a"][x["matchedid"]+1]) * w
-                denom += w
-            end
-            biases[metric][m] = numer / denom
-        end
-    end
-    biases
-end
-
 function get_data(data, userid)
     project!(data)
-    biases = get_user_bias(data)
     reserved_vals = 2
     cls_val = -1
     mask_val = -2
+    extra_tokens = 2 # cls and mask
     d = Dict{String,Any}(
         "status" => zeros(Int32, max_seq_len),
         "rating" => zeros(Float32, max_seq_len),
@@ -90,7 +63,6 @@ function get_data(data, userid)
         "1_matchedid" => zeros(Int32, max_seq_len),
         "1_distinctid" => zeros(Int32, max_seq_len),
         "time" => zeros(Float32, max_seq_len),
-        "delta_time" => zeros(Float32, max_seq_len),
     )
     input_fields = collect(keys(d))
     d["userid"] = zeros(Int32, max_seq_len)
@@ -99,50 +71,41 @@ function get_data(data, userid)
         d[k][1] = cls_val
     end
     d["userid"][1] = userid
-    for metric in ["rating"]
-        d[metric][1] = 0
-    end
     items = data["items"]
-    while length(items) > max_seq_len - 2
-        items = items[2:end]
+    if length(items) > max_seq_len - extra_tokens
+        items = items[length(items) - (max_seq_len-extra_tokens) + 1:end]
     end
-    last_ts = min_ts
     i = 1
     for x in items
         i += 1
         m = x["medium"]
         n = 1 - x["medium"]
-        for metric in ["rating"]
-            if x[metric] > 0
-                bl = get_baselines()[metric][m]
-                pred = (biases[metric][m] + bl["a"][x["matchedid"]+1]) * bl["weight"]
-                d[metric][i] = x[metric] - pred
-            else
-                d[metric][i] = 0
-            end
-        end
-        d["status"][i] = x["status"]
-        d["progress"][i] = x["progress"]
+        # item features
         d["$(m)_matchedid"][i] = x["matchedid"]
         d["$(m)_distinctid"][i] = x["distinctid"]
         d["$(n)_matchedid"][i] = cls_val
         d["$(n)_distinctid"][i] = cls_val
         d["time"][i] = x["history_max_ts"]
-        d["delta_time"][i-1] = x["history_max_ts"] - last_ts
-        last_ts = x["history_max_ts"]
+        # action features
+        d["status"][i] = x["status"]
+        if x["rating"] == 0
+            rating = 0
+        else
+            rating = x["rating"] - get_baselines()["rating"][m]["a"][x["matchedid"]+1]
+        end
+        d["rating"][i] = rating
+        d["progress"][i] = x["progress"]
+        # targets
         d["userid"][i] = userid
         d["mask_index"][i] = 0
     end
     i += 1
     for k in input_fields
         d[k][i] = mask_val
-    end    
-    d["userid"][i] = userid
-    d["delta_time"][i-1] = max_ts - last_ts
-    d["mask_index"][i] = 1
-    for metric in ["rating"]
-        d[metric][i] = 0
     end
+    d["time"][i] = max_ts
+    d["userid"][i] = userid
+    d["mask_index"][i] = 1
     Y = Dict()
     W = Dict()
     for m in mediums
@@ -151,26 +114,22 @@ function get_data(data, userid)
             W["$(m)_$(metric)"] = Dict{Int32,Float32}()
         end
     end
-    for x in data["test_items"]
+    for x in reverse(data["test_items"])
         m = x["medium"]
         idx = x["matchedid"] + 1
-        if (x["status"] == 0 || x["status"] >= planned_status) && (x["rating"] == 0 || x["rating"] >= 5)
+        inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
+        new_watch = (x["status"] > planned_status) && (isnothing(x["history_status"]) || x["history_status"] <= planned_status)
+        if inferred_watch || new_watch
             Y["$(m)_watch"][idx] = 1
             W["$(m)_watch"][idx] = 1
-        else
-            Y["$(m)_watch"][idx] = 0
-            W["$(m)_watch"][idx] = 0
         end
-        for metric in ["rating"]
-            if x[metric] > 0
-                bl = get_baselines()[metric][m]
-                pred = (biases[metric][m] + bl["a"][idx]) * bl["weight"]
-                Y["$(m)_$(metric)"][idx] = x[metric] - pred
-                W["$(m)_$(metric)"][idx] = 1
-            else
-                Y["$(m)_$(metric)"][idx] = 0
-                W["$(m)_$(metric)"][idx] = 0
-            end
+        if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
+            Y["$(m)_rating"][idx] = x["rating"] - get_baselines()["rating"][m]["a"][idx]
+            W["$(m)_rating"][idx] = 1
+        end
+        if (x["status"] > 0) && (x["status"] != x["history_status"])
+            Y["$(m)_status"][idx] = x["status"]
+            W["$(m)_status"][idx] = 1
         end
     end
     for m in mediums

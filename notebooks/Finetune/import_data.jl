@@ -71,68 +71,15 @@ function num_items(m::AbstractString, source::AbstractString)
     n
 end
 
-function project!(user)
-    # remove acausal deleted items
-    max_history_tag = ""
-    for x in user["items"]
-        tag = x["history_tag"]
-        if tag in ["infer", "delete"]
-            continue
-        end
-        max_history_tag = max(max_history_tag, tag)
-    end
-    items = []
-    for x in user["items"]
-        if x["history_tag"] == max_history_tag && x["history_tag"] == "delete"
-            continue
-        end
-        push!(items, x)
-    end
-    # set metrics for custom tags
-    deleted_status = 3
-    for x in items
-        tag = x["history_tag"]
-        if tag == "infer"
-            x["status"] = 0
-            x["rating"] = 0
-            x["progress"] = 0
-        elseif tag == "delete"
-            x["status"] = deleted_status
-            x["rating"] = 0
-        end
-    end
-    # don't predict watched items
-    prev_snapshot = Dict()
-    for x in items
-        if x["history_tag"] == max_history_tag
-            continue
-        end
-        k = (x["medium"], x["matchedid"])
-        if x["history_tag"] == "delete"
-            delete!(prev_snapshot, k)
-        else
-            prev_snapshot[k] = x["status"]
-        end
-    end
-    planned_status = 5
-    for x in items
-        predict = true
-        k = (x["medium"], x["matchedid"])
-        if k in keys(prev_snapshot) && prev_snapshot[k] != planned_status
-            predict = false
-        end
-        x["history_predict"] = predict
-    end
-    user["items"] = items
-end
-
-
 function gen_splits()
     mediums = ["manga", "anime"]
     recent_items = 5 # TODO test more items
     min_items = 5
     max_items = Dict(s => num_items.(mediums, s) for s in SOURCES) # TODO study clip threshold
     test_perc = 0.1 # TODO test smaller test_perc
+    training_recent_days = 1 # TODO test more days
+    test_recent_days = 1
+    training_tag = read("$datadir/training_tag", String)
     max_ts = -Inf
     @showprogress for f in Glob.glob("$datadir/histories_*.csv")
         df = read_csv(f)
@@ -150,12 +97,20 @@ function gen_splits()
         mkpath.([train_dir, test_dir, unused_dir])
         df = Random.shuffle(read_csv(f))
         Threads.@threads for i = 1:DataFrames.nrow(df)
-            user = import_user(df.source[i], decompress(df.data[i]), parse(Float64, df.db_refreshed_at[i]))
+            access_ts = parse(Float64, df.db_refreshed_at[i])
+            if access_ts < max_ts - max(training_recent_days, test_recent_days) * 86400
+                continue
+            end
+            user = import_user(df.source[i], decompress(df.data[i]), access_ts)
+            n_predict = 0
             n_items = zeros(Int, length(mediums))
             for x in user["items"]
                 n_items[x["medium"]+1] += 1
+                if x["status"] != x["history_status"] || x["rating"] != x["history_rating"]
+                    n_predict += 1
+                end
             end
-            if sum(n_items) < min_items
+            if n_predict < min_items
                 recent_days = 0
                 outdir = unused_dir
             elseif any(n_items .> max_items[df.source[i]])
@@ -164,19 +119,24 @@ function gen_splits()
                 recent_days = 0
                 outdir = unused_dir
             elseif rand() < test_perc
-                recent_days = 1
+                recent_days = test_recent_days
                 outdir = test_dir
             else
-                recent_days = 1 # TODO test more days
+                recent_days = training_recent_days
                 outdir = train_dir
             end
-            project!(user)
+            if outdir == unused_dir
+                continue
+            end
             recent_ts = max_ts - 86400 * recent_days
             old_items = []
             new_items = []
             for x in reverse(user["items"])
                 if x["history_max_ts"] > recent_ts && length(new_items) < recent_items
-                    if !x["history_predict"]
+                    if x["history_tag"] <= training_tag
+                        continue
+                    end
+                    if (x["status"] == x["history_status"]) && (x["rating"] == x["history_rating"])
                         continue
                     end
                     push!(new_items, x)
@@ -185,9 +145,6 @@ function gen_splits()
                 end
             end
             if isempty(new_items)
-                outdir = unused_dir
-            end
-            if outdir == unused_dir
                 continue
             end
             user["items"] = reverse(old_items)
@@ -200,5 +157,35 @@ function gen_splits()
     end
 end
 
+function count_test_items(datasplit)
+    n_watch = [0, 0]
+    n_rating = [0, 0]
+    n_status = [0, 0]
+    planned_status = 5
+    for fn in Glob.glob("../../data/finetune/users/$datasplit/*/*.msgpack")
+        data = open(fn) do f
+            MsgPack.unpack(read(f))
+        end
+        for x in data["test_items"]
+            m = x["medium"]
+            inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
+            new_watch =
+                (x["status"] > planned_status) &&
+                (isnothing(x["history_status"]) || x["history_status"] <= planned_status)
+            if inferred_watch || new_watch
+                n_watch[m+1] += 1
+            end
+            if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
+                n_rating[m+1] += 1
+            end
+            if (x["status"] > 0) && (x["status"] != x["history_status"])
+                n_status[m+1] += 1
+            end
+        end
+    end
+    logtag("TRANSFORMER", "$datasplit has $n_watch watch, $n_rating rating, and $n_status status entries")
+end
+
 download_data(ARGS[1])
 gen_splits()
+count_test_items.(["training", "test"])

@@ -12,9 +12,8 @@ import Random
 const datadir = "../../data/training"
 const mediums = [0, 1]
 const metrics = ["watch", "rating", "status"]
-const currently_watching_status = 5
+const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
-const min_ts = Dates.datetime2unix(Dates.DateTime("20000101", Dates.dateformat"yyyymmdd"))
 const max_seq_len = 1024
 const batch_size = 64 * max_seq_len
 
@@ -62,6 +61,7 @@ function get_data(data, userid)
         "time" => zeros(Float64, N),
     )
     for k in keys(d)
+        # TODO think about setting action features to 0
         d[k][1] = cls_val
     end
     d["userid"] = fill(Int32(userid), N)
@@ -76,22 +76,30 @@ function get_data(data, userid)
         i += 1
         m = x["medium"]
         n = 1 - x["medium"]
-        d["status"][i] = x["status"]
-        d["rating"][i] = x["rating"] - get_baselines()["rating"][m]["a"][x["matchedid"]+1]
-        d["progress"][i] = x["progress"]
+        # item features
         d["$(m)_matchedid"][i] = x["matchedid"]
         d["$(m)_distinctid"][i] = x["distinctid"]
         d["$(n)_matchedid"][i] = cls_val
         d["$(n)_distinctid"][i] = cls_val
         d["time"][i] = x["history_max_ts"]
-        new_watch = (x["status"] >= currently_watching_status) && (isnothing(x["history_status"]) || x["history_status"] < currently_watching_status)
+        # action features
+        d["status"][i] = x["status"]
+        if x["rating"] == 0
+            rating = 0
+        else
+            rating = x["rating"] - get_baselines()["rating"][m]["a"][x["matchedid"]+1]
+        end
+        d["rating"][i] = rating
+        d["progress"][i] = x["progress"]
+        # targets
         inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
-        if new_watch || inferred_watch
+        new_watch = (x["status"] > planned_status) && (isnothing(x["history_status"]) || x["history_status"] <= planned_status)
+        if inferred_watch || new_watch
             d["$m.watch.label"][i] = 1
             d["$m.watch.weight"][i] = 1
         end
         if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
-            d["$m.rating.label"][i] = d["rating"][i]
+            d["$m.rating.label"][i] = rating
             d["$m.rating.weight"][i] = 1
         end
         if (x["status"] > 0) && (x["status"] != x["history_status"])

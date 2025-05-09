@@ -30,15 +30,13 @@ def register_transformer(medium):
     fn = f"{datadir}/transformer.{medium}.finetune.pt"
     d = torch.load(fn, weights_only=True, map_location="cpu")
     m = medium
-    watch = 2 * m
-    rating = 2 * m + 1
     return {
-        f"transformer.{m}.embedding": d[f"classifier.{watch}.0.weight"].numpy(),
-        f"transformer.{m}.watch.bias": d[f"classifier.{watch}.0.bias"].numpy(),
-        f"transformer.{m}.rating.weight.1": d[f"classifier.{rating}.0.weight"].numpy(),
-        f"transformer.{m}.rating.bias.1": d[f"classifier.{rating}.0.bias"].numpy(),
-        f"transformer.{m}.rating.weight.2": d[f"classifier.{rating}.2.weight"].numpy(),
-        f"transformer.{m}.rating.bias.2": d[f"classifier.{rating}.2.bias"].numpy(),
+        f"transformer.{m}.embedding": d[f"watch_heads.{m}.0.weight"].numpy(),
+        f"transformer.{m}.watch.bias": d[f"watch_heads.{m}.0.bias"].numpy(),
+        f"transformer.{m}.rating.weight.1": d[f"rating_head.0.weight"].numpy(),
+        f"transformer.{m}.rating.bias.1": d[f"rating_head.0.bias"].numpy(),
+        f"transformer.{m}.rating.weight.2": d[f"rating_head.2.weight"].numpy(),
+        f"transformer.{m}.rating.bias.2": d[f"rating_head.2.bias"].numpy(),
     }
 
 def register():

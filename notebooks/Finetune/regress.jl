@@ -27,7 +27,7 @@ function get_users()
     port = 5000
     start_server(port)
     fns = Glob.glob("../../data/finetune/users/test/*/*.msgpack")
-    nchunks = 64
+    nchunks = 16
     chunks = Iterators.partition(fns, div(length(fns), nchunks))
     tasks = map(chunks) do chunk
         Threads.@spawn begin

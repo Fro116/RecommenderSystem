@@ -315,7 +315,7 @@ def train():
     logger = get_logger(rank, "bagofwords")
     logger.setLevel(logging.DEBUG)
     logger.info(f"training {medium} {metric}")
-    batch_size = 32768 if finetune is None else 2048
+    batch_size = 2048 if finetune is None else 2048
     assert batch_size % world_size == 0
     batch_size = batch_size // world_size
     if finetune is None:
@@ -343,7 +343,7 @@ def train():
     model = DDP(model, device_ids=[rank], output_device=rank)
     optimizer = create_optimizer(model)
     scaler = torch.amp.GradScaler(rank)
-    stopper = EarlyStopper(patience=5, rtol=1e-3)
+    stopper = EarlyStopper(patience=3, rtol=1e-3)
     get_loss = lambda x: evaluate_metrics(
         rank, x, baselines, dataloaders["test"], metric
     )
@@ -352,7 +352,7 @@ def train():
     logger.info(f"Initial Loss: {initial_loss}")
     stopper(initial_loss)
     checkpoint(model, True, initial_loss, -1)
-    for epoch in range(64):
+    for epoch in range(32):
         training_loss = train_epoch(
             rank, model, baselines, dataloaders["training"], optimizer, scaler
         )

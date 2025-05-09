@@ -16,24 +16,16 @@ class BagOfWordsModel(nn.Module):
         self.classifier = nn.Linear(256, num_items[medium])
         self.logsoftmax = nn.LogSoftmax(dim=-1)
         lossfn_map = {
-            "watch": self.crossentropy,
             "rating": self.mse,
-            "status": self.mse,
         }
         self.lossfn = lossfn_map[metric]
         evaluate_map = {
-            "watch": self.crossentropy,
             "rating": self.moments,
-            "status": self.moments,
         }
         self.evaluatefn = evaluate_map[metric]
 
     def mse(self, x, y, w):
         return (torch.square(x - y) * w).sum()
-
-    def crossentropy(self, x, y, w):
-        x = self.logsoftmax(x)
-        return (-x * y * w).sum()
 
     def moments(self, x, y, w):
         return (
