@@ -94,7 +94,7 @@ function get_data(data, userid)
         d["progress"][i] = x["progress"]
         # targets
         inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
-        new_watch = (x["status"] > planned_status) && (isnothing(x["history_status"]) || x["history_status"] <= planned_status)
+        new_watch = (x["status"] > planned_status) && (isnothing(x["history_status"]) || 0 < x["history_status"] <= planned_status)
         if inferred_watch || new_watch
             d["$m.watch.label"][i] = 1
             d["$m.watch.weight"][i] = 1

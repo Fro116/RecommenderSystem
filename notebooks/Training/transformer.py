@@ -115,6 +115,7 @@ class FinetuneDataset(IterableDataset):
     def __init__(
         self,
         datadir,
+        batch_size,
         shuffle,
         causal,
     ):

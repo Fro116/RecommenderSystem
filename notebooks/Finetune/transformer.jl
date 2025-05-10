@@ -118,7 +118,7 @@ function get_data(data, userid)
         m = x["medium"]
         idx = x["matchedid"] + 1
         inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
-        new_watch = (x["status"] > planned_status) && (isnothing(x["history_status"]) || x["history_status"] <= planned_status)
+        new_watch = (x["status"] > planned_status) && (isnothing(x["history_status"]) || 0 < x["history_status"] <= planned_status)
         if inferred_watch || new_watch
             Y["$(m)_watch"][idx] = 1
             W["$(m)_watch"][idx] = 1

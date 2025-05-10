@@ -1,21 +1,21 @@
-CREATE TABLE collect_users (
+CREATE TABLE user_histories (
     source TEXT,
     username TEXT,
     userid BIGINT,
     data BYTEA,
     db_refreshed_at DOUBLE PRECISION
 );
-CREATE INDEX collect_users_source_lower_username_idx ON collect_users (source, lower(username));
+CREATE INDEX user_histories_source_lower_username_idx ON user_histories (source, lower(username));
 
-CREATE TABLE inference_users (
+CREATE TABLE online_user_histories (
     source TEXT,
     username TEXT,
     userid BIGINT,
     data BYTEA,
     db_refreshed_at DOUBLE PRECISION
 );
-CREATE INDEX inference_users_source_lower_username_idx ON inference_users (source, lower(username));
-CREATE UNIQUE INDEX inference_users_source_lower_username_coalesce_userid_idx ON inference_users (source, lower(username), coalesce(userid, -1));
+CREATE INDEX online_user_histories_source_lower_username_idx ON online_user_histories (source, lower(username));
+CREATE UNIQUE INDEX online_user_histories_source_lower_username_coalesce_userid_idx ON online_user_histories (source, lower(username), coalesce(userid, -1));
 
 CREATE TABLE autocomplete_users (
     source TEXT,
@@ -23,14 +23,3 @@ CREATE TABLE autocomplete_users (
     data BYTEA
 );
 CREATE UNIQUE INDEX autocomplete_users_source_prefix_idx ON autocomplete_users (source, prefix);
-
-CREATE TABLE user_embeddings (
-    source TEXT,
-    username TEXT,
-    userid BIGINT,
-    training_tag INTEGER,
-    finetune_tag INTEGER,
-    data BYTEA,
-    db_refreshed_at DOUBLE PRECISION
-);
-CREATE UNIQUE INDEX user_embeddings_source_lower_username_coalesce_userid_idx ON user_embeddings (source, lower(username), coalesce(userid, -1));

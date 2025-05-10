@@ -41,14 +41,13 @@ function database(basedir::String)
         rm(app; recursive = true)
     end
     copy("notebooks/Inference/database.jl", app)
-    copy("notebooks/Inference/database_internals.jl", app)
+    copy("notebooks/Import/lists/import_history.jl", app)
     copy("notebooks/julia_utils", app)
     copy("secrets", app)
 end
 
 function build(basedir::String, name::String, tag::String, args::String)
     run(`docker build --network host -t $name $basedir`)
-    exit(1)
     repo = read("secrets/gcp.docker.txt", String)
     project = read("secrets/gcp.project.txt", String)
     region = read("secrets/gcp.region.txt", String)
@@ -72,15 +71,15 @@ function build(basedir::String, name::String, tag::String, args::String)
 end
 
 cd("../../..")
-basedir = "data/package/fetch"
+basedir = "data/package/database"
 if ispath(basedir)
     rm(basedir; recursive = true)
 end
 mkpath(basedir)
-cp("notebooks/Package/Fetch/app", basedir, force = true)
+cp("notebooks/Package/Database/app", basedir, force = true)
 layer1(basedir)
 layer2(basedir)
 layer3(basedir)
 database(basedir)
 const tag = Dates.format(Dates.today(), "yyyymmdd")
-build(basedir, "fetch", tag, "--set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --cpu=1 --memory=2Gi --min=1 --max-instances=1")
+build(basedir, "database", tag, "--set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --cpu=1 --memory=2Gi --min=1 --max-instances=1")

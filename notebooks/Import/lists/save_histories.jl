@@ -134,7 +134,7 @@ function upload_histories(datetag::AbstractString)
     cmds = [
         "cat $datadir/new_histories.header $datadir/new_histories.*.csv > $datadir/new_histories.csv",
         "zstd $datadir/new_histories.csv -o $datadir/new_histories.csv.zstd",
-        "rm $datadir/new_histories*.csv",
+        "rm $datadir/new_histories.*.csv",
         "rclone -Pv --retries=10 copyto $datadir/new_histories.csv.zstd r2:rsys/database/lists/$datetag/histories.csv.zstd",
     ]
     cmd = join(cmds, " && ")
@@ -168,6 +168,7 @@ function save_histories(startdate::AbstractString, enddate::AbstractString)
         rm("$datadir/lists", recursive = true, force = true)
     end
     upload_histories(enddate)
+    run(`./save_histories.sh`)
     rm(datadir, recursive = true, force = true)
 end
 

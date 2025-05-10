@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euxo pipefail
 cd ../../../data/import/lists
-df="lists.csv"
-db="collect_users"
+df="histories.csv"
+db="user_histories"
 secretdir="../../../secrets"
 bucket=`cat $secretdir/gcp.bucket.txt`
 connstr=`tail -n 1 $secretdir/db.inference.txt | tr -d '\n'`

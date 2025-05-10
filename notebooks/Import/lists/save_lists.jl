@@ -224,7 +224,6 @@ function save_lists(datetag)
     ]
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)
-    run(`./save_lists.sh`)
 end
 
 save_lists(ARGS[1])
