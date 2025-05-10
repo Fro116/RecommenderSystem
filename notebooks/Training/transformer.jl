@@ -16,6 +16,7 @@ const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
 const max_seq_len = 1024
 const batch_size = 64 * max_seq_len
+const num_gpus = 32
 
 include("../julia_utils/stdout.jl")
 include("history_tools.jl")
@@ -149,7 +150,7 @@ function pad_splits(datasplit, num_shards)
         if num_padding == 0
             continue
         end
-        logtag("TRANSFORMER", "padding split $x with $num_padding tokens")
+        logtag("TRANSFORMER", "padding split $x with $num_padding tokens to reach $max_num_tokens tokens")
         infn = "$datadir/transformer/$datasplit/$x/1.h5"
         outfn = "$datadir/transformer/$datasplit/$x/pad.h5"
         HDF5.h5open(outfn, "w") do outfile
@@ -166,7 +167,7 @@ function pad_splits(datasplit, num_shards)
 end
 
 function save_data(datasplit)
-    num_shards = 8
+    num_shards = num_gpus
     users = sort(Glob.glob("$datadir/users/$datasplit/*/*.msgpack"))
     while length(users) % num_shards != 0
         push!(users, rand(users))

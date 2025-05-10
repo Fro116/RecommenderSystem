@@ -2,10 +2,11 @@ import JSON3
 include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
 
-function get_gpu_args()
+function write_entrypoint_yaml(nodes)
     image = "pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel"
     envvars = readlines("../../secrets/r2.auth.txt")
     script = [
+        "export NUM_NODES=$nodes",
         "apt update",
         "apt install wget -y",
         "wget https://github.com/Fro116/RecommenderSystem/raw/main/notebooks/Training/entrypoint.sh -O startup.sh",
@@ -13,7 +14,12 @@ function get_gpu_args()
         "./startup.sh",
     ]
     entrypoint = join(vcat(envvars, script), " && ")
-    image, entrypoint
+    yaml = read("entrypoint.yaml", String)
+    yaml = replace(yaml, "{IMAGE}" => image, "{ENTRYPOINT}" => entrypoint, "{NODES}" => nodes)
+    fn = "../../data/training/prod.yaml"
+    open(fn, "w") do f
+        write(f, yaml)
+    end
 end
 
 function read_json(cmd::Cmd)
@@ -45,26 +51,21 @@ end
 
 # returns true on success
 function start_sfcompute(gpuhour_price::Real)::Bool
-    image, entrypoint = get_gpu_args()
-    yaml = read("entrypoint.yaml", String)
-    yaml = replace(yaml, "{IMAGE}" => image, "{ENTRYPOINT}" => entrypoint)
-    fn = "../../data/training/prod.yaml"
-    open(fn, "w") do f
-        write(f, yaml)
-    end
+    nodes = 4
+    runtime_hours = 5
+    write_entrypoint_yaml(nodes)
     if !isnothing(get_active_sf_cluster())
         logerror("start_sfcompute already launched cluster")
         return false
     end
-    runtime_hours = 17
     gpuhour_price = string(round(gpuhour_price, digits=2))
     try
         logtag("RUN", "ordering sfcompute for $runtime_hours hours at price \$$gpuhour_price/gpuhour")
-        run(`sf buy -d $(runtime_hours)hr -n 8 -p $gpuhour_price -y`)
+        run(`sf buy -d $(runtime_hours)hr -n $(8*nodes) -p $gpuhour_price -y`)
         logtag("RUN", "starting sfcompute...")
     catch e
         logerror("start_sfcompute: error $e")
-        reutrn false
+        return false
     end
     sleep(60) # wait for cluster to spin up
     cluster = get_active_sf_cluster()
