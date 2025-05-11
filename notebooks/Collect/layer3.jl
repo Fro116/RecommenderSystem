@@ -102,6 +102,7 @@ function get_session(token)
             Dict("token" => token, "sessionid" => sessionid, "endpoint" => "login")
         )
         if r.status >= 400
+            logerror("animeplanet login failed with $token")
             return TOKEN_UNAVAILABLE::Errors
         end
     else
@@ -609,6 +610,39 @@ function get_anilist_image(url::String)
                 "url" => url,
             ),
         )
+        if s.status >= 400
+            return NOT_FOUND::Errors
+        end
+        return decode(s)
+    finally
+        request("resources", Dict("method" => "put", "token" => token))
+    end
+end
+
+function get_userid(source::String, username::String)
+    @assert source in ["anilist", "kitsu"]
+    r = request(
+        "resources",
+        Dict("method" => "take", "location" => source, "timeout" => TOKEN_TIMEOUT),
+    )
+    if r.status >= 400
+        return TOKEN_UNAVAILABLE::Errors
+    end
+    token = decode(r)
+    args = Dict("token" => token, "endpoint" => "userid", "username" => username)
+    if source == "kitsu"
+        auth = get_session(token)
+        if isa(auth, Errors)
+            return auth
+        end
+        if auth isa Errors
+            return auth
+        end
+        args["auth"] = auth
+        args["key"] = "name"
+    end
+    try
+        s = request(source, args)
         if s.status >= 400
             return NOT_FOUND::Errors
         end
@@ -1203,39 +1237,6 @@ function get_animeplanet_media(medium::String, itemid::String)
             invalidate_session(token)
             return INVALID_SESSION::Errors
         elseif s.status >= 400
-            return NOT_FOUND::Errors
-        end
-        return decode(s)
-    finally
-        request("resources", Dict("method" => "put", "token" => token))
-    end
-end
-
-function get_userid(source::String, username::String)
-    @assert source in ["anilist", "kitsu"]
-    r = request(
-        "resources",
-        Dict("method" => "take", "location" => source, "timeout" => TOKEN_TIMEOUT),
-    )
-    if r.status >= 400
-        return TOKEN_UNAVAILABLE::Errors
-    end
-    token = decode(r)
-    args = Dict("token" => token, "endpoint" => "userid", "username" => username)
-    if source == "kitsu"
-        auth = get_session(token)
-        if isa(auth, Errors)
-            return auth
-        end
-        if auth isa Errors
-            return auth
-        end
-        args["auth"] = auth
-        args["key"] = "name"
-    end
-    try
-        s = request(source, args)
-        if s.status >= 400
             return NOT_FOUND::Errors
         end
         return decode(s)

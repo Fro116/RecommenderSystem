@@ -9,6 +9,8 @@ include("../julia_utils/stdout.jl")
 PRIORITY_VALS::Set = Set()
 PRIORITY_MAXID::Int = 0
 const PRIORITY_LOCK = ReentrantLock()
+const hash_salt = rand()
+salted_hash(x) = shahash((x, hash_salt))
 
 function monitor(primary_table, ts_col)
     df = db_monitor_junction_table(primary_table, ts_col)
@@ -29,6 +31,7 @@ function prioritize(primary_table::String, idcols::Vector{String}, tscol::String
         if idcols == ["userid"]
             PRIORITY_MAXID = maxid
         end
+        logtag("PRIORITIZE", "got $(length(PRIORITY_VALS)) entries")
     end
 end
 
@@ -135,7 +138,7 @@ function refresh(
     )
     while true
         idvals, maxid = lock(PRIORITY_LOCK) do
-            Set(x for x in PRIORITY_VALS if (shahash(x) % partitions) == part && x ∉ idvals), PRIORITY_MAXID
+            Set(x for x in PRIORITY_VALS if (salted_hash(x) % partitions) == part && x ∉ idvals), PRIORITY_MAXID
         end
         if isempty(idvals)
             logtag("REFRESH", "$part waiting for prioritization")
@@ -146,7 +149,7 @@ function refresh(
             save(x, true)
         end
         if idcols == ["userid"]
-            save([rand([x for x in maxid+1:maxid+10000 if (shahash(x) % partitions) == part])], false)
+            save([rand([x for x in maxid+1:maxid+10000 if (salted_hash(x) % partitions) == part])], false)
         end
     end
 end

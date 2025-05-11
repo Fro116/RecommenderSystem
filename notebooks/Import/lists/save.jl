@@ -5,6 +5,7 @@ run(`julia save_histories.jl $datetag $datetag`)
 run(`julia archive.jl $datetag`)
 
 const datadir = "../../../data/import/lists"
+mkpath(datadir)
 open("$datadir/latest", "w") do f
     write(f, datetag)
 end

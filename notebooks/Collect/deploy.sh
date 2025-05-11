@@ -26,8 +26,8 @@ mkdir -p $logs && rm $logs/*.log
 (julia -t 8 collect_junction.jl kitsu_users user kitsu_user_items items nothing nothing userid db_junction_last_changed_at "http://localhost:4003/kitsu_user" 10 |& julia -t 1 logrotate.jl $logs/kitsu_users.log) &
 (julia -t 1 collect_junction.jl kitsu_media details kitsu_media_relations relations kitsu_user_items nothing medium,itemid db_primary_last_changed_at "http://localhost:4003/kitsu_media" 1 |& julia -t 1 logrotate.jl $logs/kitsu_media.log) &
 
-(julia -t 32 collect_single.jl animeplanet_userids userid "http://localhost:4003/animeplanet_username" 1 |& julia -t 1 logrotate.jl $logs/animeplanet_userids.log) &
-(julia -t 1 collect_junction.jl animeplanet_users user animeplanet_user_items items animeplanet_userids userid username db_junction_last_changed_at "http://localhost:4003/animeplanet_user" 80 |& julia -t 1 logrotate.jl $logs/animeplanet_users.log) &
+(julia -t 1 collect_single.jl animeplanet_userids userid "http://localhost:4003/animeplanet_username" 1 |& julia -t 1 logrotate.jl $logs/animeplanet_userids.log) &
+(julia -t 32 collect_junction.jl animeplanet_users user animeplanet_user_items items animeplanet_userids userid username db_junction_last_changed_at "http://localhost:4003/animeplanet_user" 40 |& julia -t 1 logrotate.jl $logs/animeplanet_users.log) &
 (julia -t 1 collect_junction.jl animeplanet_media details animeplanet_media_relations relations animeplanet_user_items nothing medium,itemid db_primary_last_changed_at "http://localhost:4003/animeplanet_media" 1 |& julia -t 1 logrotate.jl $logs/animeplanet_media.log) &
 
 (julia -t 1 collect_external.jl |& julia -t 1 logrotate.jl $logs/external.log) &

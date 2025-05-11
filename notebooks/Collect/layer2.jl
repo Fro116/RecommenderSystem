@@ -24,8 +24,8 @@ include("../julia_utils/http.jl")
 include("../julia_utils/multithreading.jl")
 include("../julia_utils/stdout.jl")
 
-function logstatus(fn, r, url)
-    if r.status ∉ [403, 404]
+function logstatus(fn, r, url; handled_errors = [403, 404])
+    if r.status ∉ handled_errors
         logerror("$fn received error code $(r.status) for $url")
     end
 end
@@ -2250,7 +2250,7 @@ function animeplanet_login(resource::Resource, sessionid::String)
     headers["sessionid"] = sessionid
     r = request(resource, "PUT", url, headers, body)
     if r.status >= 400
-        logstatus("animeplanet_login", r, url)
+        logstatus("animeplanet_login", r, url; handled_errors = [])
         return HTTP.Response(r)
     end
     HTTP.Response(200, [])
