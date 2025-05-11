@@ -10,7 +10,7 @@ RUN juliaup add $julia_version && juliaup default $julia_version
 COPY requirements.jl .
 RUN julia requirements.jl
 
-COPY layer4 layer4
+COPY database database
 COPY compute compute
 
 COPY compile.sh compile.jl .

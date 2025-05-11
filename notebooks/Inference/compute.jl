@@ -8,8 +8,8 @@ include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
 
 const PORT = parse(Int, ARGS[1])
-const READ_URL = ARGS[2]
-const FETCH_URL = ARGS[3]
+const DATABASE_READ_URL = ARGS[2]
+const DATABASE_WRITE_URL = ARGS[3]
 const datadir = "../../data/finetune"
 const secretdir = "../../secrets"
 const bluegreen = read("$datadir/bluegreen", String)
@@ -26,7 +26,7 @@ Oxygen.@post "/autocomplete" function autocomplete(r::HTTP.Request)::HTTP.Respon
     end
     d = decode(r)
     r_ac = HTTP.post(
-        "$READ_URL/autocomplete",
+        "$DATABASE_READ_URL/read_autocomplete",
         encode(Dict("source" => d["source"], "prefix" => lowercase(sanitize(d["prefix"])), "type" => d["type"]), :msgpack)...,
         status_exception = false,
     )
@@ -45,10 +45,9 @@ Oxygen.@post "/autocomplete" function autocomplete(r::HTTP.Request)::HTTP.Respon
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
-Oxygen.@post "/add_user" function add_user(r::HTTP.Request)::HTTP.Response
-    d = decode(r)
+function add_user(d::Dict)::HTTP.Response
     r_read = HTTP.post(
-        "$READ_URL/read",
+        "$DATABASE_READ_URL/read_user_history",
         encode(Dict("source" => d["source"], "username" => d["username"]), :msgpack)...,
         status_exception = false,
     )
@@ -71,22 +70,20 @@ Oxygen.@post "/add_user" function add_user(r::HTTP.Request)::HTTP.Response
     d_embed = decode(r_embed)
     d_embed["source"] = d["source"]
     d_embed["username"] = d["username"]
-    d_embed["weights"] = Dict()
-    for m in [0, 1]
-        d_embed["$(m)_idx"] = []
-        d_embed["$(m)_status"] = []
-    end
+    last_status = Dict(
+        0 => Dict(),
+        1 => Dict(),
+    )
     for x in u["items"]
-        m = x["medium"]
-        push!(d_embed["$(m)_idx"], x["matchedid"])
-        push!(d_embed["$(m)_status"], x["status"])
+        last_status[x["medium"]][x["matchedid"]+1] = x["status"]
     end
+    d_embed["status"] = last_status
     HTTP.Response(200, encode(d_embed, :msgpack)...)
 end
 
 function refresh_user(source, username)
     r_read = HTTP.post(
-        "$FETCH_URL/refresh",
+        "$DATABASE_WRITE_URL/refresh_user_history",
         encode(Dict("source" => source, "username" => username), :msgpack)...,
         status_exception = false,
     )
@@ -115,17 +112,9 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
         username = sanitize(action["username"])
         source = action["source"]
         followup_action = Dict("type" => "refresh_user", "source" => source, "username" => username)
-        r_embed = HTTP.post(
-            "http://localhost:$PORT/add_user",
-            encode(Dict("source" => source, "username" => username), :msgpack)...,
-            status_exception = false,
-        )
+        r_embed = add_user(Dict("source" => source, "username" => username))
         if r_embed.status == 404 && refresh_user(source, username)
-            r_embed = HTTP.post(
-                "http://localhost:$PORT/add_user",
-                encode(Dict("source" => source, "username" => username), :msgpack)...,
-                status_exception = false,
-            )
+            r_embed = add_user(Dict("source" => source, "username" => username))
             followup_action = nothing
         end
         if HTTP.iserror(r_embed)
@@ -149,11 +138,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
         if isnothing(idx) || !refresh_user(source, username)
             return HTTP.Response(200, encode(Dict(), :json, encoding)...)
         end
-        r_embed = HTTP.post(
-            "http://localhost:$PORT/add_user",
-            encode(Dict("source" => source, "username" => username), :msgpack)...,
-            status_exception = false,
-        )
+        r_embed = add_user(Dict("source" => source, "username" => username))
         if HTTP.iserror(r_embed)
             return HTTP.Response(r_embed.status)
         end
@@ -207,12 +192,15 @@ function compile(port::Integer)
         state = d["state"]
     end
     for (source, username) in zip(profiles.source, profiles.username)
+        logtag("STARTUP", "/autocomplete")
         HTTP.post(
             "http://localhost:$PORT/autocomplete",
             encode(Dict("source" => source, "prefix" => lowercase(username), "type" => "user"), :json, :gzip)...,
             status_exception = false,
         )
+        logtag("STARTUP", "/add_user")
         apply_action(Dict("type" => "add_user", "source" => source, "username" => username))
+        logtag("STARTUP", "/refresh_user")
         apply_action(Dict("type" => "refresh_user", "source" => source, "username" => username))
     end
     for m in ["Manga", "Anime"]

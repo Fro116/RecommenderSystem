@@ -8,8 +8,17 @@ const datadir = "../../data/finetune";
 
 const registry = JLD2.load("$datadir/model.registry.jld2")
 const relations = merge([JLD2.load("$datadir/media_relations.$m.jld2") for m in [0, 1]]...)
-const planned_status = 4
-const watching_status = 5
+const status_map = Dict(
+    "none" => 0,
+    "wont_watch" => 1,
+    "dropped" => 2,
+    "deleted" => 3,
+    "on_hold" => 4,
+    "planned" => 5,
+    "currently_watching" => 6,
+    "completed" => 7,
+    "rewatching" => 8,
+)
 
 @memoize function num_items(medium::Integer)
     m = Dict(0 => "manga", 1 => "anime")[medium]
@@ -175,70 +184,78 @@ end
     info
 end
 
-function get_watched(user, m, status_filter = x -> x != planned_status)
-    v = zeros(Float32, num_items(m))
-    for (idx, status) in zip(user["$(m)_idx"], user["$(m)_status"])
-        if status_filter(status)
-            v[idx+1] = 1
-        end
-    end
-    v
-end
-
 function retrieval(state)
     m = state["medium"]
-    x = zeros(Float32, num_items(m))
+    p = zeros(Float32, num_items(m))
     for u in state["users"]
-        x .+= logsoftmax(
+        p .+= logsoftmax(
             registry["transformer.$m.embedding"] * u["transformer.$m"] +
             registry["transformer.$m.watch.bias"],
         )[1:num_items(m)]
     end
     for u in state["users"]
-        w = get_watched(u, m)
-        # seen
-        for i = 1:length(x)
-            if w[i] > 0
-                x[i] = -Inf
+        # skip the default id for longtail items
+        p[1] = -Inf
+        # skip watched items
+        for (x, s) in u["status"][m]
+            if s ∉ [status_map["deleted"], status_map["planned"]]
+                p[x] = -Inf
             end
         end
-        # adaptations
-        v1 = relations["$(m).adaptations"] * get_watched(u, 1 - m)
-        v2 = relations["$(m).dependencies"] * w
-        for i = 1:length(x)
+        # skip adaptations
+        watched = Dict(y => zeros(Float32, num_items(y)) for y in [0, 1])
+        for y in [0, 1]
+            for (x, s) in u["status"][y]
+                if s ∉ [status_map["deleted"], status_map["planned"]]
+                    watched[y][x] = 1
+                end
+            end
+        end
+        v1 = relations["$(m).adaptations"] * watched[1-m]
+        v2 = relations["$(m).dependencies"] * watched[m]
+        for i = 1:length(p)
             if v1[i] != 0 && v2[i] == 0
-                x[i] = -Inf
+                p[i] = -Inf
             end
         end
-        # recaps
-        v = relations["$(m).recaps"] * w
-        for i = 1:length(x)
+        # skip recaps
+        v = relations["$(m).recaps"] * watched[m]
+        for i = 1:length(p)
             if v[i] != 0
-                x[i] = -Inf
+                p[i] = -Inf
             end
         end
-        # dependencies
-        v1 = relations["$(m).dependencies"] * w
+        # skip works with missing dependencies
+        v = zeros(Float32, num_items(m))
+        for (x, s) in u["status"][m]
+            if s >= status_map["completed"]
+                v[x] = 1
+            end
+        end
+        v1 = relations["$(m).dependencies"] * v
         v2 = relations["$(m).dependencies"] * ones(Float32, num_items(m))
-        for i = 1:length(x)
+        for i = 1:length(p)
             if v2[i] != 0 && v1[i] == 0
-                x[i] = -Inf
+                p[i] = -Inf
             end
         end
-        # sequels to currently watching / dropped
-        v =
-            relations["$(m).dependencies"] *
-            get_watched(u, m, x -> x == watching_status || x > 0 && x < planned_status)
-        for i = 1:length(x)
+        # skip sequels to currently watching
+        v = zeros(Float32, num_items(m))
+        for (x, s) in u["status"][m]
+            if s in [status_map["currently_watching"], status_map["dropped"], status_map["wont_watch"]]
+                v[x] = 1
+            end
+        end
+        v = relations["$(m).dependencies"] * v
+        for i = 1:length(p)
             if v[i] != 0
-                x[i] = -Inf
+                p[i] = -Inf
             end
         end
-        # TODO constrain by source
     end
     info = get_media_info(m)
-    ids = sortperm(x, rev = true)
-    ids = [i for i in ids if (i - 1) in keys(info) && x[i] > -Inf]
+    ids = sortperm(p, rev = true)
+    ids = [i for i in ids if (i - 1) in keys(info) && p[i] > -Inf]
     ids
 end
 
@@ -263,9 +280,6 @@ function ranking(state, idxs)
             a = registry["transformer.$m.embedding"][idxs, :]'
             u_emb = repeat(u["transformer.$m"], 1, length(idxs))
             h = vcat(u_emb, a)
-            a1 = h
-            a2 = registry["transformer.$m.rating.weight.1"]
-            a3 = registry["transformer.$m.rating.bias.1"]
             h =
                 registry["transformer.$m.rating.weight.1"] * h .+
                 registry["transformer.$m.rating.bias.1"]
@@ -273,8 +287,9 @@ function ranking(state, idxs)
             h' * registry["transformer.$m.rating.weight.2"] .+
             only(registry["transformer.$m.rating.bias.2"])
         end
+        p_transformer_baseline = registry["baseline.$m.rating.bias"][idxs]
         p_rating =
-            sum(registry["$m.rating.coefs"] .* [p_baseline, p_bagofwords, p_transformer])
+            sum(registry["$m.rating.coefs"] .* [p_baseline, p_bagofwords, p_transformer, p_transformer_baseline])
         r += p_rating + p_watch / log(4)
     end
     r
@@ -282,12 +297,8 @@ end
 
 function render(state, pagination)
     # add types
-    int32_cols = reduce(vcat, [["$(m)_idx", "$(m)_status"] for m in [0, 1]])
     float32_cols = reduce(vcat, [["baseline.$m.rating", "bagofwords.$m.rating", "transformer.$m"] for m in [0, 1]])
     for u in state["users"]
-        for k in int32_cols
-            u[k] = Int32.(u[k])
-        end
         for k in float32_cols
             u[k] = Float32.(u[k])
         end

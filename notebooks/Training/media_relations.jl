@@ -6,7 +6,6 @@ import Memoize: @memoize
 import MsgPack
 import ProgressMeter: @showprogress
 import SparseArrays
-include("history_tools.jl")
 const datadir = "../../data/training"
 
 @memoize function num_items(medium::Int)
@@ -71,15 +70,18 @@ end
 function is_more_popular(medium::Int, cutoff, a1, a2)
     function get_popularity(itemid)
         df = get_media_df(medium)
-        total = 0
+        source_to_count = Dict()
         for i = 1:DataFrames.nrow(df)
             if df.matchedid[i] == itemid
-                total += df.count[i]
+                if df.source[i] ∉ keys(source_to_count)
+                    source_to_count[df.source[i]] = 0
+                end
+                source_to_count[df.source[i]] = max(source_to_count[df.source[i]], df.count[i])
             end
         end
-        total
+        sum(values(source_to_count))
     end
-    get_popularity(a1) > get_popularity(a2) * cutoff
+    get_popularity(a1) > (get_popularity(a1) + get_popularity(a2)) * cutoff
 end
 
 function is_released_after(medium::Int, a1, a2)
@@ -110,18 +112,73 @@ function is_released_after(medium::Int, a1, a2)
     false
 end
 
+function project_earliest(user, medium)
+    watching_status = 6
+    seen = Set()
+    items = []
+    for x in user["items"]
+        if x["medium"] != medium || x["matchedid"] in seen
+            continue
+        end
+        watched = (x["status"] == 0) || (x["status"] >= watching_status)
+        if !watched
+            continue
+        end
+        push!(seen, x["matchedid"])
+        push!(items, x["matchedid"])
+    end
+    items
+end
+
+@memoize function get_watch_order(medium)
+    watch_order = zeros(Int32, num_items(medium), num_items(medium))
+    outdirs = Glob.glob("$datadir/users/training/*/")
+    @showprogress for outdir in outdirs
+        users = Glob.glob("$outdir/*.msgpack")
+        histories = [Int32[] for _ = 1:length(users)]
+        Threads.@threads for t = 1:length(users)
+            user = MsgPack.unpack(read(users[t]))
+            histories[t] = project_earliest(user, medium)
+        end
+        for h in histories
+            for i in 2:length(h)
+                watch_order[h[i-1]+1, h[i]+1] += 1
+            end
+        end
+    end
+    watch_order
+end
+
+function is_watched_before(medium, cutoff, a1, a2)
+    M = get_watch_order(medium)
+    M[a1+1, a2+1] > cutoff * (M[a1+1, a2+1] + M[a2+1, a1+1])
+end
+
 function save_dependencies(medium::Int)
     # M[i, j] = 1 if j should be watched before i
-    relations = Set(["sequel", "prequel", "parent_story", "side_story"])
-    M = get_matrix(medium, relations; symmetric = true)
-    @showprogress for (a1, a2, _) in collect(zip(SparseArrays.findnz(M)...))
-        watch_a1_before_a2 = (
-            is_more_popular(medium, 0.9, a1 - 1, a2 - 1) &&
-            !is_released_after(medium, a1 - 1, a2 - 1)
-            # && !is_watched_after(medium, 0.6, a1 - 1, a2 - 1) # TODO test iswatchedafter
-        )
-        if !watch_a1_before_a2
-            M[a2, a1] = 0
+    relations = ["sequel", "prequel", "parent_story", "side_story"]
+    R = sum([get_matrix(medium, [x]; transitive = true) for x in relations])
+    R = R + R'
+    M = get_matrix(medium, [])
+    @showprogress for (i, j, v) in collect(zip(SparseArrays.findnz(R)...))
+        if v == 0
+            continue
+        end
+        watch_j_before_i = is_more_popular(medium, 0.5, j - 1, i - 1) &&
+            is_watched_before(medium, 0.5, j - 1, i - 1) &&
+            # check is_released_after using a double negative to handle
+            # cases where release dates are unknown
+            !is_released_after(medium, j - 1, i - 1)
+        if watch_j_before_i
+            M[i, j] = 1
+        end
+    end
+    # remove transitive edges
+    @showprogress for (i, j, v) in collect(zip(SparseArrays.findnz(M)...))
+        for k in 1:size(M)[1]
+            if M[i, j] > 0 && M[i, k] > 0 && M[k, j] > 0
+                M[i, j] = 0
+            end
         end
     end
     SparseArrays.dropzeros!(M)
@@ -161,61 +218,6 @@ function save_adaptations(medium)
     # M[i, j] = 1 if i is an adaptation of j
     cross_medium = 1 - medium
     get_relations(medium, cross_medium, Set(["adaptation", "source"]))
-end
-
-@memoize function get_user_histories(medium)
-    outdirs = Glob.glob("$datadir/users/training/*/")
-    rets = []
-    @showprogress for outdir in outdirs
-        users = Glob.glob("$outdir/*.msgpack")
-        histories = [Int32[] for _ = 1:length(users)]
-        Threads.@threads for t = 1:length(users)
-            user = MsgPack.unpack(read(users[t]))
-            project_earliest!(user)
-            for x in user["items"]
-                if x["medium"] != medium
-                    continue
-                end
-                push!(histories[t], x["matchedid"])
-            end
-        end
-        push!(rets, histories)
-    end
-    reduce(vcat, rets)
-end;
-
-@memoize function get_item_to_histories(medium)
-    histories = get_user_histories(medium)
-    item_to_histories = Dict(a => Int64[] for a = 1:num_items(medium))
-    @showprogress for i = 1:length(histories)
-        for a in histories[i]
-            if a == 0
-                continue
-            end
-            push!(item_to_histories[a], i)
-        end
-    end
-    Dict(k => Set(v) for (k, v) in item_to_histories)
-end;
-
-function is_watched_after(medium, cutoff, a1, a2)
-    item_to_histories = get_item_to_histories(medium)
-    idxs = collect(intersect(item_to_histories[a1], item_to_histories[a2]))
-    if isempty(idxs)
-        return false
-    end
-    counts = fill(false, length(idxs))
-    Threads.@threads for i = 1:length(idxs)
-        for a in histories[idxs[i]]
-            if a == a2
-                counts[i] = true
-                break
-            elseif a == a1
-                break
-            end
-        end
-    end
-    sum(counts) / length(idxs) > cutoff
 end
 
 function save_data(m::Int)

@@ -52,7 +52,7 @@ end
 # returns true on success
 function start_sfcompute(gpuhour_price::Real)::Bool
     nodes = 4
-    runtime_hours = 5
+    runtime_hours = 9
     write_entrypoint_yaml(nodes)
     if !isnothing(get_active_sf_cluster())
         logerror("start_sfcompute already launched cluster")

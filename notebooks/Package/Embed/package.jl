@@ -13,7 +13,7 @@ function embed_py(basedir::String)
     copy("notebooks/Finetune/embed.py", app)
     mediums = [0, 1]
     files = vcat(
-        ["manga.csv", "anime.csv", "latest", "training_tag", "transformer.config"],
+        ["manga.csv", "anime.csv", "finetune_tag", "training_tag", "transformer.config"],
         ["baseline.$metric.$m.msgpack" for m in mediums for metric in ["rating"]],
         ["bagofwords.$m.$metric.finetune.pt" for m in mediums for metric in ["rating"]],
         ["transformer.$m.finetune.pt" for m in mediums],
@@ -57,6 +57,6 @@ end
 mkpath(basedir)
 cp("notebooks/Package/Embed/app", basedir, force = true)
 embed_py(basedir)
-const tag = read("data/finetune/latest", String)
+const tag = read("data/finetune/finetune_tag", String)
 const bluegreen = read("data/finetune/bluegreen", String)
 build(basedir, "embed", tag, "--cpu=4 --memory=16Gi")

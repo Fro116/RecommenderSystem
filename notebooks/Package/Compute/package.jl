@@ -3,12 +3,13 @@ function copy(file::String, dst::String)
     cp(file, joinpath(dst, file))
 end
 
-function layer4(basedir::String)
-    app = "$basedir/layer4"
+function database(basedir::String)
+    app = "$basedir/database"
     if ispath(app)
         rm(app; recursive = true)
     end
-    copy("notebooks/Collect/layer4.jl", app)
+    copy("notebooks/Inference/database.jl", app)
+    copy("notebooks/Import/lists/import_history.jl", app)
     copy("notebooks/julia_utils", app)
     copy("secrets", app)
 end
@@ -18,15 +19,15 @@ function compute(basedir::String)
     if ispath(app)
         rm(app; recursive = true)
     end
-    copy("notebooks/Finetune/compute.jl", app)
-    copy("notebooks/Finetune/render.jl", app)
+    copy("notebooks/Inference/compute.jl", app)
+    copy("notebooks/Inference/render.jl", app)
     copy("notebooks/Training/import_list.jl", app)
     mediums = ["manga", "anime"]
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     files = vcat(
         ["$m.csv" for m in mediums],
         ["media_relations.$m.jld2" for m in [0, 1]],
-        ["latest", "bluegreen", "model.registry.jld2", "images.csv"],
+        ["finetune_tag", "bluegreen", "model.registry.jld2", "images.csv"],
     )
     for f in files
         copy("data/finetune/$f", app)
@@ -68,7 +69,7 @@ if ispath(basedir)
 end
 mkpath(basedir)
 cp("notebooks/Package/Compute/app", basedir, force = true)
-layer4(basedir)
+database(basedir)
 compute(basedir)
-const tag = read("data/finetune/latest", String)
+const tag = read("data/finetune/finetune_tag", String)
 build(basedir, "compute", tag, "--set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --cpu=2 --memory=8Gi")
