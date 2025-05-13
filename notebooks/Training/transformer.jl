@@ -14,8 +14,7 @@ const mediums = [0, 1]
 const metrics = ["watch", "rating", "status"]
 const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
-const max_seq_len = 1024
-const batch_size = 64 * max_seq_len
+const batch_size = 16 * 1024 # local_batch_size * max_sequence_length
 const num_gpus = 32
 
 include("../julia_utils/stdout.jl")
@@ -49,48 +48,44 @@ end
 
 function get_data(data, userid)
     project!(data)
-    cls_val = -1
-    N = length(data["items"]) + 1
+    N = length(data["items"])
     d = Dict(
-        "status" => Vector{Int32}(undef, N),
-        "rating" => Vector{Float32}(undef, N),
-        "progress" => Vector{Float32}(undef, N),
+        # prompt features
+        "userid" => Vector{Int32}(undef, N),
+        "time" => Vector{Float64}(undef, N),
+        "input_pos" => Vector{Int32}(undef, N),
+        # item features
         "0_matchedid" => Vector{Int32}(undef, N),
         "0_distinctid" => Vector{Int32}(undef, N),
         "1_matchedid" => Vector{Int32}(undef, N),
         "1_distinctid" => Vector{Int32}(undef, N),
-        "time" => zeros(Float64, N),
+        # action features
+        "status" => Vector{Int32}(undef, N),
+        "rating" => Vector{Float32}(undef, N),
+        "progress" => Vector{Float32}(undef, N),
     )
-    for k in keys(d)
-        # TODO think about setting action features to 0
-        d[k][1] = cls_val
-    end
-    d["userid"] = fill(Int32(userid), N)
+    # targets
     for m in [0, 1]
         for metric in metrics
             d["$m.$metric.label"] = zeros(Float32, N)
             d["$m.$metric.weight"] = zeros(Float32, N)
         end
     end
-    i = 1
-    for x in data["items"]
-        i += 1
+    for (i, x) in Iterators.enumerate(data["items"])
         m = x["medium"]
         n = 1 - x["medium"]
+        # prompt features
+        d["userid"][i] = userid
+        d["time"][i] = x["history_max_ts"]
+        d["input_pos"][i] = i
         # item features
         d["$(m)_matchedid"][i] = x["matchedid"]
         d["$(m)_distinctid"][i] = x["distinctid"]
-        d["$(n)_matchedid"][i] = cls_val
-        d["$(n)_distinctid"][i] = cls_val
-        d["time"][i] = x["history_max_ts"]
+        d["$(n)_matchedid"][i] = -1
+        d["$(n)_distinctid"][i] = -1
         # action features
         d["status"][i] = x["status"]
-        if x["rating"] == 0
-            rating = 0
-        else
-            rating = x["rating"] - get_baselines()["rating"][m]["a"][x["matchedid"]+1]
-        end
-        d["rating"][i] = rating
+        d["rating"][i] = x["rating"]
         d["progress"][i] = x["progress"]
         # targets
         inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
@@ -100,7 +95,7 @@ function get_data(data, userid)
             d["$m.watch.weight"][i] = 1
         end
         if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
-            d["$m.rating.label"][i] = rating
+            d["$m.rating.label"][i] = x["rating"]
             d["$m.rating.weight"][i] = 1
         end
         if (x["status"] > 0) && (x["status"] != x["history_status"])

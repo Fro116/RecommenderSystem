@@ -50,93 +50,78 @@ end
 
 function get_data(data, userid)
     project!(data)
-    reserved_vals = 2
-    cls_val = -1
-    mask_val = -2
-    extra_tokens = 2 # cls and mask
-    d = Dict{String,Any}(
-        "status" => zeros(Int32, max_seq_len),
-        "rating" => zeros(Float32, max_seq_len),
-        "progress" => zeros(Float32, max_seq_len),
-        "0_matchedid" => zeros(Int32, max_seq_len),
-        "0_distinctid" => zeros(Int32, max_seq_len),
-        "1_matchedid" => zeros(Int32, max_seq_len),
-        "1_distinctid" => zeros(Int32, max_seq_len),
-        "time" => zeros(Float64, max_seq_len),
+    num_test_items = 5 # up to 5 test items
+    @assert length(data["test_items"]) <= num_test_items
+    N = max_seq_len # TODO extend seq_len
+    d = Dict(
+        # prompt features
+        "userid" => zeros(Int32, N),
+        "time" => zeros(Float64, N),
+        "input_pos" => zeros(Int32, N),
+        # item features
+        "0_matchedid" => zeros(Int32, N),
+        "0_distinctid" => zeros(Int32, N),
+        "1_matchedid" => zeros(Int32, N),
+        "1_distinctid" => zeros(Int32, N),
+        # action features
+        "status" => zeros(Int32, N),
+        "rating" => zeros(Float32, N),
+        "progress" => zeros(Float32, N),
     )
-    input_fields = collect(keys(d))
-    d["userid"] = zeros(Int32, max_seq_len)
-    d["mask_index"] = zeros(Int32, max_seq_len)
-    for k in input_fields
-        d[k][1] = cls_val
+    # targets
+    for m in [0, 1]
+        for metric in metrics
+            d["$m.$metric.label"] = zeros(Float32, N)
+            d["$m.$metric.weight"] = zeros(Float32, N)
+        end
     end
-    d["userid"][1] = userid
     items = data["items"]
-    if length(items) > max_seq_len - extra_tokens
-        items = items[length(items) - (max_seq_len-extra_tokens) + 1:end]
+    input_pos = 0
+    if length(items) > max_seq_len - num_test_items
+        input_pos = length(items) - (max_seq_len-num_test_items)
+        items = items[input_pos + 1:end]
     end
     i = 1
-    for x in items
-        i += 1
-        m = x["medium"]
-        n = 1 - x["medium"]
-        # item features
-        d["$(m)_matchedid"][i] = x["matchedid"]
-        d["$(m)_distinctid"][i] = x["distinctid"]
-        d["$(n)_matchedid"][i] = cls_val
-        d["$(n)_distinctid"][i] = cls_val
-        d["time"][i] = x["history_max_ts"]
-        # action features
-        d["status"][i] = x["status"]
-        if x["rating"] == 0
-            rating = 0
-        else
-            rating = x["rating"] - get_baselines()["rating"][m]["a"][x["matchedid"]+1]
-        end
-        d["rating"][i] = rating
-        d["progress"][i] = x["progress"]
-        # targets
-        d["userid"][i] = userid
-        d["mask_index"][i] = 0
-    end
-    i += 1
-    for k in input_fields
-        d[k][i] = mask_val
-    end
-    d["time"][i] = max_ts
-    d["userid"][i] = userid
-    d["mask_index"][i] = 1
-    Y = Dict()
-    W = Dict()
-    for m in mediums
-        for metric in metrics
-            Y["$(m)_$(metric)"] = Dict{Int32,Float32}()
-            W["$(m)_$(metric)"] = Dict{Int32,Float32}()
-        end
-    end
-    for x in reverse(data["test_items"])
-        m = x["medium"]
-        idx = x["matchedid"] + 1
-        inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
-        new_watch = (x["status"] > planned_status) && (isnothing(x["history_status"]) || 0 < x["history_status"] <= planned_status)
-        if inferred_watch || new_watch
-            Y["$(m)_watch"][idx] = 1
-            W["$(m)_watch"][idx] = 1
-        end
-        if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
-            Y["$(m)_rating"][idx] = x["rating"] - get_baselines()["rating"][m]["a"][idx]
-            W["$(m)_rating"][idx] = 1
-        end
-        if (x["status"] > 0) && (x["status"] != x["history_status"])
-            Y["$(m)_status"][idx] = x["status"]
-            W["$(m)_status"][idx] = 1
+    for (item_source, istest) in [(items, false), (data["test_items"], true)]
+        for x in item_source
+            m = x["medium"]
+            n = 1 - x["medium"]
+            # prompt features
+            d["userid"][i] = userid
+            d["time"][i] = x["history_max_ts"]
+            d["input_pos"][i] = input_pos
+            # item features
+            d["$(m)_matchedid"][i] = x["matchedid"]
+            d["$(m)_distinctid"][i] = x["distinctid"]
+            d["$(n)_matchedid"][i] = -1
+            d["$(n)_distinctid"][i] = -1
+            # action features
+            d["status"][i] = x["status"]
+            d["rating"][i] = x["rating"]
+            d["progress"][i] = x["progress"]
+            # targets
+            if istest
+                inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
+                new_watch = (x["status"] > planned_status) && (isnothing(x["history_status"]) || 0 < x["history_status"] <= planned_status)
+                if inferred_watch || new_watch
+                    d["$m.watch.label"][i] = 1
+                    d["$m.watch.weight"][i] = 1
+                end
+                if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
+                    d["$m.rating.label"][i] = x["rating"]
+                    d["$m.rating.weight"][i] = 1
+                end
+                if (x["status"] > 0) && (x["status"] != x["history_status"])
+                    d["$m.status.label"][i] = x["status"]
+                    d["$m.status.weight"][i] = 1
+                end
+            end
+            i += 1
+            input_pos += 1
         end
     end
     for m in mediums
         for metric in metrics
-            N = num_items(m) + reserved_vals
-            d["$m.$metric.label"] = SparseArrays.sparsevec(Y["$(m)_$(metric)"], N)
-            d["$m.$metric.weight"] = SparseArrays.sparsevec(W["$(m)_$(metric)"], N)
             wsum = sum(d["$m.$metric.weight"])
             if wsum > 0
                 d["$m.$metric.weight"] /= wsum
@@ -144,32 +129,6 @@ function get_data(data, userid)
         end
     end
     d
-end
-
-function sparsecat(xs::Vector{SparseArrays.SparseVector{Tv,Ti}}) where {Tv,Ti}
-    N = sum(SparseArrays.nnz.(xs))
-    I = Vector{Int32}(undef, N)
-    J = Vector{Int32}(undef, N)
-    V = Vector{eltype(first(xs))}(undef, N)
-    idx = 1
-    for (j, x) in Iterators.enumerate(xs)
-        i, v = SparseArrays.findnz(x)
-        for idy = 1:length(i)
-            I[idx] = i[idy]
-            J[idx] = j
-            V[idx] = v[idy]
-            idx += 1
-        end
-    end
-    SparseArrays.sparse(I, J, V, only(size(first(xs))), length(xs))
-end
-
-function record_sparse_array!(d, name, x)
-    i, j, v = SparseArrays.findnz(x)
-    d[name*"_i"] = i
-    d[name*"_j"] = j
-    d[name*"_v"] = v
-    d[name*"_size"] = collect(size(x))
 end
 
 function save_data(datasplit)
@@ -188,11 +147,7 @@ function save_data(datasplit)
         Random.shuffle!(d)
         h5 = Dict()
         for k in keys(first(d))
-            if first(d)[k] isa SparseArrays.SparseVector
-                record_sparse_array!(h5, k, sparsecat([x[k] for x in d]))
-            else
-                h5[k] = reduce(hcat, [x[k] for x in d])
-            end
+            h5[k] = reduce(hcat, [x[k] for x in d])
         end
         HDF5.h5open("$dest/$p.h5", "w") do file
             for (k, v) in h5

@@ -41,7 +41,7 @@ function download_data(finetune_tag::AbstractString)
         ["media_relations.$m.jld2" for m in [0, 1]],
         ["baseline.$metric.$m.msgpack" for metric in ["rating"] for m in [0, 1]],
         ["bagofwords.$m.$metric.$stem" for m in [0, 1] for metric in ["rating"] for stem in ["csv", "pt"]],
-        ["transformer.$stem" for stem in ["csv", "pt", "config"]],
+        ["transformer.$stem" for stem in ["csv", "pt"]],
         ["images.csv"],
     )
     for fn in files

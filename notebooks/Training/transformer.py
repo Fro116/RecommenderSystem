@@ -1,7 +1,6 @@
 import argparse
 import datetime
 import glob
-import json
 import logging
 import os
 import subprocess
@@ -40,14 +39,12 @@ class PretrainDataset(IterableDataset):
         datadir,
         local_rank,
         local_world_size,
-        batch_size,
-        mask_rate,
-        causal,
+        tokens_per_batch,
+        permute_tokens,
     ):
         self.datadir = datadir
-        self.mask_rate = mask_rate
-        self.causal = causal
-        self.batch_size = batch_size * max_seq_len
+        self.permute_tokens = permute_tokens
+        self.batch_size = tokens_per_batch
         shards = sorted(glob.glob(f"{self.datadir}/*/"))
         assert len(shards) % local_world_size == 0
         self.fns = []
@@ -61,9 +58,10 @@ class PretrainDataset(IterableDataset):
         block_indices_list = []
         current_start_index = 0
         for block in blocks:
-            block_indices_list.append(
-                np.arange(current_start_index, current_start_index + len(block))
-            )
+            p = np.arange(current_start_index, current_start_index + len(block))
+            if self.permute_tokens:
+                np.random.shuffle(p)
+            block_indices_list.append(p)
             current_start_index += len(block)
         num_blocks = len(blocks)
         block_permutation = np.random.permutation(num_blocks)
@@ -102,10 +100,7 @@ class PretrainDataset(IterableDataset):
                 for i in range(0, len(idxs), self.batch_size)
             ]
             for idx in idxs:
-                ret = {
-                    "mask_rate": self.mask_rate,
-                    "causal": self.causal,
-                }
+                ret = {}
                 for k, v in d.items():
                     ret[k] = v[idx]
                 yield ret
@@ -117,19 +112,11 @@ class FinetuneDataset(IterableDataset):
         datadir,
         batch_size,
         shuffle,
-        causal,
     ):
         self.datadir = datadir
         self.batch_size = batch_size
         self.fns = glob.glob(f"{self.datadir}/*/*.h5")
-        self.sparse_fields = [
-            f"{m}.{metric}.{x}"
-            for x in ["label", "weight"]
-            for m in ALL_MEDIUMS
-            for metric in ["watch", "rating", "status"]
-        ]
         self.shuffle = shuffle
-        self.causal = causal
 
     def load_sparse_matrix(self, f, name):
         i = f[f"{name}_i"][:] - 1
@@ -153,11 +140,7 @@ class FinetuneDataset(IterableDataset):
             with h5py.File(fn, "r") as f:
                 d = {}
                 with h5py.File(fn) as f:
-                    for k in self.sparse_fields:
-                        d[k] = self.load_sparse_matrix(f, k)
                     for k in f:
-                        if any(k.startswith(x) for x in self.sparse_fields):
-                            continue
                         d[k] = f[k][:]
             N = d["userid"].shape[0]
             idxs = list(range(N))
@@ -171,79 +154,31 @@ class FinetuneDataset(IterableDataset):
             ]
             for idx in idxs:
                 ret = {k: v[idx, :] for k, v in d.items()}
-                ret["causal"] = self.causal
                 yield ret
+
+
+def worker_init_fn(worker_id):
+    np.random.seed(torch.utils.data.get_worker_info().seed % 2**32)
 
 
 def collate(data):
     assert len(data) == 1
     ret = {}
     for k, v in data[0].items():
-        if k in ["mask_rate", "causal"]:
-            ret[k] = v
-        elif scipy.sparse.issparse(v):
+        if scipy.sparse.issparse(v):
             ret[k] = torch.sparse_csr_tensor(v.indptr, v.indices, v.data, v.shape)
         else:
             ret[k] = torch.tensor(v)
     return ret
 
 
-def scatter_add(values, group_ids):
-    unique_vals, inverse_indices = torch.unique(group_ids, return_inverse=True)
-    s = torch.zeros(unique_vals.size(0), dtype=values.dtype, device=group_ids.device)
-    s.scatter_add_(0, inverse_indices, values)
-    return s[inverse_indices]
-
-
-def shift_left(x):
-    y = torch.zeros_like(x)
-    y[..., :-1] = x[..., 1:]
-    return y
-
-
 def to_device(data, local_rank):
     d = {}
     for k in data:
-        if k == "mask_rate":
-            mask_rate = data[k]
-        elif k == "causal":
-            causal = data[k]
-        else:
-            d[k] = data[k].to(local_rank).to_dense()
-    d["delta_time"] = (shift_left(d["time"]) - d["time"]) * (d["userid"] == shift_left(d["userid"]))
-    if finetune is not None:
-        if causal:
-            d["mask_index"] = shift_left(d["mask_index"])
-        return d
+        d[k] = data[k].to(local_rank).to_dense()
     for m in ALL_MEDIUMS:
         for metric in ALL_METRICS:
             d[f"{m}.{metric}.position"] = d[f"{m}_matchedid"].clip(0).to(torch.int64)
-    if causal:
-        userid_mask = d["userid"] == shift_left(d["userid"])
-        for m in ALL_MEDIUMS:
-            for metric in ALL_METRICS:
-                for k in ["position", "label", "weight"]:
-                    d[f"{m}.{metric}.{k}"] = (
-                        shift_left(d[f"{m}.{metric}.{k}"]) * userid_mask
-                    )
-    else:
-        # mask
-        mask = (torch.rand(data["userid"].shape, device=local_rank) < mask_rate) & (
-            d["time"] != cls_val
-        )
-        for m in ALL_MEDIUMS:
-            for metric in ALL_METRICS:
-                d[f"{m}.{metric}.position"][~mask] = 0
-                d[f"{m}.{metric}.label"][~mask] = 0
-                d[f"{m}.{metric}.weight"][~mask] = 0
-        for k in d:
-            if k.endswith(".position") or k.endswith(".label") or k.endswith(".weight"):
-                continue
-            if k in ["userid"]:
-                continue
-            d[k][mask] = mask_val
-    for k in d:
-        d[k] = d[k].reshape(-1, max_seq_len)
     return d
 
 
@@ -345,9 +280,18 @@ def create_optimizer(model, config):
     )
 
 
+class LambdaScheduler(object):
+    def __init__(self):
+        self.steps = 0
+
+    def __call__(self, epoch):
+        self.steps += 1
+        return 1
+
+
 def create_learning_rate_schedule(optimizer, tokens_per_batch, epochs):
     # TODO tune schedule
-    return optim.lr_scheduler.LambdaLR(optimizer, lambda x: 1)
+    return optim.lr_scheduler.LambdaLR(optimizer, LambdaScheduler())
 
 
 class EarlyStopper:
@@ -423,44 +367,96 @@ def get_logger(local_rank, name):
     return logger
 
 
-def checkpoint_model(local_rank, model, config, save, loss, epoch, task_weights):
+def checkpoint_model(
+    local_rank,
+    global_rank,
+    model,
+    optimizer,
+    scheduler,
+    scaler,
+    config,
+    epoch,
+    loss,
+    task_weights,
+    save,
+    logger,
+    debug_mode,
+):
     if local_rank != 0:
         return
-    stem = f"{datadir}/transformer"
-    if finetune is not None:
-        stem = f"{stem}.{finetune_medium}.finetune"
+    if finetune is None:
+        with open(os.path.join(datadir, "list_tag"), "r") as f:
+            list_tag = f.read()
+    # save model
     if save:
-        torch.save(model.module._orig_mod.state_dict(), f"{stem}.pt")
+        logger.info("checkpointing model")
+        if finetune is None:
+            checkpoint = {
+                "model": model.module._orig_mod.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "scaler": scaler.state_dict(),
+                "config": config,
+                "epoch": epoch,
+                "loss": loss,
+            }
+            torch.save(checkpoint, f"{datadir}/transformer.pt")
+            if global_rank == 0 and not debug_mode:
+                cmd = f"rclone --retries=10 copyto {datadir}/transformer.pt r2:rsys/database/training/{list_tag}/transformer.pt"
+                os.system(f"{cmd} &")
+        else:
+            checkpoint = {
+                "model": model.module._orig_mod.state_dict(),
+                "config": config,
+                "epoch": epoch,
+                "loss": loss,
+            }
+            torch.save(
+                checkpoint, f"{datadir}/transformer.{finetune_medium}.finetune.pt"
+            )
+    # save metrics
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
-    if epoch < 0:
-        with open(f"{stem}.csv", "w") as f:
+    csv_fn = (
+        f"{datadir}/transformer.csv"
+        if finetune is None
+        else f"{datadir}/transformer.{finetune_medium}.finetune.csv"
+    )
+    if finetune is None:
+        create_csv = not os.path.exists(csv_fn)
+    else:
+        create_csv = epoch < 0
+    if create_csv:
+        with open(csv_fn, "w") as f:
             f.write(",".join(["epoch", "loss"] + names) + "\n")
-    with open(f"{stem}.csv", "a") as f:
+    with open(csv_fn, "a") as f:
         vals = [epoch, wsum(loss, task_weights)] + loss
         f.write(",".join([str(x) for x in vals]) + "\n")
-    with open(f"{stem}.config", "w") as f:
-        json.dump(config, f, indent=4)
+    if global_rank == 0 and not debug_mode and finetune is None:
+        cmd = f"rclone --retries=10 copyto {datadir}/transformer.csv r2:rsys/database/training/{list_tag}/transformer.csv"
+        os.system(f"{cmd} &")
 
 
-def upload(global_rank, logger):
-    if global_rank != 0 or finetune is not None:
+def upload(global_rank, logger, debug_mode):
+    if global_rank != 0 or finetune is not None or debug_mode:
         return
     logger.info("uploading model")
     with open(os.path.join(datadir, "list_tag"), "r") as f:
         list_tag = f.read()
-    for suffix in ["pt", "csv", "config"]:
-        cmd =  f"rclone --retries=10 copyto {datadir}/transformer.{suffix} r2:rsys/database/training/{list_tag}/transformer.{suffix}"
+    for suffix in ["pt", "csv"]:
+        cmd = f"rclone --retries=10 copyto {datadir}/transformer.{suffix} r2:rsys/database/training/{list_tag}/transformer.{suffix}"
         os.system(cmd)
 
 
 def training_config():
     if finetune is not None:
-        with open(f"{datadir}/transformer.config") as f:
-            config = json.load(f)
-            config["forward"] = "finetune"
-            config["lora"] = True
-            config["learning_rate"] = 1e-4
-            return config
+        checkpoint = torch.load(
+            f"{datadir}/transformer.pt", weights_only=False, map_location="cpu"
+        )
+        config = checkpoint["config"]
+        config["lora"] = True
+        config["learning_rate"] = 1e-4
+        config["finetune"] = True
+        return config
     num_items = {
         x: int(pd.read_csv(f"{datadir}/{y}.csv").matchedid.max()) + 1
         for (x, y) in {0: "manga", 1: "anime"}.items()
@@ -472,14 +468,14 @@ def training_config():
     min_ts = datetime.datetime.strptime("20000101", "%Y%m%d").timestamp()
     with open(os.path.join(datadir, "list_tag"), "r") as f:
         max_ts = datetime.datetime.strptime(f.read().strip(), "%Y%m%d").timestamp()
-    return {
+    config = {
         "num_layers": 8,
         "num_heads": 32,
         "num_kv_heads": 16,
         "embed_dim": 2048,
-        "intermediate_dim": None, # TODO 8192
+        "intermediate_dim": None,  # TODO 8192
         "distinctid_dim": 128,
-        "max_sequence_length": max_seq_len,
+        "max_sequence_length": 1024,
         "vocab_sizes": {
             "0_matchedid": num_items[0],
             "1_matchedid": num_items[1],
@@ -487,14 +483,17 @@ def training_config():
             "1_distinctid": num_distinct_items[1],
             "status": 9,
         },
-        "reserved_vals": 2,
-        "causal": False,
         "min_ts": min_ts,
         "max_ts": max_ts,
-        "learning_rate": 2e-4,
+        "rating_mean": 7.6287384,
+        "rating_std": 1.778219,
         "forward": "pretrain",
+        "finetune": False,
         "lora": False,
+        "learning_rate": 2e-4,
+        "permute_tokens": True,
     }
+    return config
 
 
 def train():
@@ -506,16 +505,20 @@ def train():
     torch.cuda.set_device(local_rank)
     logger = get_logger(local_rank, "transformer")
     logger.setLevel(logging.DEBUG)
+    config = training_config()
+    debug_mode = False
     if finetune:
         assert world_size == 1
-        batch_size = 32
+        num_epochs = 8
+        local_batch_size = 8
     else:
-        reference_world_size = 4 * 8
-        batch_size = 64 * reference_world_size
-    num_epochs = 64
-    config = training_config()
-    assert batch_size % world_size == 0
-    local_batch_size = batch_size // world_size
+        num_epochs = 32
+        local_batch_size = 16
+        if world_size == 1:
+            logger.error("LOCAL DEBUG MODE ENABLED")
+            num_epochs = 1
+            local_batch_size = 4
+            debug_mode = True
 
     def TransformerDataset(x):
         if finetune is None:
@@ -523,16 +526,14 @@ def train():
                 f"{datadir}/transformer/{x}",
                 local_rank,
                 local_world_size,
-                local_batch_size,
-                mask_rate=0.15,
-                causal=config["causal"],
+                tokens_per_batch=local_batch_size*config["max_sequence_length"],
+                permute_tokens=config["permute_tokens"],
             )
         else:
             return FinetuneDataset(
                 f"{datadir}/transformer/{x}",
                 local_batch_size,
                 shuffle=x == "training",
-                causal=config["causal"],
             )
 
     dataloaders = {
@@ -543,6 +544,7 @@ def train():
             num_workers=w,
             persistent_workers=True,
             collate_fn=collate,
+            worker_init_fn=worker_init_fn,
         )
         for (x, w) in [("training", 8), ("test", 2)]
     }
@@ -551,18 +553,45 @@ def train():
         f"Created model with {sum(p.numel() for p in model.parameters())} parameters"
         f" and {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters"
     )
-    if finetune is not None:
-        model.load_state_dict(torch.load(finetune, weights_only=True), strict=False)
+    checkpoint = None
+    if finetune is None:
+        checkpoint_fn = f"{datadir}/transformer.pt"
+        if os.path.exists(checkpoint_fn):
+            checkpoint = torch.load(
+                checkpoint_fn, weights_only=False, map_location=f"cuda:{local_rank}"
+            )
+            logger.info(f"loading model from epoch {checkpoint['epoch']}")
+            model.load_state_dict(checkpoint["model"])
+            del checkpoint["model"]
+    else:
+        model.load_state_dict(
+            torch.load(finetune, weights_only=False, map_location=f"cuda:{local_rank}")[
+                "model"
+            ],
+            strict=False,
+        )
     model = model.to(local_rank)
     model = torch.compile(model)
     model = DDP(
-        model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True
+        model,
+        device_ids=[local_rank],
+        output_device=local_rank,
+        find_unused_parameters=True,
     )
     optimizer = create_optimizer(model, config)
     scheduler = create_learning_rate_schedule(
-        optimizer, batch_size * max_seq_len, num_epochs
+        optimizer, local_batch_size * world_size * config["max_sequence_length"], num_epochs
     )
     scaler = torch.amp.GradScaler(local_rank)
+    if checkpoint is not None:
+        logger.info(f"loading optimizer state from epoch {checkpoint['epoch']}")
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        scaler.load_state_dict(checkpoint["scaler"])
+        scheduler.load_state_dict(checkpoint["scheduler"])
+        del checkpoint["optimizer"]
+        del checkpoint["scaler"]
+        del checkpoint["scheduler"]
+
     stopper = (
         EarlyStopper(patience=float("inf"), rtol=0)
         if finetune is None
@@ -570,12 +599,26 @@ def train():
     )
     task_weights = make_task_weights()
     get_loss = lambda x: evaluate_metrics(local_rank, x, dataloaders["test"])
-    checkpoint = lambda m, s, l, e: checkpoint_model(local_rank, m, config, s, l, e, task_weights)
     initial_loss = get_loss(model)
     logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")
     stopper(wsum(initial_loss, task_weights))
-    checkpoint(model, True, initial_loss, -1)
-    for epoch in range(num_epochs):
+    starting_epoch = 0 if checkpoint is None else checkpoint["epoch"] + 1
+    checkpoint_model(
+        local_rank,
+        global_rank,
+        model,
+        optimizer,
+        scheduler,
+        scaler,
+        config,
+        starting_epoch - 1,
+        initial_loss,
+        task_weights,
+        finetune is not None,
+        logger,
+        debug_mode,
+    )
+    for epoch in range(starting_epoch, num_epochs):
         training_loss = train_epoch(
             local_rank,
             model,
@@ -595,20 +638,34 @@ def train():
             f" {wsum(test_loss, task_weights)} {test_loss}"
         )
         stopper(wsum(test_loss, task_weights))
-        checkpoint(model, stopper.save_model, test_loss, epoch)
+        checkpoint_model(
+            local_rank,
+            global_rank,
+            model,
+            optimizer,
+            scheduler,
+            scaler,
+            config,
+            epoch,
+            test_loss,
+            task_weights,
+            stopper.save_model,
+            logger,
+            debug_mode,
+        )
         if stopper.early_stop:
             break
     try:
         destroy_process_group()
     except Exception as e:
         logger.info(f"Destroying process group failed with {e}")
-    upload(global_rank, logger)
+    upload(global_rank, logger, debug_mode)
 
 
 def download(node, num_nodes):
     template = "tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto r2:rsys/database/training/$tag"
     files = (
-        ["list_tag"]
+        ["list_tag", "transformer.pt", "transformer.csv"]
         + [f"transformer/{x}/num_tokens.txt" for x in ["training", "test"]]
         + [f"{m}.csv" for m in ["manga", "anime"]]
     )
@@ -623,14 +680,16 @@ def download(node, num_nodes):
         assert parts % num_nodes == 0
         for i in range(parts):
             if i % num_nodes == node:
-                os.system(f"rclone --retries=10 copyto r2:rsys/database/training/{list_tag}/transformer/{x}/{i+1} {datadir}/transformer/{x}/{i+1}")
+                os.system(
+                    f"rclone --retries=10 copyto r2:rsys/database/training/{list_tag}/transformer/{x}/{i+1} {datadir}/transformer/{x}/{i+1}"
+                )
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--datadir", type=str)
 parser.add_argument("--finetune", type=str, default=None)
 parser.add_argument("--finetune_medium", type=int, default=None)
-parser.add_argument("--download", metavar='N', type=int, nargs='+', default=None)
+parser.add_argument("--download", metavar="N", type=int, nargs="+", default=None)
 args = parser.parse_args()
 datadir = args.datadir
 finetune = args.finetune
