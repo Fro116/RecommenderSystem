@@ -111,12 +111,10 @@ function gen_splits()
                 end
             end
             if n_predict < min_items
-                recent_days = 0
                 outdir = unused_dir
             elseif any(n_items .> max_items[df.source[i]])
                 k = (df.source[i], df.username[i], df.userid[i])
                 logerror("skipping user $i: $k with $n_items > $(max_items[df.source[i]]) items")
-                recent_days = 0
                 outdir = unused_dir
             elseif rand() < test_perc
                 recent_days = test_recent_days
@@ -133,7 +131,9 @@ function gen_splits()
             new_items = []
             for x in reverse(user["items"])
                 if x["history_max_ts"] > recent_ts && length(new_items) < recent_items
-                    if x["history_tag"] <= training_tag
+                    history_tag = x["history_tag"]
+                    if history_tag <= training_tag
+                        logerror("skipping item with history_tag $history_tag <= $training_tag")
                         continue
                     end
                     if (x["status"] == x["history_status"]) && (x["rating"] == x["history_rating"])
