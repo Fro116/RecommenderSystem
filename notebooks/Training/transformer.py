@@ -510,7 +510,7 @@ def train():
     if finetune:
         assert world_size == 1
         num_epochs = 8
-        local_batch_size = 8
+        local_batch_size = 16
     else:
         num_epochs = 32
         local_batch_size = 16
