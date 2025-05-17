@@ -75,6 +75,8 @@ class PretrainDataset(IterableDataset):
         p = self.get_index_permutation(d["userid"])
         for k in d:
             d[k] = d[k][p]
+        if not self.permute_tokens:
+            d["input_pos"] *= 0
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -112,11 +114,13 @@ class FinetuneDataset(IterableDataset):
         datadir,
         batch_size,
         shuffle,
+        permute_tokens,
     ):
         self.datadir = datadir
         self.batch_size = batch_size
         self.fns = glob.glob(f"{self.datadir}/*/*.h5")
         self.shuffle = shuffle
+        self.permute_tokens = permute_tokens
 
     def load_sparse_matrix(self, f, name):
         i = f[f"{name}_i"][:] - 1
@@ -142,6 +146,8 @@ class FinetuneDataset(IterableDataset):
                 with h5py.File(fn) as f:
                     for k in f:
                         d[k] = f[k][:]
+            if not self.permute_tokens:
+                d["input_pos"] *= 0
             N = d["userid"].shape[0]
             idxs = list(range(N))
             if self.shuffle:
@@ -491,7 +497,7 @@ def training_config():
         "finetune": False,
         "lora": False,
         "learning_rate": 2e-4,
-        "permute_tokens": True,
+        "permute_tokens": False,
     }
     return config
 
@@ -534,6 +540,7 @@ def train():
                 f"{datadir}/transformer/{x}",
                 local_batch_size,
                 shuffle=x == "training",
+                permute_tokens=config["permute_tokens"],
             )
 
     dataloaders = {
