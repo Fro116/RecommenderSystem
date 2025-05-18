@@ -347,10 +347,18 @@ def make_task_weights():
         medium_weight = {0: 0.25, 1: 1}
     else:
         medium_weight = {finetune_medium: 1, 1 - finetune_medium: 0}
-    metric_weight = {
-        "watch": 1,
-        "rating": 0.25,
-    }
+    if modeltype == "retrieval":
+        metric_weight = {
+            "watch": 1,
+            "rating": 0,
+        }
+    elif modeltype == "ranking":
+        metric_weight = {
+            "watch": 0,
+            "rating": 1,
+        }
+    else:
+        assert False
     weights = [
         medium_weight[x] * metric_weight[y] for x in ALL_MEDIUMS for y in ALL_METRICS
     ]
@@ -406,9 +414,9 @@ def checkpoint_model(
                 "epoch": epoch,
                 "loss": loss,
             }
-            torch.save(checkpoint, f"{datadir}/transformer.pt")
+            torch.save(checkpoint, f"{datadir}/transformer.{modeltype}.pt")
             if global_rank == 0 and not debug_mode:
-                cmd = f"rclone --retries=10 copyto {datadir}/transformer.pt r2:rsys/database/training/{list_tag}/transformer.pt"
+                cmd = f"rclone --retries=10 copyto {datadir}/transformer.{modeltype}.pt r2:rsys/database/training/{list_tag}/transformer.{modeltype}.pt"
                 os.system(f"{cmd} &")
         else:
             checkpoint = {
@@ -418,14 +426,14 @@ def checkpoint_model(
                 "loss": loss,
             }
             torch.save(
-                checkpoint, f"{datadir}/transformer.{finetune_medium}.finetune.pt"
+                checkpoint, f"{datadir}/transformer.{modeltype}.{finetune_medium}.finetune.pt"
             )
     # save metrics
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
     csv_fn = (
-        f"{datadir}/transformer.csv"
+        f"{datadir}/transformer.{modeltype}.csv"
         if finetune is None
-        else f"{datadir}/transformer.{finetune_medium}.finetune.csv"
+        else f"{datadir}/transformer.{modeltype}.{finetune_medium}.finetune.csv"
     )
     if finetune is None:
         create_csv = not os.path.exists(csv_fn)
@@ -438,7 +446,7 @@ def checkpoint_model(
         vals = [epoch, wsum(loss, task_weights)] + loss
         f.write(",".join([str(x) for x in vals]) + "\n")
     if global_rank == 0 and not debug_mode and finetune is None:
-        cmd = f"rclone --retries=10 copyto {datadir}/transformer.csv r2:rsys/database/training/{list_tag}/transformer.csv"
+        cmd = f"rclone --retries=10 copyto {datadir}/transformer.{modeltype}.csv r2:rsys/database/training/{list_tag}/transformer.{modeltype}.csv"
         os.system(f"{cmd} &")
 
 
@@ -449,14 +457,14 @@ def upload(global_rank, logger, debug_mode):
     with open(os.path.join(datadir, "list_tag"), "r") as f:
         list_tag = f.read()
     for suffix in ["pt", "csv"]:
-        cmd = f"rclone --retries=10 copyto {datadir}/transformer.{suffix} r2:rsys/database/training/{list_tag}/transformer.{suffix}"
+        cmd = f"rclone --retries=10 copyto {datadir}/transformer.{modeltype}.{suffix} r2:rsys/database/training/{list_tag}/transformer.{modeltype}.{suffix}"
         os.system(cmd)
 
 
 def training_config():
     if finetune is not None:
         checkpoint = torch.load(
-            f"{datadir}/transformer.pt", weights_only=False, map_location="cpu"
+            f"{datadir}/transformer.{modeltype}.pt", weights_only=False, map_location="cpu"
         )
         config = checkpoint["config"]
         config["lora"] = True
@@ -498,6 +506,7 @@ def training_config():
         "lora": False,
         "learning_rate": 2e-4,
         "permute_tokens": False,
+        "modeltype": modeltype,
     }
     return config
 
@@ -515,10 +524,10 @@ def train():
     debug_mode = False
     if finetune:
         assert world_size == 1
-        num_epochs = 8
+        num_epochs = 2
         local_batch_size = 16
     else:
-        num_epochs = 32
+        num_epochs = 8
         local_batch_size = 16
         if world_size == 1:
             logger.error("LOCAL DEBUG MODE ENABLED")
@@ -562,7 +571,7 @@ def train():
     )
     checkpoint = None
     if finetune is None:
-        checkpoint_fn = f"{datadir}/transformer.pt"
+        checkpoint_fn = f"{datadir}/transformer.{modeltype}.pt"
         if os.path.exists(checkpoint_fn):
             checkpoint = torch.load(
                 checkpoint_fn, weights_only=False, map_location=f"cuda:{local_rank}"
@@ -672,7 +681,7 @@ def train():
 def download(node, num_nodes):
     template = "tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto r2:rsys/database/training/$tag"
     files = (
-        ["list_tag", "transformer.pt", "transformer.csv"]
+        ["list_tag", "transformer.retrieval.pt", "transformer.retrieval.csv", "transformer.ranking.pt", "transformer.ranking.csv"]
         + [f"transformer/{x}/num_tokens.txt" for x in ["training", "test"]]
         + [f"{m}.csv" for m in ["manga", "anime"]]
     )
@@ -694,11 +703,13 @@ def download(node, num_nodes):
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--datadir", type=str)
+parser.add_argument("--modeltype", type=str)
 parser.add_argument("--finetune", type=str, default=None)
 parser.add_argument("--finetune_medium", type=int, default=None)
 parser.add_argument("--download", metavar="N", type=int, nargs="+", default=None)
 args = parser.parse_args()
 datadir = args.datadir
+modeltype = args.modeltype
 finetune = args.finetune
 finetune_medium = args.finetune_medium
 

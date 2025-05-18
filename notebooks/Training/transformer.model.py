@@ -192,9 +192,7 @@ class TransformerModel(nn.Module):
                 for _, param in layer.named_parameters():
                     param.requires_grad = False
         if config["forward"] == "pretrain":
-            self.forward = self.pretrain_forward
-        elif config["forward"] == "embed":
-            self.forward = self.embed_forward
+            self.forward = self.train_forward
         else:
             assert False
 
@@ -234,27 +232,6 @@ class TransformerModel(nn.Module):
         y = torch.zeros_like(x)
         y[..., 1:] = x[..., :-1]
         return y
-
-    def to_embedding(self, d):
-        e_a = self.action_embedding(d["action_tokens"])
-        e_i = self.item_embedding(d["item_tokens"])
-        e = self.interleave(e_a, e_i)
-        userid = self.interleave(
-            *[d[k]["userid"] for k in ["action_tokens", "item_tokens"]]
-        )
-        # attention_masks
-        m, n = userid.shape
-
-        def document_mask(b, h, q_idx, kv_idx):
-            return userid[b][q_idx] == userid[b][kv_idx]
-
-        def causal_mask(b, h, q_idx, kv_idx):
-            return q_idx >= kv_idx
-
-        maskfn = and_masks(document_mask, causal_mask)
-        block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
-        e = self.transformers(e, block_mask, None)
-        return e
 
     def split_tokens(self, d):
         item_tokens = {}
@@ -299,7 +276,28 @@ class TransformerModel(nn.Module):
             "action_tokens": action_tokens,
         }
 
-    def pretrain_forward(self, d, evaluate):
+    def to_embedding(self, d):
+        e_a = self.action_embedding(d["action_tokens"])
+        e_i = self.item_embedding(d["item_tokens"])
+        e = self.interleave(e_a, e_i)
+        userid = self.interleave(
+            *[d[k]["userid"] for k in ["action_tokens", "item_tokens"]]
+        )
+        # attention_masks
+        m, n = userid.shape
+
+        def document_mask(b, h, q_idx, kv_idx):
+            return userid[b][q_idx] == userid[b][kv_idx]
+
+        def causal_mask(b, h, q_idx, kv_idx):
+            return q_idx >= kv_idx
+
+        maskfn = and_masks(document_mask, causal_mask)
+        block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
+        e = self.transformers(e, block_mask, None)
+        return e
+
+    def train_forward(self, d, evaluate):
         if not self.config["finetune"]:
             for k in d:
                 d[k] = d[k].reshape(-1, self.config["max_sequence_length"])
@@ -309,6 +307,9 @@ class TransformerModel(nn.Module):
         for medium in ALL_MEDIUMS:
             for metric in ALL_METRICS:
                 if metric == "watch":
+                    if self.config["modeltype"] != "retrieval":
+                        losses.append(torch.square(self.empty_loss).sum())
+                        continue
                     w = d["action_tokens"][f"{medium}.{metric}.weight"]
                     weights = self.interleave(w, w * 0)
                     l = d["action_tokens"][f"{medium}.{metric}.label"]
@@ -316,6 +317,13 @@ class TransformerModel(nn.Module):
                     p = d["action_tokens"][f"{medium}.{metric}.position"]
                     positions = self.interleave(p, p * 0)
                 elif metric == "rating":
+                    if self.config["modeltype"] != "ranking":
+                        l = torch.square(self.empty_loss).sum()
+                        if evaluate:
+                            losses.append([l+1, l, l+1])
+                        else:
+                            losses.append(l)
+                        continue
                     w = d["item_tokens"][f"{medium}.{metric}.weight"]
                     weights = self.interleave(w * 0, w)
                     l = d["item_tokens"][f"{medium}.{metric}.label"]
@@ -350,8 +358,3 @@ class TransformerModel(nn.Module):
                 else:
                     assert False
         return losses
-
-    def embed_forward(self, d):
-        e = self.to_embedding(d)
-        bp = torch.nonzero(d["mask_index"], as_tuple=True)
-        return e[bp[0], bp[1], :]
