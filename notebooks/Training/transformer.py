@@ -470,6 +470,7 @@ def training_config():
         config["lora"] = True
         config["learning_rate"] = 1e-4
         config["finetune"] = True
+        config["modeltype"] = modeltype
         return config
     num_items = {
         x: int(pd.read_csv(f"{datadir}/{y}.csv").matchedid.max()) + 1

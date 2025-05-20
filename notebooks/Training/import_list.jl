@@ -602,20 +602,9 @@ end
 
 function annotate_with_last_state!(user)
     # remove acausal deleted items
-    max_history_tag = ""
-    for x in user["items"]
-        tag = x["history_tag"]
-        if tag in ["infer", "delete"]
-            continue
-        end
-        max_history_tag = max(max_history_tag, tag)
-    end
-    items = []
-    for x in user["items"]
-        if x["history_tag"] == max_history_tag && x["history_tag"] == "delete"
-            continue
-        end
-        push!(items, x)
+    items = user["items"]
+    while !isempty(items) && items[end]["history_tag"] == "delete"
+        items = items[1:end-1]
     end
     # set metrics for custom tags
     deleted_status = 3

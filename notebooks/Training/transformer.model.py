@@ -193,6 +193,8 @@ class TransformerModel(nn.Module):
                     param.requires_grad = False
         if config["forward"] == "pretrain":
             self.forward = self.train_forward
+        elif config["forward"] == "inference":
+            self.forward = self.inference_forward
         else:
             assert False
 
@@ -238,7 +240,7 @@ class TransformerModel(nn.Module):
         action_tokens = {}
         userid_mask = d["userid"] == self.shift_left(d["userid"])
         for k, v in d.items():
-            if k in ["userid"]:
+            if k in ["userid", "rope_input_pos"]:
                 item_tokens[k] = v
                 action_tokens[k] = v
             elif (
@@ -283,6 +285,12 @@ class TransformerModel(nn.Module):
         userid = self.interleave(
             *[d[k]["userid"] for k in ["action_tokens", "item_tokens"]]
         )
+        if "rope_input_pos" in d["action_tokens"]:
+            rope_input_pos = self.interleave(
+                *[d[k]["rope_input_pos"] for k in ["action_tokens", "item_tokens"]]
+            )
+        else:
+            rope_input_pos = None
         # attention_masks
         m, n = userid.shape
 
@@ -294,7 +302,7 @@ class TransformerModel(nn.Module):
 
         maskfn = and_masks(document_mask, causal_mask)
         block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
-        e = self.transformers(e, block_mask, None)
+        e = self.transformers(e, block_mask, rope_input_pos)
         return e
 
     def train_forward(self, d, evaluate):
@@ -358,3 +366,14 @@ class TransformerModel(nn.Module):
                 else:
                     assert False
         return losses
+
+    def inference_forward(self, d):
+        d = self.split_tokens(d)
+        e = self.to_embedding(d)
+        if self.config["modeltype"] == "retrieval":
+            return e
+        elif self.config["modeltype"] == "ranking":
+            return self.rating_head(e) + self.config["rating_mean"]
+        else:
+            assert False
+

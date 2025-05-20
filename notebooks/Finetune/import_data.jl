@@ -39,9 +39,7 @@ function download_data(finetune_tag::AbstractString)
     files = vcat(
         ["$m.csv" for m in ["manga", "anime"]],
         ["media_relations.$m.jld2" for m in [0, 1]],
-        ["baseline.$metric.$m.msgpack" for metric in ["rating"] for m in [0, 1]],
-        ["bagofwords.$m.$metric.$stem" for m in [0, 1] for metric in ["rating"] for stem in ["csv", "pt"]],
-        ["transformer.$stem" for stem in ["csv", "pt"]],
+        ["transformer.$modeltype.$stem" for modeltype in ["retrieval", "ranking"] for stem in ["csv", "pt"]],
         ["images.csv"],
     )
     for fn in files
@@ -54,6 +52,7 @@ function download_data(finetune_tag::AbstractString)
     tag = read("$datadir/finetune_tag", String)
     run(`rclone --retries=10 copyto r2:rsys/database/lists/$tag/histories.csv.zstd $datadir/histories.csv.zstd`)
     run(`unzstd $datadir/histories.csv.zstd`)
+    rm("$datadir/histories.csv.zstd")
     run(
         `mlr --csv split -n 1000000 --prefix $datadir/histories $datadir/histories.csv`,
     )
@@ -75,8 +74,8 @@ function gen_splits()
     mediums = ["manga", "anime"]
     recent_items = 5 # TODO test more items
     min_items = 5
-    max_items = Dict(s => num_items.(mediums, s) for s in SOURCES) # TODO study clip threshold
-    test_perc = 0.1 # TODO test smaller test_perc
+    max_items = Dict(s => num_items.(mediums, s) for s in SOURCES)
+    test_perc = 0.1
     training_recent_days = 1 # TODO test more days
     test_recent_days = 1
     training_tag = read("$datadir/training_tag", String)
@@ -86,7 +85,6 @@ function gen_splits()
         max_df_ts = maximum(parse.(Float64, df.db_refreshed_at))
         max_ts = max(max_ts, max_df_ts)
     end
-    # TODO think about timezone skew between db_refreshed_at and updated_at
     logtag("IMPORT_DATA", "using max_ts of $max_ts")
     rm("$datadir/users", recursive = true, force = true)
     @showprogress for (idx, f) in
@@ -114,7 +112,6 @@ function gen_splits()
                 outdir = unused_dir
             elseif any(n_items .> max_items[df.source[i]])
                 k = (df.source[i], df.username[i], df.userid[i])
-                logerror("skipping user $i: $k with $n_items > $(max_items[df.source[i]]) items")
                 outdir = unused_dir
             elseif rand() < test_perc
                 recent_days = test_recent_days
@@ -131,9 +128,10 @@ function gen_splits()
             new_items = []
             for x in reverse(user["items"])
                 if x["history_max_ts"] > recent_ts && length(new_items) < recent_items
-                    history_tag = x["history_tag"]
-                    if history_tag <= training_tag
-                        logerror("skipping item with history_tag $history_tag <= $training_tag")
+                    if x["history_tag"] <= training_tag
+                        continue
+                    end
+                    if isnothing(x["history_min_ts"]) || (x["history_max_ts"] - x["history_min_ts"] > 86400)
                         continue
                     end
                     if (x["status"] == x["history_status"]) && (x["rating"] == x["history_rating"])

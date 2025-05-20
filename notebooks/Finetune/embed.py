@@ -1,31 +1,26 @@
 import asyncio
 import contextlib
-import datetime
-import json
 import logging
 import os
 import queue
-import shutil
-import signal
-import subprocess
 import threading
-import traceback
 import time
+import traceback
+import warnings
 from enum import Enum, auto
 
 import msgpack
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 import torchtune.models.llama3
-from torch.nn.attention.flex_attention import create_block_mask, and_masks
-from torchtune.modules.peft import get_adapter_params, set_trainable_params
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
-import warnings
+from torch.nn.attention.flex_attention import and_masks, create_block_mask
+from torchtune.modules.peft import get_adapter_params, set_trainable_params
 
 warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
+
 
 class ErrorCode(Enum):
     INTERNAL_SERVER_ERROR = auto()
@@ -33,10 +28,11 @@ class ErrorCode(Enum):
 
 
 class RequestBuffer:
-    def __init__(self, batch_size, timeout_seconds, max_queue_size):
+    def __init__(self, batch_size, timeout_seconds, max_queue_size, batch_fn):
         self.batch_size = batch_size
         self.timeout_seconds = timeout_seconds
         self.max_queue_size = max_queue_size
+        self.batch_fn = batch_fn
         self.queue = queue.Queue(maxsize=max_queue_size)
         self.results = {}
         self.lock = threading.Lock()
@@ -88,12 +84,15 @@ class RequestBuffer:
                         else:
                             continue
                 if batch:
-                    predictions = predict(batch)
+                    with gpu_lock:
+                        predictions = self.batch_fn(batch)
                     with self.lock:
                         for i, request_id in enumerate(request_ids):
                             self.results[request_id] = (predictions[i], time.time())
             except Exception as e:
-                logging.error(f"Error in RequestBuffer: {e} \n {traceback.format_exc()}")
+                logging.error(
+                    f"Error in RequestBuffer: {e} \n {traceback.format_exc()}"
+                )
                 with self.lock:
                     for request_id in request_ids:
                         self.results[request_id] = (
@@ -101,101 +100,30 @@ class RequestBuffer:
                             time.time(),
                         )
 
-def project_latest(user):
-    max_history_tag = ""
-    for x in user["items"]:
-        tag = x["history_tag"]
-        if tag in ["infer", "delete"]:
-            continue
-        max_history_tag = max(max_history_tag, tag)
-    items = []
-    for x in user["items"]:
-        if x["history_tag"] == max_history_tag:
-            items.append(x)
-    return items
+
+def make_test_item(medium, matchedid, distinctid):
+    return {
+        "medium": medium,
+        "history_max_ts": time.time(),
+        "matchedid": matchedid,
+        "distinctid": distinctid,
+        "status": 0,
+        "rating": 0,
+        "progress": 0,
+        "history_status": 0,
+        "history_rating": 0,
+    }
 
 
 def project(user):
     items = []
     for x in user["items"]:
-        if (x["history_status"] == x["status"]) and (x["history_rating"] == x["rating"]):
+        if (x["history_status"] == x["status"]) and (
+            x["history_rating"] == x["rating"]
+        ):
             continue
         items.append(x)
     return items
-
-
-def get_user_bias(items):
-    biases = {}
-    for metric in ["rating"]:
-        biases[metric] = {}
-        for m in mediums:
-            base = baselines[metric][m]
-            _, λ_u, _, λ_wu, λ_wa = base["params"]
-            numer = 0
-            denom = np.exp(λ_u)
-            ucount = len([x for x in items if x[metric] > 0 and x["medium"] == m])
-            for x in items:
-                if x["medium"] != m or x[metric] == 0:
-                    continue
-                acount = base["item_counts"][x["matchedid"]]
-                w = ucount**λ_wu * acount**λ_wa
-                numer += (x[metric] - base["a"][x["matchedid"]]) * w
-                denom += w
-            biases[metric][m] = float(numer / denom)
-    return biases
-
-
-def predict_baseline(users):
-    ret = []
-    for u in range(len(users)):
-        items = project_latest(users[u])
-        d = {}
-        biases = get_user_bias(items)
-        for m in mediums:
-            for metric in ["rating"]:
-                d[f"baseline.{m}.{metric}"] = [biases[metric][m]]
-        ret.append(d)
-    return ret
-
-
-def predict_bagofwords(users):
-    X = {}
-    for m in mediums:
-        for metric in ["rating", "watch"]:
-            X[f"{m}_{metric}"] = np.zeros((len(users), num_items[m]), dtype=np.float32)
-    for u in range(len(users)):
-        items = project_latest(users[u])
-        biases = get_user_bias(items)
-        for x in items:
-            m = x["medium"]
-            idx = x["matchedid"]
-            if x["rating"] > 0:
-                bl = baselines["rating"][m]
-                pred = (biases["rating"][m] + bl["a"][idx]) * bl["weight"]
-                X[f"{m}_rating"][u, idx] = x["rating"] - pred
-            else:
-                X[f"{m}_rating"][u, idx] = 0
-            if x["status"] > planned_status:
-                X[f"{m}_watch"][u, idx] = 1
-            else:
-                X[f"{m}_watch"][u, idx] = 0
-    data = {k: torch.tensor(v) for k, v in X.items()}
-    ret = {}
-    d = {}
-    for m in mediums:
-        d[f"X_{m}_rating"] = data[f"{m}_rating"].to(device).to_dense()
-        d[f"X_{m}_watch"] = data[f"{m}_watch"].to(device).to_dense()
-    X = torch.cat(
-        (d[f"X_0_rating"], d[f"X_0_watch"], d[f"X_1_rating"], d[f"X_1_watch"]), dim=1
-    )
-    for medium in mediums:
-        for metric in bagofwords_metrics:
-            k = f"bagofwords.{medium}.{metric}"
-            with torch.no_grad():
-                with torch.amp.autocast(device, dtype=torch.bfloat16):
-                    ret[k] = models[k](X, None, None, mode="embed").to("cpu")
-    ret = [{k: v[i, :].tolist() for k, v in ret.items()} for i in range(len(users))]
-    return ret
 
 
 def shift_left(x):
@@ -204,165 +132,122 @@ def shift_left(x):
     return y
 
 
-def predict_transformer(users):
-    extra_tokens = 2 # cls and mask
-    max_len = max_seq_len
+def predict(users, modeltype, medium):
+    model = models[f"transformer.{modeltype}.{medium}"]
+    max_len = model.config["max_sequence_length"]
     d = {
-        "status": np.zeros((len(users), max_len), dtype=np.int32),
-        "rating": np.zeros((len(users), max_len), dtype=np.float32),
-        "progress": np.zeros((len(users), max_len), dtype=np.float32),
+        # prompt features
+        "userid": np.zeros((len(users), max_len), dtype=np.int32),
+        "time": np.zeros((len(users), max_len), dtype=np.float64),
+        "input_pos": np.zeros((len(users), max_len), dtype=np.int32),
+        "rope_input_pos": np.zeros((len(users), max_len), dtype=np.int32),
+        # item features
         "0_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
         "0_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
         "1_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
         "1_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
-        "time": np.zeros((len(users), max_len), dtype=np.float64),
+        # action features
+        "status": np.zeros((len(users), max_len), dtype=np.int32),
+        "rating": np.zeros((len(users), max_len), dtype=np.float32),
+        "progress": np.zeros((len(users), max_len), dtype=np.float32),
     }
-    input_fields = list(d.keys())
-    d["userid"] = np.zeros((len(users), max_len), dtype=np.int32)
-    d["mask_index"] = np.zeros((len(users), max_len), dtype=np.int32)
     for u in range(len(users)):
         userid = u + 1
-        for k in input_fields:
-            d[k][u, 0] = cls_val
-        d["userid"][u, 0] = userid
         items = project(users[u])
+        extra_tokens = 1
         if len(items) > max_len - extra_tokens:
-            items = items[-(max_len - extra_tokens):]
-        i = 0
-        for x in items:
-            i += 1
+            items = items[-(max_len - extra_tokens) :]
+        if modeltype == "ranking":
+            test_items = users[u]["test_items"]
+        elif modeltype == "retrieval":
+            test_items = [make_test_item(medium, 0, 0)]
+        else:
+            assert False
+        for i, x in enumerate(items + test_items):
             m = x["medium"]
             n = 1 - x["medium"]
+            # prompt features
+            d["userid"][u, i] = userid
+            d["time"][u, i] = x["history_max_ts"]
+            d["input_pos"][u, i] = 0  # TODO remove
+            d["rope_input_pos"][u, i] = min(i, len(items))
             # item features
             d[f"{m}_matchedid"][u, i] = x["matchedid"]
             d[f"{m}_distinctid"][u, i] = x["distinctid"]
-            d[f"{n}_matchedid"][u, i] = cls_val
-            d[f"{n}_distinctid"][u, i] = cls_val
-            d["time"][u, i] = x["history_max_ts"]
+            d[f"{n}_matchedid"][u, i] = -1
+            d[f"{n}_distinctid"][u, i] = -1
             # action features
             d["status"][u, i] = x["status"]
-            if x["rating"] == 0:
-                rating = 0
-            else:
-                rating = x["rating"] - baselines["rating"][m]["a"][x["matchedid"]]
-            d["rating"][u, i] = rating
+            d["rating"][u, i] = x["rating"]
             d["progress"][u, i] = x["progress"]
-            # targets
-            d["userid"][u, i] = userid
-            d["mask_index"][u, i] = 0
-        i += 1
-        for k in input_fields:
-            d[k][u, i] = mask_val
-        d["time"][u, i] = max_ts
-        d["userid"][u, i] = userid
-        d["mask_index"][u, i] = 1
+
     d = {k: torch.tensor(v).to(device) for k, v in d.items()}
-    d["delta_time"] = (shift_left(d["time"]) - d["time"]) * (d["userid"] == shift_left(d["userid"]))
-    ret = {}
-    for medium in mediums:
-        with torch.no_grad():
-            with torch.amp.autocast(device, dtype=torch.bfloat16):
-                e = models[f"transformer.{medium}"](d.copy()).to("cpu")
-                ret[f"transformer.{medium}"] = e
-    ret = [{k: v[i, :].tolist() for k, v in ret.items()} for i in range(len(users))]
-    return ret
+    with torch.no_grad():
+        with torch.amp.autocast(device, dtype=torch.bfloat16):
+            e = model(d).to("cpu")
+    if modeltype == "retrieval":
+        ret = []
+        for i, u in enumerate(users):
+            d = {"version": version}
+            d[f"{modeltype}.{medium}"] = e[i, 2 * len(u["items"]), :].tolist()
+            ret.append(d)
+        return ret
+    elif modeltype == "ranking":
+        ret = []
+        for i, u in enumerate(users):
+            d = {"version": version}
+            idxs = []
+            for j in range(len(u["test_items"])):
+                idxs.append(2 * (len(u["items"]) + j) + 1)
+            d[f"{modeltype}.{medium}"] = e[i, idxs, 0].tolist()
+            ret.append(d)
+        return ret
+    else:
+        assert False
 
-
-def predict(users):
-    def merge(X, Y):
-        return [x | y for (x, y) in zip(X, Y)]
-
-    ret = [{"version": version} for _ in users]
-    ret = merge(ret, predict_baseline(users))
-    ret = merge(ret, predict_transformer(users))
-    ret = merge(ret, predict_bagofwords(users))
-    return ret
-
-
-def get_baselines(rank):
-    baselines = {}
-    for metric in ["rating"]:
-        baselines[metric] = {}
-        for m in mediums:
-            with open(f"{datadir}/baseline.{metric}.{m}.msgpack", "rb") as f:
-                baseline = msgpack.unpackb(f.read(), strict_map_key=False)
-                d = {}
-                d["params"] = baseline["params"]["λ"]
-                d["weight"] = baseline["weight"][0]
-                d["a"] = torch.tensor(baseline["params"]["a"]).to(rank)
-                item_counts = baseline["params"]["item_counts"]
-                item_counts = [
-                    item_counts.get(x, 1) for x in range(len(baseline["params"]["a"]))
-                ]
-                d["item_counts"] = torch.tensor(item_counts).to(rank)
-                baselines[metric][m] = d
-    return baselines
-
-
-with open("../Training/bagofwords.model.py") as f:
-    exec(f.read())
 
 with open("../Training/transformer.model.py") as f:
     exec(f.read())
 
 
-def load_bagofwords_model(medium, metric):
-    fn = f"{datadir}/bagofwords.{medium}.{metric}.finetune.pt"
-    m = BagOfWordsModel(datadir, medium, metric)
-    m.load_state_dict(torch.load(fn, weights_only=True, map_location=device))
-    m = m.to(device)
-    m.eval()
-    return m
-
-
-def load_transformer_model(medium):
-    with open(f"{datadir}/transformer.config") as f:
-        config = json.load(f)
-        config["lora"] = True
-        config["forward"] = "embed"
-    m = TransformerModel(config)
-    fn = f"{datadir}/transformer.{medium}.finetune.pt"
-    m.load_state_dict(torch.load(fn, weights_only=True, map_location=device))
-    m = m.to(device)
-    m = torch.compile(m)
-    m.eval()
-    return m
+def load_model(modeltype, medium):
+    checkpoint = torch.load(
+        f"{datadir}/transformer.{modeltype}.{medium}.finetune.pt",
+        weights_only=False,
+        map_location=device,
+    )
+    config = checkpoint["config"]
+    config["forward"] = "inference"
+    model = TransformerModel(config)
+    model.load_state_dict(checkpoint["model"])
+    model = model.to(device)
+    model = torch.compile(model)
+    model.eval()
+    return model
 
 
 logging.warning("STARTUP BEGIN")
 starttime = time.time()
 device = "cuda"
-mediums = [0, 1]
-metrics = ["watch", "rating"]
-bagofwords_metrics = ["rating"]
 datadir = "../../data/finetune"
-models = {}
-for medium in mediums:
-    models[f"transformer.{medium}"] = load_transformer_model(medium)
-    for metric in bagofwords_metrics:
-        models[f"bagofwords.{medium}.{metric}"] = load_bagofwords_model(medium, metric)
-num_items = {
-    m: pd.read_csv(f"{datadir}/{n}.csv").matchedid.max() + 1
-    for m, n in [(0, "manga"), (1, "anime")]
-}
-planned_status = 5
-baselines = get_baselines(device)
-request_buffer = RequestBuffer(
-    batch_size=32, timeout_seconds=0.01, max_queue_size=1024
-)
 with open(f"{datadir}/finetune_tag") as f:
     version = f.read()
-min_ts = int(
-    datetime.datetime.strptime("20000101", "%Y%m%d")
-    .replace(tzinfo=datetime.timezone.utc)
-    .timestamp()
-)
-max_ts = int(
-    datetime.datetime.strptime(version, "%Y%m%d")
-    .replace(tzinfo=datetime.timezone.utc)
-    .timestamp()
-) + 86400
-predict([{"user": {"source": "mal"}, "items": []}])
+gpu_lock = threading.Lock()
+models = {}
+for modeltype in ["ranking", "retrieval"]:
+    for medium in [0, 1]:
+        logging.warning(f"STARTUP LOADING {modeltype} {medium} MODEL")
+        models[f"transformer.{modeltype}.{medium}"] = load_model(
+            modeltype, medium
+        )
+        test_user = {"user": {"source": "mal"}, "items": [], "test_items": [make_test_item(medium, 0, 0)]}
+        predict([test_user], modeltype, medium)
+request_buffers = {}
+for modeltype in ["ranking", "retrieval"]:
+    for medium in [0, 1]:
+        request_buffers[(modeltype, medium)] = RequestBuffer(
+            batch_size=32, timeout_seconds=0.01, max_queue_size=1024, batch_fn = lambda x: predict(x, modeltype, medium)
+        )
 logging.warning(f"STARTUP END AFTER {time.time() - starttime}s")
 app = FastAPI()
 
@@ -383,6 +268,9 @@ async def predict_endpoint(request: Request):
     data = await request.body()
     try:
         data = msgpack.unpackb(data, strict_map_key=False)
+        modeltype = data["modeltype"]
+        medium = data["medium"]
+        request_buffer = request_buffers[(modeltype, medium)]
         r = request_buffer.add_request(data)
         if isinstance(r, ErrorCode):
             return Response(status_code=503)
