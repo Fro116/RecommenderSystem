@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euxo pipefail
 cd ../../../data/import/lists
-df="histories.csv"
+df="new_histories.csv"
 db="user_histories"
 secretdir="../../../secrets"
 bucket=`cat $secretdir/gcp.bucket.txt`
@@ -20,5 +20,5 @@ gcloud sql operations wait "$PENDING_OPERATION" --timeout=unlimited
 
 psql "$connstr" -c "CREATE INDEX ${db}_staging_source_lower_username_idx ON ${db}_staging (source, lower(username));"
 psql "$connstr" -c "BEGIN; LOCK TABLE ${db} IN ACCESS EXCLUSIVE MODE; ALTER TABLE ${db} RENAME TO ${db}_old; ALTER TABLE ${db}_staging RENAME TO ${db}; DROP TABLE ${db}_old; ALTER INDEX ${db}_staging_source_lower_username_idx RENAME TO ${db}_source_lower_username_idx; COMMIT;"
-psql "$connstr" -c "DELETE FROM inference_users WHERE db_refreshed_at < extract(epoch from NOW()) - 86400 * 30;"
+psql "$connstr" -c "DELETE FROM online_user_histories WHERE db_refreshed_at < extract(epoch from NOW()) - 86400 * 30;"
 gcloud storage rm $bucket/$df
