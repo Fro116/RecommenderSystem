@@ -52,7 +52,7 @@ end
 # returns true on success
 function start_sfcompute(gpuhour_price::Real)::Bool
     nodes = 4
-    runtime_hours = 9
+    runtime_hours = 12
     write_entrypoint_yaml(nodes)
     if !isnothing(get_active_sf_cluster())
         logerror("start_sfcompute already launched cluster")
@@ -91,34 +91,19 @@ function start_sfcompute(gpuhour_price::Real)::Bool
     true
 end
 
-function train_bagofwords()
-    run(`julia -t auto bagofwords.jl --pretrain`)
-    for m in [0, 1]
-        metric = "rating"
-        cmd="torchrun --standalone --nproc_per_node=1 bagofwords.py --datadir ../../data/training --medium $m --metric $metric"
-        cmd = "$cmd || (sleep 10 && $cmd) || (sleep 60 && $cmd)"
-        run(`sh -c $cmd`)
-    end
-end
-
 function pretrain(datetag::AbstractString)
     run(`julia import_data.jl $datetag`)
     for m in [0, 1]
         run(`julia media_relations.jl $m`)
     end
-    for metric in ["rating"]
-        run(`julia baseline.jl $metric`)
-    end
     run(`julia -t auto transformer.jl`)
-    t = @handle_errors Threads.@spawn start_sfcompute(3.00)
-    train_bagofwords()
-    sfcompute_success = fetch(t)
+    start_sfcompute(3.00)
     if !sfcompute_success
         logerror("sfcompute training failed")
         return
     end
     list_tag = read("../../data/training/list_tag", String)
-    for f in ["transformer.pt", "bagofwords.0.rating.pt", "bagofwords.1.rating.pt"]
+    for f in ["transformer.causal.pt", "transformer.masked.pt"]
         success = read(
             `rclone --retries=10 ls r2:rsys/database/training/$list_tag/$f`,
             String,
