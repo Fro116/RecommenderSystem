@@ -50,14 +50,13 @@ end
 
 function get_data(data, userid)
     project!(data)
-    num_test_items = 5 # up to 5 test items
+    num_test_items = 1
     @assert length(data["test_items"]) <= num_test_items
     N = max_seq_len # TODO extend seq_len
     d = Dict(
         # prompt features
         "userid" => zeros(Int32, N),
         "time" => zeros(Float64, N),
-        "input_pos" => zeros(Int32, N),
         # item features
         "0_matchedid" => zeros(Int32, N),
         "0_distinctid" => zeros(Int32, N),
@@ -76,10 +75,8 @@ function get_data(data, userid)
         end
     end
     items = data["items"]
-    input_pos = 0
     if length(items) > max_seq_len - num_test_items
-        input_pos = length(items) - (max_seq_len-num_test_items)
-        items = items[input_pos + 1:end]
+        items = items[length(items) - (max_seq_len-num_test_items) + 1:end]
     end
     i = 1
     for (item_source, istest) in [(items, false), (data["test_items"], true)]
@@ -89,7 +86,6 @@ function get_data(data, userid)
             # prompt features
             d["userid"][i] = userid
             d["time"][i] = x["history_max_ts"]
-            d["input_pos"][i] = input_pos
             # item features
             d["$(m)_matchedid"][i] = x["matchedid"]
             d["$(m)_distinctid"][i] = x["distinctid"]
@@ -117,7 +113,6 @@ function get_data(data, userid)
                 end
             end
             i += 1
-            input_pos += 1
         end
     end
     for m in mediums

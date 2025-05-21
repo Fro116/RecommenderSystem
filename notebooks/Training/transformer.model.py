@@ -6,21 +6,16 @@ class ActionEmbedding(nn.Module):
     def __init__(self, config):
         super(ActionEmbedding, self).__init__()
         self.config = config
-        self.input_pos_embedding = nn.Embedding(
-            config["max_sequence_length"],
-            config["embed_dim"],
-        )
         self.periodic_time_cos = nn.Parameter(torch.zeros(4))
         self.periodic_time_sin = nn.Parameter(torch.zeros(4))
         N = sum(
             [
-                config["embed_dim"],  # input_pos
                 1,  # time
                 4,  # periodic time cos
                 4,  # periodic time sin
                 1,  # has_rating
                 1,  # rating
-                config["vocab_sizes"]["status"],  # status
+                config["vocab_sizes"]["status"] + 1,  # status
                 1,  # progress
             ]
         )
@@ -42,24 +37,22 @@ class ActionEmbedding(nn.Module):
         periodic_ts = torch.cat([2 * np.pi * periodic_ts / p for p in periods], dim=-1)
         periodic_ts = periodic_ts.to(torch.float32)
         # embed
-        input_pos_emb = self.input_pos_embedding(
-            d["input_pos"] % self.config["max_sequence_length"]
-        )
         time_emb = d["time"].reshape(*d["time"].shape, 1)
         periodic_time_cos_emb = torch.cos(periodic_ts + self.periodic_time_cos)
         periodic_time_sin_emb = torch.sin(periodic_ts + self.periodic_time_sin)
         # actions
         has_rating_emb = (d["rating"] != 0).int().reshape(*d["rating"].shape, 1)
         rating_emb = d["rating"].reshape(*d["rating"].shape, 1)
-        rating_emb = has_rating_emb * ((rating_emb - self.config["rating_mean"]) / self.config["rating_std"])
+        rating_emb = has_rating_emb * (
+            (rating_emb - self.config["rating_mean"]) / self.config["rating_std"]
+        )
         status_emb = torch.nn.functional.one_hot(
-            (d["status"]).to(torch.int64),
-            self.config["vocab_sizes"]["status"],
+            (d["status"] + 1).to(torch.int64),  # masked values are -1
+            self.config["vocab_sizes"]["status"] + 1,
         )
         progress_emb = d["progress"].reshape(*d["progress"].shape, 1)
         emb = torch.cat(
             (
-                input_pos_emb,
                 time_emb,
                 periodic_time_cos_emb,
                 periodic_time_sin_emb,
@@ -79,7 +72,7 @@ class ItemEmbedding(nn.Module):
         self.item_embeddings = nn.ModuleList(
             [
                 nn.Embedding(
-                    config["vocab_sizes"][f"{m}_matchedid"],
+                    config["vocab_sizes"][f"{m}_matchedid"] + 1,
                     config["embed_dim"],
                 )
                 for m in ALL_MEDIUMS
@@ -88,7 +81,7 @@ class ItemEmbedding(nn.Module):
         self.distinctid_embeddings = nn.ModuleList(
             [
                 nn.Embedding(
-                    config["vocab_sizes"][f"{m}_distinctid"],
+                    config["vocab_sizes"][f"{m}_distinctid"] + 1,
                     config["distinctid_dim"],
                 )
                 for m in ALL_MEDIUMS
@@ -103,9 +96,12 @@ class ItemEmbedding(nn.Module):
         self.linear = nn.Linear(N, config["embed_dim"])
 
     def forward(self, d):
-        # if medium=0, then 1_matchedid=-1 and 1_distinctid=-1 and vice versa
-        item_emb_0 = self.item_embeddings[0](d["0_matchedid"].clip(0))
-        item_emb_1 = self.item_embeddings[1](d["1_matchedid"].clip(0))
+        item_emb_0 = self.item_embeddings[0](
+            d["0_matchedid"] + 1
+        )  # masked values are -1
+        item_emb_1 = self.item_embeddings[1](
+            d["1_matchedid"] + 1
+        )  # masked values are -1
         item_emb = torch.where(
             (d["0_matchedid"] >= 0).unsqueeze(-1), item_emb_0, item_emb_1
         )
@@ -134,10 +130,14 @@ class Llama3(nn.Module):
             "num_kv_heads": config["num_kv_heads"],
             "embed_dim": config["embed_dim"],
             "intermediate_dim": config["intermediate_dim"],
-            # we split each token into an item and action token
             "max_seq_len": config["max_sequence_length"] * 2,
         }
-        if config["lora"]:
+        if config["causal"]:
+            # we split each token into an item and action token
+            llama_config["max_seq_len"] = 2 * config["max_sequence_length"]
+        else:
+            llama_config["max_seq_len"] = config["max_sequence_length"]
+        if config["finetune"]:
             llama3 = torchtune.models.llama3.lora_llama3(
                 lora_attn_modules=["q_proj", "v_proj"],
                 lora_rank=8,
@@ -160,7 +160,6 @@ class Llama3(nn.Module):
 class TransformerModel(nn.Module):
     def __init__(self, config):
         super(TransformerModel, self).__init__()
-        # create model
         self.config = config
         self.action_embedding = ActionEmbedding(config)
         self.item_embedding = ItemEmbedding(config)
@@ -175,14 +174,13 @@ class TransformerModel(nn.Module):
         self.watch_heads = nn.ModuleList(
             [create_lm_head(medium) for medium in ALL_MEDIUMS]
         )
-        # TODO simplify
         self.rating_head = nn.Sequential(
             nn.Linear(config["embed_dim"], config["embed_dim"]),
             nn.GELU(),
             nn.Linear(config["embed_dim"], 1),
         )
         self.empty_loss = nn.Parameter(torch.tensor(0.0))
-        if config["lora"]:
+        if config["finetune"]:
             for layer in [
                 self.action_embedding,
                 self.item_embedding,
@@ -191,9 +189,9 @@ class TransformerModel(nn.Module):
             ]:
                 for _, param in layer.named_parameters():
                     param.requires_grad = False
-        if config["forward"] == "pretrain":
+        if config["forward"] == "train":
             self.forward = self.train_forward
-        elif config["forward"] == "inference":
+        elif config["forward"] in ["retrieval", "ranking"]:
             self.forward = self.inference_forward
         else:
             assert False
@@ -244,11 +242,7 @@ class TransformerModel(nn.Module):
                 item_tokens[k] = v
                 action_tokens[k] = v
             elif (
-                k
-                in [
-                    "input_pos",
-                    "time",
-                ]
+                k in ["input_pos", "time"]
                 or k.startswith("0.watch")
                 or k.startswith("1.watch")
             ):
@@ -269,8 +263,6 @@ class TransformerModel(nn.Module):
                 item_tokens[k] = v
             elif k in ["status", "rating", "progress"]:
                 action_tokens[k] = self.shift_right(v) * userid_mask
-            elif k in ["istest"]:
-                pass # todo remove
             else:
                 assert False, k
         return {
@@ -278,68 +270,105 @@ class TransformerModel(nn.Module):
             "action_tokens": action_tokens,
         }
 
-    def to_embedding(self, d):
-        e_a = self.action_embedding(d["action_tokens"])
-        e_i = self.item_embedding(d["item_tokens"])
-        e = self.interleave(e_a, e_i)
-        userid = self.interleave(
-            *[d[k]["userid"] for k in ["action_tokens", "item_tokens"]]
+    def mask_tokens(self, d):
+        mask = (
+            torch.rand(d["userid"].shape, device=d["userid"].device)
+            < self.config["mask_rate"]
         )
-        if "rope_input_pos" in d["action_tokens"]:
-            rope_input_pos = self.interleave(
-                *[d[k]["rope_input_pos"] for k in ["action_tokens", "item_tokens"]]
+        for k in d:
+            if k.endswith(".position") or k.endswith(".label") or k.endswith(".weight"):
+                d[k][~mask] = 0
+            elif k in ["userid", "time"]:
+                pass  # don't mask
+            elif k in [
+                "0_matchedid",
+                "0_distinctid",
+                "1_matchedid",
+                "1_distinctid",
+                "status",
+            ]:
+                d[k][mask] = -1
+            elif k in ["rating", "progress"]:
+                d[k][mask] = 0
+            else:
+                assert False
+        return d
+
+    def to_embedding(self, d):
+        if self.config["causal"]:
+            e_a = self.action_embedding(d["action_tokens"])
+            e_i = self.item_embedding(d["item_tokens"])
+            e = self.interleave(e_a, e_i)
+            userid = self.interleave(
+                *[d[k]["userid"] for k in ["action_tokens", "item_tokens"]]
             )
+            if "rope_input_pos" in d["action_tokens"]:
+                rope_input_pos = self.interleave(
+                    *[d[k]["rope_input_pos"] for k in ["action_tokens", "item_tokens"]]
+                )
+            else:
+                rope_input_pos = None
+            # attention_masks
+            m, n = userid.shape
+
+            def document_mask(b, h, q_idx, kv_idx):
+                return userid[b][q_idx] == userid[b][kv_idx]
+
+            def causal_mask(b, h, q_idx, kv_idx):
+                return q_idx >= kv_idx
+
+            maskfn = and_masks(document_mask, causal_mask)
+            block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
+            e = self.transformers(e, block_mask, rope_input_pos)
+            return e
         else:
-            rope_input_pos = None
-        # attention_masks
-        m, n = userid.shape
+            userid = d["userid"]
+            m, n = userid.shape
 
-        def document_mask(b, h, q_idx, kv_idx):
-            return userid[b][q_idx] == userid[b][kv_idx]
+            def document_mask(b, h, q_idx, kv_idx):
+                return userid[b][q_idx] == userid[b][kv_idx]
 
-        def causal_mask(b, h, q_idx, kv_idx):
-            return q_idx >= kv_idx
-
-        maskfn = and_masks(document_mask, causal_mask)
-        block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
-        e = self.transformers(e, block_mask, rope_input_pos)
-        return e
+            block_mask = create_block_mask(
+                document_mask, B=m, H=None, Q_LEN=n, KV_LEN=n
+            )
+            e = self.action_embedding(d) + self.item_embedding(d)
+            e = self.transformers(e, block_mask, None)
+            return e
 
     def train_forward(self, d, evaluate):
         if not self.config["finetune"]:
             for k in d:
                 d[k] = d[k].reshape(-1, self.config["max_sequence_length"])
-        d = self.split_tokens(d)
+        if self.config["causal"]:
+            d = self.split_tokens(d)
+        else:
+            if not self.config["finetune"]:
+                d = self.mask_tokens(d)
         e = self.to_embedding(d)
         losses = []
         for medium in ALL_MEDIUMS:
             for metric in ALL_METRICS:
-                if metric == "watch":
-                    if self.config["modeltype"] != "retrieval":
-                        losses.append(torch.square(self.empty_loss).sum())
-                        continue
-                    w = d["action_tokens"][f"{medium}.{metric}.weight"]
-                    weights = self.interleave(w, w * 0)
-                    l = d["action_tokens"][f"{medium}.{metric}.label"]
-                    labels = self.interleave(l, l * 0)
-                    p = d["action_tokens"][f"{medium}.{metric}.position"]
-                    positions = self.interleave(p, p * 0)
-                elif metric == "rating":
-                    if self.config["modeltype"] != "ranking":
-                        l = torch.square(self.empty_loss).sum()
-                        if evaluate:
-                            losses.append([l+1, l, l+1])
-                        else:
-                            losses.append(l)
-                        continue
-                    w = d["item_tokens"][f"{medium}.{metric}.weight"]
-                    weights = self.interleave(w * 0, w)
-                    l = d["item_tokens"][f"{medium}.{metric}.label"]
-                    labels = self.interleave(l * 0, l)
-                    p = d["item_tokens"][f"{medium}.{metric}.position"]
-                    positions = self.interleave(p * 0, p)
+                if self.config["causal"]:
+                    if metric == "watch":
+                        w = d["action_tokens"][f"{medium}.{metric}.weight"]
+                        weights = self.interleave(w, w * 0)
+                        l = d["action_tokens"][f"{medium}.{metric}.label"]
+                        labels = self.interleave(l, l * 0)
+                        p = d["action_tokens"][f"{medium}.{metric}.position"]
+                        positions = self.interleave(p, p * 0)
+                    elif metric == "rating":
+                        w = d["item_tokens"][f"{medium}.{metric}.weight"]
+                        weights = self.interleave(w * 0, w)
+                        l = d["item_tokens"][f"{medium}.{metric}.label"]
+                        labels = self.interleave(l * 0, l)
+                        p = d["item_tokens"][f"{medium}.{metric}.position"]
+                        positions = self.interleave(p * 0, p)
+                    else:
+                        assert False
                 else:
-                    assert False
+                    weights = d[f"{medium}.{metric}.weight"]
+                    labels = d[f"{medium}.{metric}.label"]
+                    positions = d[f"{medium}.{metric}.position"]
                 if not torch.is_nonzero(weights.sum()):
                     losses.append(torch.square(self.empty_loss).sum())
                     continue
@@ -368,12 +397,12 @@ class TransformerModel(nn.Module):
         return losses
 
     def inference_forward(self, d):
-        d = self.split_tokens(d)
+        if self.config["causal"]:
+            d = self.split_tokens(d)
         e = self.to_embedding(d)
-        if self.config["modeltype"] == "retrieval":
+        if self.config["forward"] == "retrieval":
             return e
-        elif self.config["modeltype"] == "ranking":
+        elif self.config["forward"] == "ranking":
             return self.rating_head(e) + self.config["rating_mean"]
         else:
             assert False
-

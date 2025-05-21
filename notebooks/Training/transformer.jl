@@ -14,7 +14,7 @@ const mediums = [0, 1]
 const metrics = ["watch", "rating", "status"]
 const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
-const batch_size = 16 * 1024 # local_batch_size * max_sequence_length
+const batch_size = 64 * 1024 # local_batch_size * max_sequence_length
 const num_gpus = 32
 
 include("../julia_utils/stdout.jl")
@@ -25,27 +25,6 @@ include("history_tools.jl")
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1).matchedid) + 1
 end
 
-@memoize function get_baselines()
-    baselines = Dict()
-    for metric in ["rating"]
-        baselines[metric] = Dict()
-        for m in [0, 1]
-            b = open("$datadir/baseline.$metric.$m.msgpack") do f
-                MsgPack.unpack(read(f))
-            end
-            d = Dict()
-            d["params"] = convert.(Float32, b["params"]["λ"])
-            d["weight"] = convert(Float32, only(b["weight"]))
-            d["a"] = convert.(Float32, b["params"]["a"])
-            item_counts = b["params"]["item_counts"]
-            item_counts = Int32[get(item_counts, x, 1) for x = 0:length(b["params"]["a"])-1]
-            d["item_counts"] = item_counts
-            baselines[metric][m] = d
-        end
-    end
-    baselines
-end
-
 function get_data(data, userid)
     project!(data)
     N = length(data["items"])
@@ -53,7 +32,6 @@ function get_data(data, userid)
         # prompt features
         "userid" => Vector{Int32}(undef, N),
         "time" => Vector{Float64}(undef, N),
-        "input_pos" => Vector{Int32}(undef, N),
         # item features
         "0_matchedid" => Vector{Int32}(undef, N),
         "0_distinctid" => Vector{Int32}(undef, N),
@@ -77,7 +55,6 @@ function get_data(data, userid)
         # prompt features
         d["userid"][i] = userid
         d["time"][i] = x["history_max_ts"]
-        d["input_pos"][i] = i
         # item features
         d["$(m)_matchedid"][i] = x["matchedid"]
         d["$(m)_distinctid"][i] = x["distinctid"]
