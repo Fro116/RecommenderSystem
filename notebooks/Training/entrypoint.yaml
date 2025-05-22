@@ -1,11 +1,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: pretrain-svc
+  name: {MODELTYPE}-svc
 spec:
   clusterIP: None  # Headless service
   selector:
-    job-name: pretrain
+    job-name: {MODELTYPE}
   ports:
   - port: 29500
     name: dist-port
@@ -13,7 +13,7 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pretrain
+  name: {MODELTYPE}
 spec:
   completions: {NODES}  # Total number of pods
   parallelism: {NODES}  # Run all pods in parallel
@@ -21,7 +21,7 @@ spec:
   template:
     metadata:
       labels:
-        job-name: pretrain  # This matches service selector
+        job-name: {MODELTYPE}  # This matches service selector
     spec:
       containers:
       - name: trainer
@@ -56,4 +56,4 @@ spec:
         emptyDir:
           medium: Memory
       restartPolicy: Never
-      subdomain: pretrain-svc  # needed for networking between pods in the job
+      subdomain: {MODELTYPE}-svc  # needed for networking between pods in the job

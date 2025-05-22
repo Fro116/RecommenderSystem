@@ -2,12 +2,25 @@ ALL_MEDIUMS = [0, 1]
 ALL_METRICS = ["watch", "rating"]
 
 
+class MaskedEmbedding(nn.Module):
+    """Supports using -1 as a masked value"""
+
+    def __init__(self, vocab_size, embed_dim):
+        super(MaskedEmbedding, self).__init__()
+        self.vocab_size = vocab_size + 1
+        self.embedding = nn.Embedding(self.vocab_size, embed_dim)
+
+    def forward(self, x):
+        return self.embedding(torch.where(x == -1, self.vocab_size-1, x))
+
+
 class ActionEmbedding(nn.Module):
     def __init__(self, config):
         super(ActionEmbedding, self).__init__()
         self.config = config
         self.periodic_time_cos = nn.Parameter(torch.zeros(4))
         self.periodic_time_sin = nn.Parameter(torch.zeros(4))
+        self.status_embedding = MaskedEmbedding(config["vocab_sizes"]["status"], 16)
         N = sum(
             [
                 1,  # time
@@ -15,7 +28,7 @@ class ActionEmbedding(nn.Module):
                 4,  # periodic time sin
                 1,  # has_rating
                 1,  # rating
-                config["vocab_sizes"]["status"] + 1,  # status
+                16, # status
                 1,  # progress
             ]
         )
@@ -46,10 +59,7 @@ class ActionEmbedding(nn.Module):
         rating_emb = has_rating_emb * (
             (rating_emb - self.config["rating_mean"]) / self.config["rating_std"]
         )
-        status_emb = torch.nn.functional.one_hot(
-            (d["status"] + 1).to(torch.int64),  # masked values are -1
-            self.config["vocab_sizes"]["status"] + 1,
-        )
+        status_emb = self.status_embedding(d["status"])
         progress_emb = d["progress"].reshape(*d["progress"].shape, 1)
         emb = torch.cat(
             (
@@ -69,10 +79,10 @@ class ActionEmbedding(nn.Module):
 class ItemEmbedding(nn.Module):
     def __init__(self, config):
         super(ItemEmbedding, self).__init__()
-        self.item_embeddings = nn.ModuleList(
+        self.matchedid_embeddings = nn.ModuleList(
             [
-                nn.Embedding(
-                    config["vocab_sizes"][f"{m}_matchedid"] + 1,
+                MaskedEmbedding(
+                    config["vocab_sizes"][f"{m}_matchedid"],
                     config["embed_dim"],
                 )
                 for m in ALL_MEDIUMS
@@ -80,8 +90,8 @@ class ItemEmbedding(nn.Module):
         )
         self.distinctid_embeddings = nn.ModuleList(
             [
-                nn.Embedding(
-                    config["vocab_sizes"][f"{m}_distinctid"] + 1,
+                MaskedEmbedding(
+                    config["vocab_sizes"][f"{m}_distinctid"],
                     config["distinctid_dim"],
                 )
                 for m in ALL_MEDIUMS
@@ -96,23 +106,19 @@ class ItemEmbedding(nn.Module):
         self.linear = nn.Linear(N, config["embed_dim"])
 
     def forward(self, d):
-        item_emb_0 = self.item_embeddings[0](
-            d["0_matchedid"] + 1
-        )  # masked values are -1
-        item_emb_1 = self.item_embeddings[1](
-            d["1_matchedid"] + 1
-        )  # masked values are -1
-        item_emb = torch.where(
-            (d["0_matchedid"] >= 0).unsqueeze(-1), item_emb_0, item_emb_1
+        matchedid_emb_0 = self.matchedid_embeddings[0](d["0_matchedid"])
+        matchedid_emb_1 = self.matchedid_embeddings[1](d["1_matchedid"])
+        matchedid_emb = torch.where(
+            (d["0_matchedid"] >= 0).unsqueeze(-1), matchedid_emb_0, matchedid_emb_1
         )
-        distinctid_emb_0 = self.distinctid_embeddings[0](d["0_matchedid"].clip(0))
-        distinctid_emb_1 = self.distinctid_embeddings[1](d["1_matchedid"].clip(0))
+        distinctid_emb_0 = self.distinctid_embeddings[0](d["0_distinctid"])
+        distinctid_emb_1 = self.distinctid_embeddings[1](d["1_distinctid"])
         distinctid_emb = torch.where(
-            (d["0_matchedid"] >= 0).unsqueeze(-1), distinctid_emb_0, distinctid_emb_1
+            (d["0_distinctid"] >= 0).unsqueeze(-1), distinctid_emb_0, distinctid_emb_1
         )
         emb = torch.cat(
             (
-                item_emb,
+                matchedid_emb,
                 distinctid_emb,
             ),
             dim=-1,
@@ -166,7 +172,7 @@ class TransformerModel(nn.Module):
         self.transformers = Llama3(config)
 
         def create_lm_head(medium):
-            x = self.item_embedding.item_embeddings[medium]
+            x = self.item_embedding.matchedid_embeddings[medium].embedding
             weight_tied_linear = nn.Linear(*reversed(x.weight.shape))
             x.weight = weight_tied_linear.weight
             return nn.Sequential(weight_tied_linear, nn.LogSoftmax(dim=-1))
@@ -174,11 +180,18 @@ class TransformerModel(nn.Module):
         self.watch_heads = nn.ModuleList(
             [create_lm_head(medium) for medium in ALL_MEDIUMS]
         )
-        self.rating_head = nn.Sequential(
-            nn.Linear(config["embed_dim"], config["embed_dim"]),
-            nn.GELU(),
-            nn.Linear(config["embed_dim"], 1),
-        )
+        if config["causal"]:
+            self.rating_head = nn.Sequential(
+                nn.Linear(config["embed_dim"], config["embed_dim"]),
+                nn.GELU(),
+                nn.Linear(config["embed_dim"], 1),
+            )
+        else:
+            self.rating_head = nn.Sequential(
+                nn.Linear(2 * config["embed_dim"], config["embed_dim"]),
+                nn.GELU(),
+                nn.Linear(config["embed_dim"], 1),
+            )
         self.empty_loss = nn.Parameter(torch.tensor(0.0))
         if config["finetune"]:
             for layer in [
@@ -386,7 +399,19 @@ class TransformerModel(nn.Module):
                     )
                     losses.append(self.crossentropy(preds, labels, weights))
                 elif metric == "rating":
-                    preds = self.rating_head(embed).reshape(-1)
+                    if self.config["causal"]:
+                        preds = self.rating_head(embed).reshape(-1)
+                    else:
+                        X = torch.cat(
+                            (
+                                embed,
+                                self.item_embedding.matchedid_embeddings[medium](
+                                    positions.squeeze(dim=1)
+                                ),
+                            ),
+                            dim=-1,
+                        )
+                        preds = self.rating_head(X).reshape(-1)
                     labels = labels - self.config["rating_mean"]
                     if evaluate:
                         losses.append(self.moments(preds, labels, weights))

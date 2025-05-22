@@ -164,7 +164,7 @@ def to_device(data, local_rank):
         d[k] = data[k].to(local_rank).to_dense()
     for m in ALL_MEDIUMS:
         for metric in ALL_METRICS:
-            d[f"{m}.{metric}.position"] = d[f"{m}_matchedid"].clip(0).to(torch.int64)
+            d[f"{m}.{metric}.position"] = d[f"{m}_matchedid"].to(torch.int64)
     return d
 
 
@@ -652,10 +652,8 @@ def download(node, num_nodes):
     files = (
         [
             "list_tag",
-            "transformer.causal.pt",
-            "transformer.causal.csv",
-            "transformer.masked.pt",
-            "transformer.masked.csv",
+            f"transformer.{args.modeltype}.pt",
+            f"transformer.{args.modeltype}.csv",
         ]
         + [f"transformer/{x}/num_tokens.txt" for x in ["training", "test"]]
         + [f"{m}.csv" for m in ["manga", "anime"]]
