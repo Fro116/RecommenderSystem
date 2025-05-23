@@ -284,10 +284,17 @@ class TransformerModel(nn.Module):
         }
 
     def mask_tokens(self, d):
-        mask = (
-            torch.rand(d["userid"].shape, device=d["userid"].device)
-            < self.config["mask_rate"]
-        )
+        if self.config["finetune"]:
+            mask = torch.zeros_like(d["userid"])
+            for k in d:
+                if k.endswith(".weight"):
+                    mask += (d[k] > 0)
+            mask = mask > 0
+        else:
+            mask = (
+                torch.rand(d["userid"].shape, device=d["userid"].device)
+                < self.config["mask_rate"]
+            )
         for k in d:
             if k.endswith(".position") or k.endswith(".label") or k.endswith(".weight"):
                 d[k][~mask] = 0
@@ -355,8 +362,7 @@ class TransformerModel(nn.Module):
         if self.config["causal"]:
             d = self.split_tokens(d)
         else:
-            if not self.config["finetune"]:
-                d = self.mask_tokens(d)
+            d = self.mask_tokens(d)
         e = self.to_embedding(d)
         losses = []
         for medium in ALL_MEDIUMS:

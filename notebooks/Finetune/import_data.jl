@@ -39,7 +39,7 @@ function download_data(finetune_tag::AbstractString)
     files = vcat(
         ["$m.csv" for m in ["manga", "anime"]],
         ["media_relations.$m.jld2" for m in [0, 1]],
-        ["transformer.$modeltype.$stem" for modeltype in ["retrieval", "ranking"] for stem in ["csv", "pt"]],
+        ["transformer.$modeltype.$stem" for modeltype in ["causal", "masked"] for stem in ["csv", "pt"]],
         ["images.csv"],
     )
     for fn in files

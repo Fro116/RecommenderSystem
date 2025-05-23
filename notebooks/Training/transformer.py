@@ -435,7 +435,7 @@ def upload(global_rank, logger, debug_mode):
 def training_config():
     if args.finetune is not None:
         checkpoint = torch.load(
-            f"{args.datadir}/transformer.pt", weights_only=False, map_location="cpu"
+            f"{args.datadir}/transformer.{args.modeltype}.pt", weights_only=False, map_location="cpu"
         )
         config = checkpoint["config"]
         config["learning_rate"] = 1e-4
@@ -496,7 +496,7 @@ def train():
         num_epochs = 2
         local_batch_size = 16 if config["causal"] else 32
     else:
-        num_epochs = 8 if config["causal"] else 64
+        num_epochs = 4 if config["causal"] else 48
         local_batch_size = 16 if config["causal"] else 64
         if world_size == 1:
             logger.error("LOCAL DEBUG MODE ENABLED")
@@ -545,7 +545,7 @@ def train():
             strict=False,
         )
     else:
-        checkpoint_fn = f"{args.datadir}/transformer.pt"
+        checkpoint_fn = f"{args.datadir}/transformer.{args.modeltype}.pt"
         if os.path.exists(checkpoint_fn):
             checkpoint = torch.load(
                 checkpoint_fn, weights_only=False, map_location=f"cuda:{local_rank}"
