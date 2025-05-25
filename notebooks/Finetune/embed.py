@@ -3,6 +3,7 @@ import contextlib
 import logging
 import os
 import queue
+import signal
 import threading
 import time
 import traceback
@@ -101,17 +102,15 @@ class RequestBuffer:
                         )
 
 
-def make_test_item(medium, matchedid, distinctid):
+def make_masked_item(ts):
     return {
-        "medium": medium,
-        "history_max_ts": time.time(),
-        "matchedid": matchedid,
-        "distinctid": distinctid,
-        "status": 0,
+        "medium": 0,
+        "history_max_ts": ts,
+        "matchedid": -1,
+        "distinctid": -1,
+        "status": -1,
         "rating": 0,
         "progress": 0,
-        "history_status": 0,
-        "history_rating": 0,
     }
 
 
@@ -132,74 +131,85 @@ def shift_left(x):
     return y
 
 
-def predict(users, modeltype, medium):
-    model = models[f"transformer.{modeltype}.{medium}"]
-    max_len = model.config["max_sequence_length"]
+def predict(users, task, medium):
+    max_len = 1024
+    if task == "retrieval":
+        modeltypes = ["masked"]
+    elif task == "ranking":
+        modeltypes = ["causal"]
+    else:
+        assert False
     d = {
-        # prompt features
-        "userid": np.zeros((len(users), max_len), dtype=np.int32),
-        "time": np.zeros((len(users), max_len), dtype=np.float64),
-        "input_pos": np.zeros((len(users), max_len), dtype=np.int32),
-        "rope_input_pos": np.zeros((len(users), max_len), dtype=np.int32),
-        # item features
-        "0_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
-        "0_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
-        "1_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
-        "1_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
-        # action features
-        "status": np.zeros((len(users), max_len), dtype=np.int32),
-        "rating": np.zeros((len(users), max_len), dtype=np.float32),
-        "progress": np.zeros((len(users), max_len), dtype=np.float32),
-    }
-    for u in range(len(users)):
-        userid = u + 1
-        items = project(users[u])
-        extra_tokens = 1
-        if len(items) > max_len - extra_tokens:
-            items = items[-(max_len - extra_tokens) :]
-        if modeltype == "ranking":
-            test_items = users[u]["test_items"]
-        elif modeltype == "retrieval":
-            test_items = [make_test_item(medium, 0, 0)]
-        else:
-            assert False
-        for i, x in enumerate(items + test_items):
-            m = x["medium"]
-            n = 1 - x["medium"]
+        modeltype: {
             # prompt features
-            d["userid"][u, i] = userid
-            d["time"][u, i] = x["history_max_ts"]
-            d["input_pos"][u, i] = 0  # TODO remove
-            d["rope_input_pos"][u, i] = min(i, len(items))
+            "userid": np.zeros((len(users), max_len), dtype=np.int32),
+            "time": np.zeros((len(users), max_len), dtype=np.float64),
+            "rope_input_pos": np.zeros((len(users), max_len), dtype=np.int32),
             # item features
-            d[f"{m}_matchedid"][u, i] = x["matchedid"]
-            d[f"{m}_distinctid"][u, i] = x["distinctid"]
-            d[f"{n}_matchedid"][u, i] = -1
-            d[f"{n}_distinctid"][u, i] = -1
+            "0_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
+            "0_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
+            "1_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
+            "1_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
             # action features
-            d["status"][u, i] = x["status"]
-            d["rating"][u, i] = x["rating"]
-            d["progress"][u, i] = x["progress"]
-
-    d = {k: torch.tensor(v).to(device) for k, v in d.items()}
+            "status": np.zeros((len(users), max_len), dtype=np.int32),
+            "rating": np.zeros((len(users), max_len), dtype=np.float32),
+            "progress": np.zeros((len(users), max_len), dtype=np.float32),
+        }
+        for modeltype in modeltypes
+    }
+    for modeltype in modeltypes:
+        for u in range(len(users)):
+            userid = u + 1
+            items = project(users[u])
+            extra_tokens = 1
+            if len(items) > max_len - extra_tokens:
+                items = items[-(max_len - extra_tokens) :]
+            if modeltype == "causal" and task == "ranking":
+                test_items = users[u]["test_items"]
+            else:
+                test_items = [make_masked_item(users[u]["timestamp"])]
+            for i, x in enumerate(items + test_items):
+                m = x["medium"]
+                n = 1 - x["medium"]
+                # prompt features
+                d[modeltype]["userid"][u, i] = userid
+                d[modeltype]["time"][u, i] = x["history_max_ts"]
+                if modeltype == "causal":
+                    d[modeltype]["rope_input_pos"][u, i] = min(i, len(items))
+                # item features
+                d[modeltype][f"{m}_matchedid"][u, i] = x["matchedid"]
+                d[modeltype][f"{m}_distinctid"][u, i] = x["distinctid"]
+                d[modeltype][f"{n}_matchedid"][u, i] = -1
+                d[modeltype][f"{n}_distinctid"][u, i] = -1
+                # action features
+                d[modeltype]["status"][u, i] = x["status"]
+                d[modeltype]["rating"][u, i] = x["rating"]
+                d[modeltype]["progress"][u, i] = x["progress"]
+    for k1 in d:
+        for k2 in d[k1]:
+            d[k1][k2] = torch.tensor(d[k1][k2]).to(device)
+    e = {}
     with torch.no_grad():
         with torch.amp.autocast(device, dtype=torch.bfloat16):
-            e = model(d).to("cpu")
-    if modeltype == "retrieval":
+            for modeltype in modeltypes:
+                e[modeltype] = models[f"transformer.{modeltype}.{medium}"](d[modeltype], task).to("cpu")
+    if task == "retrieval":
         ret = []
         for i, u in enumerate(users):
             d = {"version": version}
-            d[f"{modeltype}.{medium}"] = e[i, 2 * len(u["items"]), :].tolist()
+            N = min(len(project(u)), max_len-1)
+            d[f"masked.{medium}"] = e["masked"][i, N, :].tolist()
             ret.append(d)
         return ret
-    elif modeltype == "ranking":
+    elif task == "ranking":
         ret = []
         for i, u in enumerate(users):
             d = {"version": version}
-            idxs = []
+            N = min(len(project(u)), max_len-1)
+            causal_idxs = []
             for j in range(len(u["test_items"])):
-                idxs.append(2 * (len(u["items"]) + j) + 1)
-            d[f"{modeltype}.{medium}"] = e[i, idxs, 0].tolist()
+                causal_idxs.append(2 * (N + j) + 1)
+            d[f"causal.{medium}"] = e["causal"][i, causal_idxs, 0].tolist()
             ret.append(d)
         return ret
     else:
@@ -234,19 +244,19 @@ with open(f"{datadir}/finetune_tag") as f:
     version = f.read()
 gpu_lock = threading.Lock()
 models = {}
-for modeltype in ["ranking", "retrieval"]:
+request_buffers = {}
+for modeltype in ["causal", "masked"]:
     for medium in [0, 1]:
         logging.warning(f"STARTUP LOADING {modeltype} {medium} MODEL")
         models[f"transformer.{modeltype}.{medium}"] = load_model(
             modeltype, medium
         )
-        test_user = {"user": {"source": "mal"}, "items": [], "test_items": [make_test_item(medium, 0, 0)]}
-        predict([test_user], modeltype, medium)
-request_buffers = {}
-for modeltype in ["ranking", "retrieval"]:
+for task in ["retrieval", "ranking"]:
     for medium in [0, 1]:
-        request_buffers[(modeltype, medium)] = RequestBuffer(
-            batch_size=32, timeout_seconds=0.01, max_queue_size=1024, batch_fn = lambda x: predict(x, modeltype, medium)
+        test_user = {"user": {"source": "mal"}, "items": [], "timestamp": time.time(), "test_items": [make_masked_item(time.time())]}
+        predict([test_user], task, medium)
+        request_buffers[(task, medium)] = RequestBuffer(
+            batch_size=32, timeout_seconds=0.01, max_queue_size=1024, batch_fn = lambda x, t=task, m=medium: predict(x, t, m)
         )
 logging.warning(f"STARTUP END AFTER {time.time() - starttime}s")
 app = FastAPI()
@@ -264,13 +274,11 @@ async def ready():
 
 
 @app.post("/embed")
-async def predict_endpoint(request: Request):
+async def predict_endpoint(request: Request, medium: int, task: str):
     data = await request.body()
     try:
         data = msgpack.unpackb(data, strict_map_key=False)
-        modeltype = data["modeltype"]
-        medium = data["medium"]
-        request_buffer = request_buffers[(modeltype, medium)]
+        request_buffer = request_buffers[(task, medium)]
         r = request_buffer.add_request(data)
         if isinstance(r, ErrorCode):
             return Response(status_code=503)

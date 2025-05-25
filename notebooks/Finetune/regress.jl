@@ -5,7 +5,7 @@ import JSON3
 import Glob
 import HDF5
 import LinearAlgebra
-import NNlib: logsoftmax, gelu
+import NNlib: gelu, logsoftmax
 import ProgressMeter: @showprogress
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
@@ -26,7 +26,7 @@ function stop_server(port)
     HTTP.get("http://localhost:$port/shutdown", status_exception = false)
 end
 
-function get_users()
+function get_users(medium)
     port = 5000
     start_server(port)
     fns = Glob.glob("../../data/finetune/users/test/*/*.msgpack")
@@ -39,9 +39,16 @@ function get_users()
                 data = open(fn) do f
                     MsgPack.unpack(read(f))
                 end
-                ret =
-                    HTTP.post("http://localhost:$port/embed", encode(data, :msgpack)...)
-                data["embeds"] = decode(ret)
+                data["timestamp"] = data["test_items"][1]["history_max_ts"]
+                r_retrieval = HTTP.post(
+                    "http://localhost:$port/embed?medium=$medium&task=retrieval",
+                    encode(data, :msgpack)...,
+                )
+                r_ranking = HTTP.post(
+                    "http://localhost:$port/embed?medium=$medium&task=ranking",
+                    encode(data, :msgpack)...,
+                )
+                data["embeds"] = merge(decode(r_retrieval), decode(r_ranking))
                 push!(users, data)
             end
             users
@@ -109,7 +116,6 @@ function retrieval_metrics(users, registry, medium::Integer, k::Integer)
     planned_status = 5
     m = medium
     crossentropy = 0.0
-    crossentropy_users = 0
     hitrate = 0.0
     ndcg = 0.0
     num_users = 0
@@ -133,14 +139,10 @@ function retrieval_metrics(users, registry, medium::Integer, k::Integer)
         if length(test_items) == 0
             continue
         end
-        # recreate transformer.py loss function
         logp = logsoftmax(
-            registry["transformer.$m.embedding"] * u["embeds"]["transformer.$m"] +
-            registry["transformer.$m.watch.bias"],
+            registry["transformer.masked.$m.watch.weight"] * u["embeds"]["masked.$m"] +
+            registry["transformer.masked.$m.watch.bias"],
         )
-        crossentropy += crossentropy_loss(logp, test_items)
-        crossentropy_users += 1
-
         # apply business rules
         last_status = Dict()
         for x in u["items"]
@@ -171,33 +173,32 @@ function retrieval_metrics(users, registry, medium::Integer, k::Integer)
                 logp[x] = -Inf
             end
         end
-
         # metrics
         hitrate += hitrate_at_k(logp, ys, k)
         ndcg += ndcg_at_k(logp, ys, k)
+        crossentropy += crossentropy_loss(logp, test_items)
         num_users += 1
     end
     Dict(
         "$m.retrieval.HR@$k" => hitrate / num_users,
         "$m.retrieval.nDCG@$k" => ndcg / num_users,
-        "$m.retrieval.crossentropy" => crossentropy / crossentropy_users,
+        "$m.retrieval.crossentropy" => crossentropy / num_users,
         "$m.retrieval.num_users" => num_users,
     )
 end
 
-function rating_metrics(users, registry, medium)
+function rating_metrics(users, registry, medium::Integer)
     m = medium
     x_baseline = Float32[]
-    x_bagofwords = Float32[] # TODO ablate bagofwords
-    x_transformer_baseline = Float32[]
-    x_transformer = Float32[]
+    x_masked = Float32[]
+    x_causal = Float32[]
     y = Float32[]
     w = Float32[]
     num_users = 0
     @showprogress for i = 1:length(users)
         u = users[i]
         count = 0
-        for x in u["test_items"]
+        for (test_idx, x) in Iterators.enumerate(u["test_items"])
             if x["medium"] != m
                 continue
             end
@@ -206,29 +207,21 @@ function rating_metrics(users, registry, medium)
                 continue
             end
             idx = x["matchedid"] + 1
-            p_baseline =
-                only(registry["baseline.$m.rating.weight"]) *
-                only(u["embeds"]["baseline.$m.rating"]) +
-                registry["baseline.$m.rating.bias"][idx]
-            p_bagofwords =
-                registry["bagofwords.$m.rating.weight"][idx, :]' *
-                u["embeds"]["bagofwords.$m.rating"] +
-                registry["bagofwords.$m.rating.bias"][idx]
-            p_transformer = let
-                a = registry["transformer.$m.embedding"][idx, :]
-                h = vcat(u["embeds"]["transformer.$m"], a)
+            p_baseline = registry["transformer.causal.$m.rating_mean"]
+            p_masked = let
+                a = registry["transformer.masked.$m.watch.weight"][idx, :]
+                h = vcat(u["embeds"]["masked.$m"], a)
                 h =
-                    registry["transformer.$m.rating.weight.1"] * h +
-                    registry["transformer.$m.rating.bias.1"]
+                    registry["transformer.masked.$m.rating.weight.1"] * h +
+                    registry["transformer.masked.$m.rating.bias.1"]
                 h = gelu(h)
-                registry["transformer.$m.rating.weight.2"]' * h +
-                only(registry["transformer.$m.rating.bias.2"])
+                registry["transformer.masked.$m.rating.weight.2"]' * h +
+                only(registry["transformer.masked.$m.rating.bias.2"])
             end
-            p_transformer_baseline = registry["baseline.$m.rating.bias"][idx]
+            p_causal = u["embeds"]["causal.$m"][test_idx]
             push!(x_baseline, p_baseline)
-            push!(x_bagofwords, p_bagofwords)
-            push!(x_transformer_baseline, p_transformer_baseline)
-            push!(x_transformer, p_transformer)
+            push!(x_masked, p_masked)
+            push!(x_causal, p_causal)
             push!(y, x["rating"])
             count += 1
         end
@@ -239,7 +232,7 @@ function rating_metrics(users, registry, medium)
             num_users += 1
         end
     end
-    X = reduce(hcat, [x_baseline, x_bagofwords, x_transformer_baseline, x_transformer])
+    X = reduce(hcat, [x_baseline, x_masked, x_causal])
     β = (X .* sqrt.(w)) \ (y .* sqrt.(w))
     loss = sum((X * β - y) .^ 2 .* w) / sum(w)
     Dict(
@@ -269,10 +262,10 @@ function make_metric_dataframe(dict)
 end
 
 function save_weights()
-    users = get_users()
     registry = get_registry()
     metrics = Dict()
     for m in [0, 1]
+        users = get_users(m)
         metrics = merge(metrics, retrieval_metrics(users, registry, m, 10))
         metrics = merge(metrics, rating_metrics(users, registry, m))
     end

@@ -39,7 +39,6 @@ class ActionEmbedding(nn.Module):
         min_ts = self.config["min_ts"]
         max_ts = self.config["max_ts"]
         ts = d["time"].clip(min_ts)
-        d["time"] = ((ts - min_ts) / (max_ts - min_ts)).to(torch.float32)
         # periodic time embedding
         periodic_ts = ts.reshape(*ts.shape, 1)
         secs_in_day = 86400
@@ -50,7 +49,7 @@ class ActionEmbedding(nn.Module):
         periodic_ts = torch.cat([2 * np.pi * periodic_ts / p for p in periods], dim=-1)
         periodic_ts = periodic_ts.to(torch.float32)
         # embed
-        time_emb = d["time"].reshape(*d["time"].shape, 1)
+        time_emb = ((ts - min_ts) / (max_ts - min_ts)).to(torch.float32).reshape(*ts.shape, 1)
         periodic_time_cos_emb = torch.cos(periodic_ts + self.periodic_time_cos)
         periodic_time_sin_emb = torch.sin(periodic_ts + self.periodic_time_sin)
         # actions
@@ -204,7 +203,7 @@ class TransformerModel(nn.Module):
                     param.requires_grad = False
         if config["forward"] == "train":
             self.forward = self.train_forward
-        elif config["forward"] in ["retrieval", "ranking"]:
+        elif config["forward"] == "inference":
             self.forward = self.inference_forward
         else:
             assert False
@@ -324,7 +323,7 @@ class TransformerModel(nn.Module):
             )
             if "rope_input_pos" in d["action_tokens"]:
                 rope_input_pos = self.interleave(
-                    *[d[k]["rope_input_pos"] for k in ["action_tokens", "item_tokens"]]
+                    2*d["action_tokens"]["rope_input_pos"], 2*d["item_tokens"]["rope_input_pos"]+1
                 )
             else:
                 rope_input_pos = None
@@ -427,13 +426,16 @@ class TransformerModel(nn.Module):
                     assert False
         return losses
 
-    def inference_forward(self, d):
+    def inference_forward(self, d, task):
         if self.config["causal"]:
             d = self.split_tokens(d)
         e = self.to_embedding(d)
-        if self.config["forward"] == "retrieval":
+        if task == "retrieval":
             return e
-        elif self.config["forward"] == "ranking":
-            return self.rating_head(e) + self.config["rating_mean"]
+        elif task == "ranking":
+            if self.config["causal"]:
+                return self.rating_head(e)
+            else:
+                return e
         else:
             assert False
