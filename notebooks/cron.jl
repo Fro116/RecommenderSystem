@@ -1,3 +1,4 @@
+import Dates
 include("julia_utils/multithreading.jl")
 include("julia_utils/scheduling.jl")
 include("julia_utils/stdout.jl")
@@ -28,15 +29,17 @@ function import_dbs()
 end
 
 function cron()
-    day = Dates.day(Dates.today())
+    today = Dates.today()
     import_lists()
-    if day in [4, 11, 18, 25]
+    if Dates.dayofweek(today) == 1
         import_dbs()
     end
-    # if day in [1, 15]
+    # for now, manually oversee training runs
+    # if Dates.day(today) in [1, 15]
     #     runcmd("cd Training && julia run.jl")
     # end
-    # runcmd("cd Finetune && julia run.jl")
+    datetag = Dates.format(today, "yyyymmdd")
+    runcmd("cd Finetune && julia run.jl $datetag")
 end
 
 @scheduled "CRON" "2:30" @handle_errors cron()

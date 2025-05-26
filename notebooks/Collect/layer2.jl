@@ -1043,7 +1043,7 @@ function anilist_get_fingerprint(resource::Resource, userid::Integer, medium::St
                     "version" => API_VERSION,
                     "medium" => medium,
                     "itemid" => entry["mediaId"],
-                    "updated_at" => entry["updatedAt"],
+                    "updatedat" => entry["updatedAt"],
                 )
             end
         end
@@ -1688,7 +1688,7 @@ function kitsu_get_fingerprint(
     for x in json["data"]
         d = Dict(
             "version" => API_VERSION,
-            "updated_at" => optget(x["attributes"], "updatedAt"),
+            "updatedat" => optget(x["attributes"], "updatedAt"),
         )
         push!(entries, d)
     end
@@ -1966,18 +1966,13 @@ function animeplanet_get_fingerprint(
                 "version" => API_VERSION,
                 "medium" => medium,
                 "itemid" => extract(prevline, """href="/$medium/""", '"'),
+                "item_order" => 0,
             )
             push!(entries, d)
             break
         end
         prevline = line
     end
-    if occursin("</b> $medium on this list</p>", text)
-        count = parse(Int, extract(text, "<b>", "</b> $medium on this list</p>"))
-    else
-        count = 0
-    end
-    push!(entries, Dict("$(medium)_count" => count))
     ret = Dict("entries" => entries)
     HTTP.Response(200, encode(ret, :msgpack)...)
 end

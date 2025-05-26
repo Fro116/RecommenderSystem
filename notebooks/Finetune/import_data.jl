@@ -72,12 +72,12 @@ end
 
 function gen_splits()
     mediums = ["manga", "anime"]
-    recent_items = 1 # TODO test more items
+    recent_items = 1
     min_items = 5
     max_items = Dict(s => num_items.(mediums, s) for s in SOURCES)
     test_perc = 0.1
-    training_recent_days = 1 # TODO test more days
-    test_recent_days = 1
+    training_recent_days = 7
+    test_recent_days = 7
     training_tag = read("$datadir/training_tag", String)
     max_ts = -Inf
     @showprogress for f in Glob.glob("$datadir/histories_*.csv")
@@ -128,14 +128,14 @@ function gen_splits()
             new_items = []
             for x in reverse(user["items"])
                 if x["history_max_ts"] > recent_ts && length(new_items) < recent_items
-                    if x["history_tag"] <= training_tag
-                        continue
+                    if x["history_tag"] in ["infer", "delete"] || x["history_tag"] <= training_tag
+                        continue # filter to items that are out-of-sample from pretraining
                     end
                     if isnothing(x["history_min_ts"]) || (x["history_max_ts"] - x["history_min_ts"] > 86400)
-                        continue
+                        continue # filter to items with reliable timestamps
                     end
                     if (x["status"] == x["history_status"]) && (x["rating"] == x["history_rating"])
-                        continue
+                        continue # filter to non-trivial updates
                     end
                     push!(new_items, x)
                 else

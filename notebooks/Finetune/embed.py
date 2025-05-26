@@ -132,28 +132,30 @@ def shift_left(x):
 
 
 def predict(users, task, medium):
-    max_len = 1024
+    max_user_len = 1024
     if task == "retrieval":
         modeltypes = ["masked"]
+        max_seq_len = 1024
     elif task == "ranking":
         modeltypes = ["causal"]
+        max_seq_len = 2048
     else:
         assert False
     d = {
         modeltype: {
             # prompt features
-            "userid": np.zeros((len(users), max_len), dtype=np.int32),
-            "time": np.zeros((len(users), max_len), dtype=np.float64),
-            "rope_input_pos": np.zeros((len(users), max_len), dtype=np.int32),
+            "userid": np.zeros((len(users), max_seq_len), dtype=np.int32),
+            "time": np.zeros((len(users), max_seq_len), dtype=np.float64),
+            "rope_input_pos": np.zeros((len(users), max_seq_len), dtype=np.int32),
             # item features
-            "0_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
-            "0_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
-            "1_matchedid": np.zeros((len(users), max_len), dtype=np.int32),
-            "1_distinctid": np.zeros((len(users), max_len), dtype=np.int32),
+            "0_matchedid": np.zeros((len(users), max_seq_len), dtype=np.int32),
+            "0_distinctid": np.zeros((len(users), max_seq_len), dtype=np.int32),
+            "1_matchedid": np.zeros((len(users), max_seq_len), dtype=np.int32),
+            "1_distinctid": np.zeros((len(users), max_seq_len), dtype=np.int32),
             # action features
-            "status": np.zeros((len(users), max_len), dtype=np.int32),
-            "rating": np.zeros((len(users), max_len), dtype=np.float32),
-            "progress": np.zeros((len(users), max_len), dtype=np.float32),
+            "status": np.zeros((len(users), max_seq_len), dtype=np.int32),
+            "rating": np.zeros((len(users), max_seq_len), dtype=np.float32),
+            "progress": np.zeros((len(users), max_seq_len), dtype=np.float32),
         }
         for modeltype in modeltypes
     }
@@ -162,8 +164,8 @@ def predict(users, task, medium):
             userid = u + 1
             items = project(users[u])
             extra_tokens = 1
-            if len(items) > max_len - extra_tokens:
-                items = items[-(max_len - extra_tokens) :]
+            if len(items) > max_user_len - extra_tokens:
+                items = items[-(max_user_len - extra_tokens) :]
             if modeltype == "causal" and task == "ranking":
                 test_items = users[u]["test_items"]
             else:
@@ -197,7 +199,7 @@ def predict(users, task, medium):
         ret = []
         for i, u in enumerate(users):
             d = {"version": version}
-            N = min(len(project(u)), max_len-1)
+            N = min(len(project(u)), max_user_len-1)
             d[f"masked.{medium}"] = e["masked"][i, N, :].tolist()
             ret.append(d)
         return ret
@@ -205,7 +207,7 @@ def predict(users, task, medium):
         ret = []
         for i, u in enumerate(users):
             d = {"version": version}
-            N = min(len(project(u)), max_len-1)
+            N = min(len(project(u)), max_user_len-1)
             causal_idxs = []
             for j in range(len(u["test_items"])):
                 causal_idxs.append(2 * (N + j) + 1)

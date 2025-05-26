@@ -22,7 +22,7 @@ include("history_tools.jl")
 
 @memoize function num_items(medium::Int)
     m = medium_map[medium]
-    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1).matchedid) + 1
+    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks = 1).matchedid) + 1
 end
 
 function get_data(data, userid)
@@ -66,7 +66,9 @@ function get_data(data, userid)
         d["progress"][i] = x["progress"]
         # targets
         inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
-        new_watch = (x["status"] > planned_status) && (isnothing(x["history_status"]) || 0 < x["history_status"] <= planned_status)
+        new_watch =
+            (x["status"] > planned_status) &&
+            (isnothing(x["history_status"]) || 0 < x["history_status"] <= planned_status)
         if inferred_watch || new_watch
             d["$m.watch.label"][i] = 1
             d["$m.watch.weight"][i] = 1
@@ -122,7 +124,10 @@ function pad_splits(datasplit, num_shards)
         if num_padding == 0
             continue
         end
-        logtag("TRANSFORMER", "padding split $x with $num_padding tokens to reach $max_num_tokens tokens")
+        logtag(
+            "TRANSFORMER",
+            "padding split $x with $num_padding tokens to reach $max_num_tokens tokens",
+        )
         infn = "$datadir/transformer/$datasplit/$x/1.h5"
         outfn = "$datadir/transformer/$datasplit/$x/pad.h5"
         HDF5.h5open(outfn, "w") do outfile
@@ -175,12 +180,10 @@ function save_data(datasplit)
 end
 
 function upload()
-    template = raw"tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
-    cmd = replace(
-        template,
-        "{INPUT}" => "$datadir/transformer",
-        "{OUTPUT}" => "transformer",
-    )
+    template =
+        raw"tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
+    cmd =
+        replace(template, "{INPUT}" => "$datadir/transformer", "{OUTPUT}" => "transformer")
     run(`sh -c $cmd`)
 end
 

@@ -605,7 +605,7 @@ function annotate_with_last_state!(user)
     items = user["items"]
     while !isempty(items) && items[end]["history_tag"] == "delete"
         items = items[1:end-1]
-    end
+    end # TODO gate by reftime
     # set metrics for custom tags
     deleted_status = 3
     for x in items

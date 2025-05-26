@@ -33,7 +33,7 @@ end
         if df.width[i] >= df.height[i]
             continue
         end
-        key = (df.source[i], medium_map[df.medium[i]], df.itemid[i])
+        key = (df.source[i], medium_map[df.medium[i]], string(df.itemid[i]))
         if key ∉ keys(d)
             d[key] = Dict()
         end
@@ -55,10 +55,8 @@ end
 end
 
 @memoize function get_missing_images()
-    error_images = [
-        (1, "404.1.large.webp", 2348, 3404),
-        (2, "404.2.large.webp", 1596, 2312),
-    ]
+    error_images =
+        [(1, "404.1.large.webp", 2348, 3404), (2, "404.2.large.webp", 1596, 2312)]
     groups = Dict()
     for x in error_images
         id, url, width, height = x
@@ -90,7 +88,7 @@ end
 
 function get_images(source, medium, itemid)
     images = get_images()
-    key = (source, medium, itemid)
+    key = (source, medium, string(itemid))
     if key ∉ keys(images)
         return nothing
     end
@@ -184,20 +182,56 @@ end
     info
 end
 
+@memoize function get_ranking_items(medium, source)
+    info = Dict()
+    for i = 1:num_items(medium)
+        info[i-1] = Dict{String,Any}(
+            "medium" => medium,
+            "matchedid" => -1,
+            "distinctid" => -1,
+            "status" => -1,
+            "rating" => 0,
+            "progress" => 0,
+        )
+    end
+    m = Dict(0 => "manga", 1 => "anime")[medium]
+    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String, ntasks = 1)
+    for match_source in [true, false]
+        for i = 1:DataFrames.nrow(df)
+            if (df.source[i] != source && match_source) || info[df.matchedid[i]]["matchedid"] != -1
+                continue
+            end
+            info[df.matchedid[i]] = Dict{String,Any}(
+                "medium" => medium,
+                "matchedid" => df.matchedid[i],
+                "distinctid" => df.distinctid[i],
+                "status" => -1,
+                "rating" => 0,
+                "progress" => 0,
+            )
+        end
+    end
+    info
+end
+
 function retrieval(state)
     m = state["medium"]
     p = zeros(Float32, num_items(m))
     for u in state["users"]
-        p .+= logsoftmax(
-            registry["transformer.$m.embedding"] * u["transformer.$m"] +
-            registry["transformer.$m.watch.bias"],
+        p += logsoftmax(
+            registry["transformer.masked.$m.watch.weight"] * u["embeds"]["masked.$m"] +
+            registry["transformer.masked.$m.watch.bias"],
         )[1:num_items(m)]
     end
     for u in state["users"]
+        statuses = Dict(0 => Dict(), 1 => Dict())
+        for x in u["user"]["items"]
+            statuses[x["medium"]][x["matchedid"]+1] = x["status"]
+        end
         # skip the default id for longtail items
         p[1] = -Inf
         # skip watched items
-        for (x, s) in u["status"][m]
+        for (x, s) in statuses[m]
             if s ∉ [status_map["deleted"], status_map["planned"]]
                 p[x] = -Inf
             end
@@ -205,7 +239,7 @@ function retrieval(state)
         # skip adaptations
         watched = Dict(y => zeros(Float32, num_items(y)) for y in [0, 1])
         for y in [0, 1]
-            for (x, s) in u["status"][y]
+            for (x, s) in statuses[y]
                 if s ∉ [status_map["deleted"], status_map["planned"]]
                     watched[y][x] = 1
                 end
@@ -227,7 +261,7 @@ function retrieval(state)
         end
         # skip works with missing dependencies
         v = zeros(Float32, num_items(m))
-        for (x, s) in u["status"][m]
+        for (x, s) in statuses[m]
             if s >= status_map["completed"]
                 v[x] = 1
             end
@@ -241,8 +275,12 @@ function retrieval(state)
         end
         # skip sequels to currently watching
         v = zeros(Float32, num_items(m))
-        for (x, s) in u["status"][m]
-            if s in [status_map["currently_watching"], status_map["dropped"], status_map["wont_watch"]]
+        for (x, s) in statuses[m]
+            if s in [
+                status_map["currently_watching"],
+                status_map["dropped"],
+                status_map["wont_watch"],
+            ]
                 v[x] = 1
             end
         end
@@ -261,61 +299,73 @@ end
 
 function ranking(state, idxs)
     m = state["medium"]
+    ts = time()
+    Threads.@threads for i = 1:length(state["users"])
+        source = state["users"][i]["source"]
+        test_items = []
+        ranking_items = get_ranking_items(m, source)
+        for i in idxs
+            item = copy(ranking_items[i-1])
+            item["history_max_ts"] = ts
+            push!(test_items, item)
+        end
+        u = copy(state["users"][i]["user"])
+        u["test_items"] = test_items
+        r_embed = HTTP.post(
+            "$MODEL_URL/embed?medium=$m&task=ranking",
+            encode(u, :msgpack)...,
+            status_exception = false,
+        )
+        if HTTP.iserror(r_embed)
+            return HTTP.Response(r_embed.status), false
+        end
+        d_embed = decode(r_embed)
+        state["users"][i]["embeds"] = merge(state["users"][i]["embeds"], d_embed)
+    end
     r = zeros(Float32, length(idxs))
     for u in state["users"]
         p_watch = logsoftmax(
-            registry["transformer.$m.embedding"] * u["transformer.$m"] +
-            registry["transformer.$m.watch.bias"],
+            registry["transformer.masked.$m.watch.weight"] * u["embeds"]["masked.$m"] +
+            registry["transformer.masked.$m.watch.bias"],
         )[idxs]
-        p_baseline =
-            only(registry["baseline.$m.rating.weight"]) *
-            only(u["baseline.$m.rating"]) .+
-            registry["baseline.$m.rating.bias"][idxs]
-        p_bagofwords =
-            registry["bagofwords.$m.rating.weight"][idxs, :] *
-            u["bagofwords.$m.rating"] +
-            registry["bagofwords.$m.rating.bias"][idxs]
-        p_transformer = let
-            # TODO make faster
-            a = registry["transformer.$m.embedding"][idxs, :]'
-            u_emb = repeat(u["transformer.$m"], 1, length(idxs))
+        p_baseline = fill(registry["transformer.causal.$m.rating_mean"], length(idxs))
+        p_masked = let
+            a = registry["transformer.masked.$m.watch.weight"][idxs, :]'
+            u_emb = repeat(u["embeds"]["masked.$m"], 1, length(idxs))
             h = vcat(u_emb, a)
             h =
-                registry["transformer.$m.rating.weight.1"] * h .+
-                registry["transformer.$m.rating.bias.1"]
+                registry["transformer.masked.$m.rating.weight.1"] * h .+
+                registry["transformer.masked.$m.rating.bias.1"]
             h = gelu(h)
-            h' * registry["transformer.$m.rating.weight.2"] .+
-            only(registry["transformer.$m.rating.bias.2"])
+            h' * registry["transformer.masked.$m.rating.weight.2"] .+
+            only(registry["transformer.masked.$m.rating.bias.2"])
         end
-        p_transformer_baseline = registry["baseline.$m.rating.bias"][idxs]
-        p_rating =
-            sum(registry["$m.rating.coefs"] .* [p_baseline, p_bagofwords, p_transformer, p_transformer_baseline])
-        r += p_rating + p_watch / log(4)
+        p_causal = u["embeds"]["causal.$m"]
+        p_rating = sum(registry["$m.rating.coefs"] .* [p_baseline, p_masked, p_causal])
+        r += p_rating + p_watch / log(10)
     end
-    r
+    r, true
 end
 
 function render(state, pagination)
     # add types
-    float32_cols = reduce(vcat, [["baseline.$m.rating", "bagofwords.$m.rating", "transformer.$m"] for m in [0, 1]])
     for u in state["users"]
-        for k in float32_cols
-            u[k] = Float32.(u[k])
-        end
-        for (k, v) in u
-            @assert typeof(v) != Vector{Any} "untyped vector $k"
+        for k in keys(u["embeds"])
+            if k ∉ ["version"]
+                u["embeds"][k] = Float32.(u["embeds"][k])
+            end
         end
     end
     # retrieval
     idxs = retrieval(state)
-    max_items_to_rank = 1000 # for performance, only rank N items at a time
-    max_items_to_rank += (max_items_to_rank % pagination["limit"])
+    max_items_to_rank = 1024
+    max_items_to_rank -= (max_items_to_rank % pagination["limit"])
     total = length(idxs)
     sidx = pagination["offset"] + 1
     eidx = pagination["offset"] + pagination["limit"]
     if sidx > length(idxs)
         view = []
-        return view, total
+        return (view, total), true
     end
     if eidx > total
         eidx = total
@@ -325,9 +375,12 @@ function render(state, pagination)
     sidx -= page * max_items_to_rank
     eidx -= page * max_items_to_rank
     # ranking
-    r = ranking(state, idxs)
+    r, ok = ranking(state, idxs)
+    if !ok
+        return r, false
+    end
     ids = idxs[sortperm(r, rev = true)] .- 1
     info = get_media_info(state["medium"])
     view = [render_card(info[i]) for i in ids[sidx:eidx]]
-    view, total
+    (view, total), true
 end

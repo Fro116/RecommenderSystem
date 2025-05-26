@@ -8,15 +8,12 @@ function embed_py(basedir::String)
     if ispath(app)
         rm(app; recursive = true)
     end
-    copy("notebooks/Training/bagofwords.model.py", app)
     copy("notebooks/Training/transformer.model.py", app)
     copy("notebooks/Finetune/embed.py", app)
     mediums = [0, 1]
     files = vcat(
-        ["manga.csv", "anime.csv", "finetune_tag", "training_tag", "transformer.config"],
-        ["baseline.$metric.$m.msgpack" for m in mediums for metric in ["rating"]],
-        ["bagofwords.$m.$metric.finetune.pt" for m in mediums for metric in ["rating"]],
-        ["transformer.$m.finetune.pt" for m in mediums],
+        ["manga.csv", "anime.csv", "finetune_tag", "training_tag"],
+        ["transformer.$modeltype.$m.finetune.pt" for modeltype in ["causal", "masked"] for m in mediums],
     )
     for f in files
         copy("data/finetune/$f", app)
@@ -45,7 +42,10 @@ function build(basedir::String, name::String, tag::String, args::String)
         "{tag}" => tag,
         "{args}" => args,
     )
-    run(`sh -c $deploy`)
+    # the first deploy can fail if startup takes too long
+    # future deploys succeed because the image is already pulled
+    cmd = "$deploy || (sleep 10 && $deploy)"
+    run(`sh -c $cmd`)
     run(`docker system prune -af --filter until=24h`)
 end
 

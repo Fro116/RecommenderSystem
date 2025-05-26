@@ -326,12 +326,15 @@ def make_task_weights():
     # task balancing
     if args.finetune is None:
         medium_weight = {0: 0.25, 1: 1}
+        metric_weight = {"watch": 1, "rating": 0.25}
     else:
         medium_weight = {args.finetune_medium: 1, 1 - args.finetune_medium: 0}
-    metric_weight = {
-        "watch": 1,
-        "rating": 0.25,
-    }
+        if args.modeltype == "causal":
+            metric_weight = {"watch": 0.25, "rating": 1}
+        elif args.modeltype == "masked":
+            metric_weight = {"watch": 1, "rating": 0.25}
+        else:
+            assert False
     weights = [
         medium_weight[x] * metric_weight[y] for x in ALL_MEDIUMS for y in ALL_METRICS
     ]
@@ -493,7 +496,7 @@ def train():
     debug_mode = False
     if config["finetune"]:
         assert world_size == 1
-        num_epochs = 2
+        num_epochs = 1
         local_batch_size = 16 if config["causal"] else 32
     else:
         num_epochs = 4 if config["causal"] else 48

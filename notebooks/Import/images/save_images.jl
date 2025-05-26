@@ -35,8 +35,9 @@ function get_diffs()
     dst_images = Set()
     for i = 1:DataFrames.nrow(df)
         fn = "$datadir/images/$(df.filename[i])"
-        @assert df.saved[i] == ispath(fn)
-        if !ispath(fn)
+        if df.saved[i]
+            @assert ispath(fn)
+        else
             continue
         end
         name, ext = split(df.filename[i], ".")
@@ -128,8 +129,8 @@ function sr_images(images)
     end
 end
 
-function save_image_metadata(to_add, to_delete)
-    df = CSV.read("$datadir/images.csv", DataFrames.DataFrame)
+function save_image_metadata(to_delete)
+    df = CSV.read("$datadir/images.csv", DataFrames.DataFrame, types = Dict("itemid" => String))
     df = filter(x -> x.saved, df)
     sizes = ["large"]
     rows = Any[nothing for _ = 1:DataFrames.nrow(df)*length(sizes)]
@@ -152,7 +153,7 @@ function save_image_metadata(to_add, to_delete)
     srdf = CSV.read(
         "$datadir/srimages.csv",
         DataFrames.DataFrame,
-        types = Dict("imageid" => String),
+        types = Dict("imageid" => String, "itemid" => String),
     )
     if !isempty(rows)
         srdf_to_add = DataFrames.DataFrame(
@@ -193,7 +194,7 @@ function encode_images()
     )
     downsample(to_add)
     sr_images(to_add)
-    save_image_metadata(to_add, to_delete)
+    save_image_metadata(to_delete)
     upload_images(to_add, to_delete)
 end
 

@@ -25,11 +25,11 @@ function finetune(list_tag::AbstractString)
     end
     run(`python register.py`)
     run(`julia regress.jl`)
-    # for app in ["Embed", "Compute"]
-    #     cmd = "cd ../Package/$app && julia package.jl"
-    #     run(`sh -c $cmd`)
-    # end
-    # blue_green_deploy()
+    for app in ["Embed", "Compute"]
+        cmd = "cd ../Package/$app && julia package.jl"
+        run(`sh -c $cmd`)
+    end
+    blue_green_deploy()
 end
 
 finetune(ARGS[1])

@@ -94,60 +94,47 @@ function read_autocomplete(data::Dict)::HTTP.Response
     HTTP.Response(200, encode(d, :msgpack)...)
 end
 
-function get_fingerprints(source::String, items::DataFrames.DataFrame)
-    fingerprints = []
-    if source in ["mal", "anilist"]
-        for m in ["manga", "anime"]
-            sdf = filter(x -> x.medium == m, items)
-            if DataFrames.nrow(sdf) == 0
-                continue
-            end
-            if source == "mal"
-                update_col = "updated_at"
-            elseif source == "anilist"
-                update_col = "updatedat"
-            else
-                @assert false
-            end
-            d = last(sort(sdf, update_col))
-            d = Dict(
-                "version" => d["version"],
-                "medium" => d["medium"],
-                "itemid" => d["itemid"],
-                "updated_at" => d[update_col],
-            )
-            push!(fingerprints, d)
-        end
+function fingerprints_match(source::String, user, fingerprint)
+    if source == "mal"
+        cols = ["version", "medium", "itemid", "updated_at"]
+    elseif source == "anilist"
+        cols = ["version", "medium", "itemid", "updatedat"]
     elseif source == "kitsu"
-        if DataFrames.nrow(items) != 0
-            update_col = "updatedat"
-            d = last(sort(items, update_col))
-            d = Dict("version" => d["version"], "updated_at" => d[update_col])
-            push!(fingerprints, d)
-        end
+        cols = ["version", "updatedat"]
     elseif source == "animeplanet"
-        for m in ["manga", "anime"]
-            sdf = filter(x -> x.medium == m, items)
-            if DataFrames.nrow(sdf) != 0
-                d = last(sort(sdf, :item_order))
-                d = Dict(
-                    "version" => d["version"],
-                    "medium" => d["medium"],
-                    "itemid" => d["itemid"],
-                )
-                push!(fingerprints, d)
-            end
-            if DataFrames.nrow(items) > 0
-                max_history_tag = items.history_tag[end]
-                count = DataFrames.nrow(filter(x -> x.history_tag == max_history_tag, items))
-            else
-                count = 0
-            end
-            d = Dict("$(m)_count" => count)
-            push!(fingerprints, d)
+        cols = ["version", "medium", "itemid", "item_order"]
+    else
+        @assert false
+    end
+    # filter to most recent list
+    max_history_tag = nothing
+    for x in user["items"]
+        tag = x["history_tag"]
+        if tag in ["infer", "delete"]
+            continue
+        end
+        if isnothing(max_history_tag) || tag > max_history_tag
+            max_history_tag = tag
         end
     end
-    fingerprints
+    items = [x for x in user["items"] if x["history_tag"] == max_history_tag]
+    if isempty(fingerprint)
+        return isempty(items)
+    end
+    # check for matches
+    for x in fingerprint
+        found_match = false
+        for y in items
+            if all(x[k] == y[k] for k in cols)
+                found_match = true
+                break
+            end
+        end
+        if !found_match
+            return false
+        end
+    end
+    true
 end
 
 function normalize(d::AbstractDict)
@@ -253,9 +240,7 @@ Oxygen.@post "/refresh_user_history" function refresh_user_history(r::HTTP.Reque
         user = MsgPack.unpack(
             CodecZstd.transcode(CodecZstd.ZstdDecompressor, Vector{UInt8}(d_read["data"])),
         )
-        item_df = DataFrames.DataFrame([Dict{String,Any}(x) for x in user["items"]])
-        d_read_fingerprint = get_fingerprints(source, item_df)
-        if d_read_fingerprint == JSON3.read(d_fingerprint["fingerprint"]) && !force_refresh
+        if fingerprints_match(source, user, JSON3.read(d_fingerprint["fingerprint"])) && !force_refresh
             return HTTP.Response(200, encode(Dict("refresh" => false), :msgpack)...)
         end
     end

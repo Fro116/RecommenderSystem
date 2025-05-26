@@ -13,7 +13,7 @@ const DATABASE_WRITE_URL = ARGS[3]
 const datadir = "../../data/finetune"
 const secretdir = "../../secrets"
 const bluegreen = read("$datadir/bluegreen", String)
-const MODEL_URL = read("$secretdir/url.embed.$bluegreen.txt", String)
+const MODEL_URL = (length(ARGS) >= 4) ? ARGS[4] : read("$secretdir/url.embed.$bluegreen.txt", String)
 include("render.jl")
 
 standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
@@ -27,7 +27,14 @@ Oxygen.@post "/autocomplete" function autocomplete(r::HTTP.Request)::HTTP.Respon
     d = decode(r)
     r_ac = HTTP.post(
         "$DATABASE_READ_URL/read_autocomplete",
-        encode(Dict("source" => d["source"], "prefix" => lowercase(sanitize(d["prefix"])), "type" => d["type"]), :msgpack)...,
+        encode(
+            Dict(
+                "source" => d["source"],
+                "prefix" => lowercase(sanitize(d["prefix"])),
+                "type" => d["type"],
+            ),
+            :msgpack,
+        )...,
         status_exception = false,
     )
     if HTTP.iserror(r_ac)
@@ -45,7 +52,7 @@ Oxygen.@post "/autocomplete" function autocomplete(r::HTTP.Request)::HTTP.Respon
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
-function add_user(d::Dict)::HTTP.Response
+function add_user(d::Dict, medium::Integer)::HTTP.Response
     r_read = HTTP.post(
         "$DATABASE_READ_URL/read_user_history",
         encode(Dict("source" => d["source"], "username" => d["username"]), :msgpack)...,
@@ -59,8 +66,10 @@ function add_user(d::Dict)::HTTP.Response
     data["user"] = standardize(data["user"])
     data["items"] = standardize.(data["items"])
     u = import_user(d_read["source"], data, d_read["db_refreshed_at"])
+    u["timestamp"] = time()
+    ret = Dict("user" => u, "source" => d["source"], "username" => d["username"])
     r_embed = HTTP.post(
-        "$MODEL_URL/embed",
+        "$MODEL_URL/embed?medium=$medium&task=retrieval",
         encode(u, :msgpack)...,
         status_exception = false,
     )
@@ -68,17 +77,8 @@ function add_user(d::Dict)::HTTP.Response
         return HTTP.Response(r_embed.status, [])
     end
     d_embed = decode(r_embed)
-    d_embed["source"] = d["source"]
-    d_embed["username"] = d["username"]
-    last_status = Dict(
-        0 => Dict(),
-        1 => Dict(),
-    )
-    for x in u["items"]
-        last_status[x["medium"]][x["matchedid"]+1] = x["status"]
-    end
-    d_embed["status"] = last_status
-    HTTP.Response(200, encode(d_embed, :msgpack)...)
+    ret["embeds"] = d_embed
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function refresh_user(source, username)
@@ -102,7 +102,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     d = decode(r)
     state = d["state"]
     if isempty(d["state"])
-        state = Dict{String, Any}("medium" => 1)
+        state = Dict{String,Any}("medium" => 1, "users" => [])
     else
         state = MsgPack.unpack(Base64.base64decode(d["state"]))
     end
@@ -111,19 +111,19 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     if action["type"] == "add_user"
         username = sanitize(action["username"])
         source = action["source"]
-        followup_action = Dict("type" => "refresh_user", "source" => source, "username" => username)
-        r_embed = add_user(Dict("source" => source, "username" => username))
+        followup_action =
+            Dict("type" => "refresh_user", "source" => source, "username" => username)
+        r_embed =
+            add_user(Dict("source" => source, "username" => username), state["medium"])
         if r_embed.status == 404 && refresh_user(source, username)
-            r_embed = add_user(Dict("source" => source, "username" => username))
+            r_embed =
+                add_user(Dict("source" => source, "username" => username), state["medium"])
             followup_action = nothing
         end
         if HTTP.iserror(r_embed)
             return HTTP.Response(r_embed.status)
         end
         d_embed = decode(r_embed)
-        if "users" ∉ keys(state)
-            state["users"] = []
-        end
         push!(state["users"], d_embed)
     elseif action["type"] == "refresh_user"
         username = sanitize(action["username"])
@@ -138,7 +138,8 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
         if isnothing(idx) || !refresh_user(source, username)
             return HTTP.Response(200, encode(Dict(), :json, encoding)...)
         end
-        r_embed = add_user(Dict("source" => source, "username" => username))
+        r_embed =
+            add_user(Dict("source" => source, "username" => username), state["medium"])
         if HTTP.iserror(r_embed)
             return HTTP.Response(r_embed.status)
         end
@@ -147,10 +148,30 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     elseif action["type"] == "set_media"
         medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
         state["medium"] = medium
+        Threads.@threads for i = 1:length(state["users"])
+            u = state["users"][i]
+            if "masked.$medium" in keys(u["embeds"])
+                continue
+            end
+            r_embed = HTTP.post(
+                "$MODEL_URL/embed?medium=$medium&task=retrieval",
+                encode(u["user"], :msgpack)...,
+                status_exception = false,
+            )
+            if HTTP.iserror(r_embed)
+                return HTTP.Response(r_embed.status)
+            end
+            d_embed = decode(r_embed)
+            state["users"][i]["embeds"] = merge(state["users"][i]["embeds"], d_embed)
+        end
     else
         @assert false
     end
-    view, total = render(state, d["pagination"])
+    r, ok = render(state, d["pagination"])
+    if !ok
+        return r
+    end
+    view, total = r
     ret = Dict(
         "state" => Base64.base64encode(MsgPack.pack(state)),
         "view" => view,
@@ -162,7 +183,12 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
 end
 
 function compile(port::Integer)
-    profiles = CSV.read("$secretdir/test.users.csv", DataFrames.DataFrame, stringtype = String, ntasks=1)
+    profiles = CSV.read(
+        "$secretdir/test.users.csv",
+        DataFrames.DataFrame,
+        stringtype = String,
+        ntasks = 1,
+    )
     while true
         try
             r = HTTP.get("$MODEL_URL/ready")
@@ -173,11 +199,15 @@ function compile(port::Integer)
         end
     end
     state = ""
-    pagination = Dict("offset" => 0,  "limit" => 25)
+    pagination = Dict("offset" => 0, "limit" => 25)
     function apply_action(action)
         r = HTTP.post(
             "http://localhost:$PORT/update",
-            encode(Dict("state" => state, "action" => action, "pagination" => pagination), :json, :gzip)...,
+            encode(
+                Dict("state" => state, "action" => action, "pagination" => pagination),
+                :json,
+                :gzip,
+            )...,
             status_exception = false,
             decompress = false,
         )
@@ -195,20 +225,26 @@ function compile(port::Integer)
         logtag("STARTUP", "/autocomplete")
         HTTP.post(
             "http://localhost:$PORT/autocomplete",
-            encode(Dict("source" => source, "prefix" => lowercase(username), "type" => "user"), :json, :gzip)...,
+            encode(
+                Dict("source" => source, "prefix" => lowercase(username), "type" => "user"),
+                :json,
+                :gzip,
+            )...,
             status_exception = false,
         )
         logtag("STARTUP", "/add_user")
         apply_action(Dict("type" => "add_user", "source" => source, "username" => username))
         logtag("STARTUP", "/refresh_user")
-        apply_action(Dict("type" => "refresh_user", "source" => source, "username" => username))
+        apply_action(
+            Dict("type" => "refresh_user", "source" => source, "username" => username),
+        )
     end
     for m in ["Manga", "Anime"]
         apply_action(Dict("type" => "set_media", "medium" => m))
     end
 end
 
-const allowed_origins = [ "Access-Control-Allow-Origin" => "*" ]
+const allowed_origins = ["Access-Control-Allow-Origin" => "*"]
 const cors_headers = [
     allowed_origins...,
     "Access-Control-Allow-Headers" => "*",
