@@ -14,7 +14,7 @@ function archive(datetag::AbstractString)
     tags = sort(get_directories("lists"))
     idx = findfirst(==(datetag), tags)
     @assert !isnothing(idx)
-    num_recent_tags_to_keep = 30
+    num_recent_tags_to_keep = 7
     if idx <= num_recent_tags_to_keep
         logtag(
             "ARCHIVE",

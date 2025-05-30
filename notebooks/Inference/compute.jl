@@ -13,11 +13,59 @@ const DATABASE_WRITE_URL = ARGS[3]
 const datadir = "../../data/finetune"
 const secretdir = "../../secrets"
 const bluegreen = read("$datadir/bluegreen", String)
-const MODEL_URL = (length(ARGS) >= 4) ? ARGS[4] : read("$secretdir/url.embed.$bluegreen.txt", String)
+const MODEL_URLS = (length(ARGS) >= 4) ? [ARGS[4]] : readlines("$secretdir/url.embed.$bluegreen.txt")
+MODEL_URL = first(MODEL_URLS)
 include("render.jl")
 
 standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
 sanitize(x) = strip(x)
+
+function request(args...; kwargs...)::HTTP.Response
+    try
+        return HTTP.request(args...; kwargs..., connect_timeout=1)
+    catch e
+        if !isa(e, HTTP.ConnectError)
+            return HTTP.Response(500, [])
+        end
+        if !update_routing_table()
+            return HTTP.Response(500, [])
+        end
+        try
+            return HTTP.request(args...; kwargs..., connect_timeout=1)
+        catch
+            return HTTP.Response(500, [])
+        end
+    end
+end
+
+Oxygen.@get "/update_routing_table" function update_routing_table(r::HTTP.Request)::HTTP.Response
+    status = update_routing_table() ? 200 : 404
+    HTTP.Response(status, [])
+end
+
+function update_routing_table()::Bool
+    for url in MODEL_URLS
+        try
+            r = HTTP.get("$url/ready", status_exception=false, connect_timeout=1)
+            if !HTTP.iserror(r)
+                global MODEL_URL
+                MODEL_URL = url
+                return true
+            end
+        catch e
+            @assert isa(e, HTTP.ConnectError)
+        end
+    end
+    false
+end
+
+Oxygen.@get "/bluegreen" function read_bluegreen(r::HTTP.Request)::HTTP.Response
+    encoding = nothing
+    if occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
+        encoding = :gzip
+    end
+    HTTP.Response(200, encode(Dict("bluegreen" => bluegreen), :json, encoding)...)
+end
 
 Oxygen.@post "/autocomplete" function autocomplete(r::HTTP.Request)::HTTP.Response
     encoding = nothing
@@ -68,7 +116,8 @@ function add_user(d::Dict, medium::Integer)::HTTP.Response
     u = import_user(d_read["source"], data, d_read["db_refreshed_at"])
     u["timestamp"] = time()
     ret = Dict("user" => u, "source" => d["source"], "username" => d["username"])
-    r_embed = HTTP.post(
+    r_embed = request(
+        "POST",
         "$MODEL_URL/embed?medium=$medium&task=retrieval",
         encode(u, :msgpack)...,
         status_exception = false,
@@ -153,7 +202,8 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
             if "masked.$medium" in keys(u["embeds"])
                 continue
             end
-            r_embed = HTTP.post(
+            r_embed = request(
+                "POST",
                 "$MODEL_URL/embed?medium=$medium&task=retrieval",
                 encode(u["user"], :msgpack)...,
                 status_exception = false,
@@ -183,21 +233,24 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
 end
 
 function compile(port::Integer)
+    while true
+        if !update_routing_table()
+            logtag("STARTUP", "waiting for models to startup")
+            sleep(10)
+        else
+            break
+        end
+    end
+    r = HTTP.get("http://localhost:$PORT/bluegreen", status_exception = false)
+    if HTTP.iserror(r)
+        logerror("bluegreen error $(r.status)")
+    end
     profiles = CSV.read(
         "$secretdir/test.users.csv",
         DataFrames.DataFrame,
         stringtype = String,
         ntasks = 1,
     )
-    while true
-        try
-            r = HTTP.get("$MODEL_URL/ready")
-            break
-        catch
-            logtag("STARTUP", "waiting for $MODEL_URL to startup")
-            sleep(1)
-        end
-    end
     state = ""
     pagination = Dict("offset" => 0, "limit" => 25)
     function apply_action(action)

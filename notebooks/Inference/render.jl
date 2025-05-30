@@ -311,7 +311,8 @@ function ranking(state, idxs)
         end
         u = copy(state["users"][i]["user"])
         u["test_items"] = test_items
-        r_embed = HTTP.post(
+        r_embed = request(
+            "POST",
             "$MODEL_URL/embed?medium=$m&task=ranking",
             encode(u, :msgpack)...,
             status_exception = false,

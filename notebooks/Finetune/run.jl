@@ -4,12 +4,12 @@ function torchrun(cmd)
 end
 
 function blue_green_deploy()
-    active = read("../../data/finetune/bluegreen", String)
-    disable = Dict("blue" => "green", "green" => "blue")[active]
-    region = read("../../secrets/gcp.region.txt", String)
+    enable = read("../../data/finetune/bluegreen", String)
+    disable = Dict("blue" => "green", "green" => "blue")[enable]
     cmds = [
         "gcloud auth login --cred-file=../../secrets/gcp.auth.json --quiet",
-        "gcloud beta run services update embed-$disable --scaling=0 --region $region",
+        "zone=`gcloud compute instances list --filter name=embed-$disable --format 'csv[no-heading](zone)'`",
+        "gcloud compute instances stop embed-$disable --zone \$zone",
     ]
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)

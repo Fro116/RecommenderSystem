@@ -7,6 +7,7 @@ import Memoize: @memoize
 import MsgPack
 import Random
 import ProgressMeter: @showprogress
+include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
 include("../Training/import_list.jl")
 
@@ -14,17 +15,13 @@ const SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
 const datadir = "../../data/finetune"
 
 function blue_green_tag()
-    curtag = nothing
-    for x in ["blue", "green"]
-        url = read("../../secrets/url.embed.$x.txt", String)
-        r = HTTP.get("$url/ready", status_exception = false)
-        if !HTTP.iserror(r)
-            curtag = x
-            break
-        end
-    end
-    if isnothing(curtag)
-        curtag = "blue"
+    url = read("../../secrets/url.compute.txt", String)
+    r = HTTP.get("$url/bluegreen", status_exception=false, decompress = false, connect_timeout=1)
+    if HTTP.iserror(r)
+       curtag = "blue"
+    else
+        d = decode(r)
+        curtag = d["bluegreen"]
     end
     Dict("blue" => "green", "green" => "blue")[curtag]
 end
