@@ -19,6 +19,7 @@ const max_ts = Dates.datetime2unix(
     Dates.DateTime(read("$datadir/finetune_tag", String), Dates.dateformat"yyyymmdd"),
 ) + 86400
 const max_seq_len = 1024
+const num_gpus = 8
 
 include("../Training/history_tools.jl")
 
@@ -127,26 +128,34 @@ function get_data(data, userid)
 end
 
 function save_data(datasplit)
+    num_shards = num_gpus
     users = sort(Glob.glob("$datadir/users/$datasplit/*/*.msgpack"))
-    dest = mkpath("$datadir/transformer/$datasplit/1")
-    files = collect(Iterators.partition(Random.shuffle(users), 65_536))
-    @showprogress for p = 1:length(files)
-        fns = files[p]
-        d = Vector{Any}(undef, length(fns))
-        Threads.@threads for i = 1:length(fns)
-            data = open(fns[i]) do f
-                MsgPack.unpack(read(f))
+    while length(users) % num_shards != 0
+        push!(users, rand(users))
+    end
+    Random.shuffle!(users)
+    for shard = 1:num_shards
+        dest = mkpath("$datadir/transformer/$datasplit/$shard")
+        files = [x for (i, x) in Iterators.enumerate(users) if (i % num_shards) + 1 == shard]
+        files = collect(Iterators.partition(Random.shuffle(files), 65_536))
+        @showprogress for p = 1:length(files)
+            fns = files[p]
+            d = Vector{Any}(undef, length(fns))
+            Threads.@threads for i = 1:length(fns)
+                data = open(fns[i]) do f
+                    MsgPack.unpack(read(f))
+                end
+                d[i] = get_data(data, i)
             end
-            d[i] = get_data(data, i)
-        end
-        Random.shuffle!(d)
-        h5 = Dict()
-        for k in keys(first(d))
-            h5[k] = reduce(hcat, [x[k] for x in d])
-        end
-        HDF5.h5open("$dest/$p.h5", "w") do file
-            for (k, v) in h5
-                file[k, blosc = 3] = v
+            Random.shuffle!(d)
+            h5 = Dict()
+            for k in keys(first(d))
+                h5[k] = reduce(hcat, [x[k] for x in d])
+            end
+            HDF5.h5open("$dest/$p.h5", "w") do file
+                for (k, v) in h5
+                    file[k, blosc = 3] = v
+                end
             end
         end
     end

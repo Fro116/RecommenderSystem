@@ -147,6 +147,7 @@ class Llama3(nn.Module):
                 lora_attn_modules=["q_proj", "v_proj"],
                 lora_rank=8,
                 lora_alpha=16,
+                lora_dropout=0.1,
                 **llama_config,
             )
             set_trainable_params(llama3, get_adapter_params(llama3))

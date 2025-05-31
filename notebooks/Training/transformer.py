@@ -41,9 +41,8 @@ class PretrainDataset(IterableDataset):
         local_world_size,
         tokens_per_batch,
     ):
-        self.datadir = datadir
         self.batch_size = tokens_per_batch
-        shards = sorted(glob.glob(f"{self.datadir}/*/"))
+        shards = sorted(glob.glob(f"{datadir}/*/"))
         assert len(shards) % local_world_size == 0
         self.fns = []
         for i, x in enumerate(shards):
@@ -103,13 +102,19 @@ class FinetuneDataset(IterableDataset):
     def __init__(
         self,
         datadir,
+        local_rank,
+        local_world_size,
         batch_size,
         shuffle,
     ):
-        self.datadir = datadir
         self.batch_size = batch_size
-        self.fns = glob.glob(f"{self.datadir}/*/*.h5")
         self.shuffle = shuffle
+        shards = sorted(glob.glob(f"{datadir}/*/"))
+        assert len(shards) % local_world_size == 0
+        self.fns = []
+        for i, x in enumerate(shards):
+            if i % local_world_size == local_rank:
+                self.fns.extend(glob.glob(f"{x}/*.h5"))
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -129,7 +134,10 @@ class FinetuneDataset(IterableDataset):
                     for k in f:
                         d[k] = f[k][:]
             N = d["userid"].shape[0]
-            idxs = list(range(N))
+            idxs = []
+            for i in range(N):
+                if any(d[f"{args.finetune_medium}.{metric}.weight"][i, :].sum() > 0 for metric in ["watch", "rating"]):
+                    idxs.append(i)
             if self.shuffle:
                 np.random.shuffle(idxs)
                 while len(idxs) % self.batch_size != 0:
@@ -225,13 +233,14 @@ def train_epoch(
     scheduler,
     scaler,
     task_weights,
+    grad_accum_steps,
 ):
     training_losses = [0.0 for _ in range(len(task_weights))]
     training_weights = [0.0 for _ in range(len(task_weights))]
     progress = tqdm(desc="Training batches", mininterval=1, disable=local_rank != 0)
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
-    for data in dataloader:
-        optimizer.zero_grad(set_to_none=True)
+    optimizer.zero_grad(set_to_none=True)
+    for step, data in enumerate(dataloader):
         with torch.amp.autocast(f"cuda:{local_rank}", dtype=torch.bfloat16):
             d = to_device(data, local_rank)
             tloss = model(d, False)
@@ -239,12 +248,15 @@ def train_epoch(
                 w = float(d[f"{names[i]}.weight"].sum())
                 training_losses[i] += float(tloss[i].detach()) * w
                 training_weights[i] += w
-            loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
+            loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss))) / grad_accum_steps
         scaler.scale(loss).backward()
+        if (step + 1) % grad_accum_steps != 0:
+            continue
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(optimizer)
         scaler.update()
+        optimizer.zero_grad(set_to_none=True)
         scheduler.step()
         progress.update()
     progress.close()
@@ -441,7 +453,7 @@ def training_config():
             f"{args.datadir}/transformer.{args.modeltype}.pt", weights_only=False, map_location="cpu"
         )
         config = checkpoint["config"]
-        config["learning_rate"] = 1e-4
+        config["learning_rate"] = 2e-4
         config["finetune"] = True
         return config
     num_items = {
@@ -495,12 +507,19 @@ def train():
     config = training_config()
     debug_mode = False
     if config["finetune"]:
-        assert world_size == 1
-        num_epochs = 1
-        local_batch_size = 16 if config["causal"] else 32
+        num_epochs = 4
+        local_batch_size = 32 if config["causal"] else 64
+        grad_accum_steps = 1
+        if world_size == 1:
+            # emulate training on a 8 gpu setup with gradient accumulation
+            single_gpu_batch_size = 8 if config["causal"] else 16
+            assert local_batch_size % single_gpu_batch_size == 0
+            grad_accum_steps = (8 * local_batch_size) // single_gpu_batch_size
+            local_batch_size = single_gpu_batch_size
     else:
         num_epochs = 4 if config["causal"] else 48
         local_batch_size = 16 if config["causal"] else 64
+        grad_accum_steps = 1
         if world_size == 1:
             logger.error("LOCAL DEBUG MODE ENABLED")
             num_epochs = 1
@@ -511,6 +530,8 @@ def train():
         if config["finetune"]:
             return FinetuneDataset(
                 f"{args.datadir}/transformer/{x}",
+                local_rank,
+                local_world_size,
                 local_batch_size,
                 shuffle=x == "training",
             )
@@ -615,6 +636,7 @@ def train():
             scheduler,
             scaler,
             task_weights,
+            grad_accum_steps,
         )
         logger.info(
             f"Epoch: {epoch}, Training Loss:"

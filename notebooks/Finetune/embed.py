@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import queue
@@ -125,12 +126,6 @@ def project(user):
     return items
 
 
-def shift_left(x):
-    y = torch.zeros_like(x)
-    y[..., :-1] = x[..., 1:]
-    return y
-
-
 def predict(users, task, medium):
     max_user_len = 1024
     if task == "retrieval":
@@ -194,12 +189,14 @@ def predict(users, task, medium):
     with torch.no_grad():
         with torch.amp.autocast(device, dtype=torch.bfloat16):
             for modeltype in modeltypes:
-                e[modeltype] = models[f"transformer.{modeltype}.{medium}"](d[modeltype], task).to("cpu")
+                e[modeltype] = models[f"transformer.{modeltype}.{medium}"](
+                    d[modeltype], task
+                ).to("cpu")
     if task == "retrieval":
         ret = []
         for i, u in enumerate(users):
             d = {"version": version}
-            N = min(len(project(u)), max_user_len-1)
+            N = min(len(project(u)), max_user_len - 1)
             d[f"masked.{medium}"] = e["masked"][i, N, :].tolist()
             ret.append(d)
         return ret
@@ -207,7 +204,7 @@ def predict(users, task, medium):
         ret = []
         for i, u in enumerate(users):
             d = {"version": version}
-            N = min(len(project(u)), max_user_len-1)
+            N = min(len(project(u)), max_user_len - 1)
             causal_idxs = []
             for j in range(len(u["test_items"])):
                 causal_idxs.append(2 * (N + j) + 1)
@@ -220,6 +217,18 @@ def predict(users, task, medium):
 
 with open("../Training/transformer.model.py") as f:
     exec(f.read())
+
+
+def get_nested_attr(obj, attr_string):
+    return functools.reduce(getattr, attr_string.split("."), obj)
+
+
+def set_nested_attr(obj, attr_string, value):
+    parts = attr_string.split(".")
+    current_obj = obj
+    for part in parts[:-1]:
+        current_obj = getattr(current_obj, part)
+    setattr(current_obj, parts[-1], value)
 
 
 def load_model(modeltype, medium):
@@ -250,15 +259,33 @@ request_buffers = {}
 for modeltype in ["causal", "masked"]:
     for medium in [0, 1]:
         logging.warning(f"STARTUP LOADING {modeltype} {medium} MODEL")
-        models[f"transformer.{modeltype}.{medium}"] = load_model(
-            modeltype, medium
-        )
+        models[f"transformer.{modeltype}.{medium}"] = load_model(modeltype, medium)
+    # deduplicate shared params from LoRA
+    for k, _ in models[f"transformer.{modeltype}.0"].named_parameters():
+        if (
+            get_nested_attr(models[f"transformer.{modeltype}.0"], k)
+            == get_nested_attr(models[f"transformer.{modeltype}.1"], k)
+        ).all():
+            set_nested_attr(
+                models[f"transformer.{modeltype}.1"],
+                k,
+                get_nested_attr(models[f"transformer.{modeltype}.0"], k),
+            )
+    torch.cuda.empty_cache()
 for task in ["retrieval", "ranking"]:
     for medium in [0, 1]:
-        test_user = {"user": {"source": "mal"}, "items": [], "timestamp": time.time(), "test_items": [make_masked_item(time.time())]}
+        test_user = {
+            "user": {"source": "mal"},
+            "items": [],
+            "timestamp": time.time(),
+            "test_items": [make_masked_item(time.time())],
+        }
         predict([test_user], task, medium)
         request_buffers[(task, medium)] = RequestBuffer(
-            batch_size=32, timeout_seconds=0.01, max_queue_size=1024, batch_fn = lambda x, t=task, m=medium: predict(x, t, m)
+            batch_size=32,
+            timeout_seconds=0.01,
+            max_queue_size=1024,
+            batch_fn=lambda x, t=task, m=medium: predict(x, t, m),
         )
 logging.warning(f"STARTUP END AFTER {time.time() - starttime}s")
 app = FastAPI()

@@ -39,6 +39,9 @@ function get_users(medium)
                 data = open(fn) do f
                     MsgPack.unpack(read(f))
                 end
+                if !any(x["medium"] == medium for x in data["test_items"])
+                    continue
+                end
                 data["timestamp"] = data["test_items"][1]["history_max_ts"]
                 r_retrieval = HTTP.post(
                     "http://localhost:$port/embed?medium=$medium&task=retrieval",
