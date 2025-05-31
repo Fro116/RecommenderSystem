@@ -3,7 +3,7 @@ include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
 
 function write_entrypoint_yaml(modeltype, nodes)
-    image = "pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel"
+    image = "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-devel"
     envvars = readlines("../../secrets/r2.auth.txt")
     script = [
         "export NUM_NODES=$nodes",

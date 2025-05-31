@@ -41,9 +41,8 @@ class PretrainDataset(IterableDataset):
         local_world_size,
         tokens_per_batch,
     ):
-        self.datadir = datadir
         self.batch_size = tokens_per_batch
-        shards = sorted(glob.glob(f"{self.datadir}/*/"))
+        shards = sorted(glob.glob(f"{datadir}/*/"))
         assert len(shards) % local_world_size == 0
         self.fns = []
         for i, x in enumerate(shards):
@@ -103,13 +102,19 @@ class FinetuneDataset(IterableDataset):
     def __init__(
         self,
         datadir,
+        local_rank,
+        local_world_size,
         batch_size,
         shuffle,
     ):
-        self.datadir = datadir
         self.batch_size = batch_size
-        self.fns = glob.glob(f"{self.datadir}/*/*.h5")
         self.shuffle = shuffle
+        shards = sorted(glob.glob(f"{datadir}/*/"))
+        assert len(shards) % local_world_size == 0
+        self.fns = []
+        for i, x in enumerate(shards):
+            if i % local_world_size == local_rank:
+                self.fns.extend(glob.glob(f"{x}/*.h5"))
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -495,9 +500,12 @@ def train():
     config = training_config()
     debug_mode = False
     if config["finetune"]:
-        assert world_size == 1
-        num_epochs = 1
-        local_batch_size = 16 if config["causal"] else 32
+        num_epochs = 4
+        local_batch_size = 64 if config["causal"] else 256
+        if world_size == 1:
+            logger.error("LOCAL DEBUG MODE ENABLED")
+            num_epochs = 1
+            local_batch_size = 16 if config["causal"] else 32
     else:
         num_epochs = 4 if config["causal"] else 48
         local_batch_size = 16 if config["causal"] else 64
@@ -511,6 +519,8 @@ def train():
         if config["finetune"]:
             return FinetuneDataset(
                 f"{args.datadir}/transformer/{x}",
+                local_rank,
+                local_world_size,
                 local_batch_size,
                 shuffle=x == "training",
             )
