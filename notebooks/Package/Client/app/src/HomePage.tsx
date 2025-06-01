@@ -6,14 +6,20 @@ import './App.css';
 
 const HomePage: React.FC = () => {
   const [query, setQuery] = useState<string>(''); // State for the input field
-  const [activeSource, setActiveSource] = useState<SourceType>('MyAnimeList');
+  const getInitialSource = (): SourceType => {
+    const storedSource = localStorage.getItem('selectedSource');
+    if (storedSource && ['MyAnimeList', 'AniList', 'Kitsu', 'Anime-Planet'].includes(storedSource)) {
+      return storedSource as SourceType;
+    }
+    return 'MyAnimeList';
+  };
+  const [activeSource, setActiveSource] = useState<SourceType>(getInitialSource());
+  useEffect(() => {localStorage.setItem('selectedSource', activeSource);}, [activeSource]);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [autocompleteResults, setAutocompleteResults] = useState<AutocompleteItem[]>([]);
   const [autocompleteDisabled, setAutocompleteDisabled] = useState<boolean>(false);
   const [showButtons, setShowButtons] = useState<boolean>(true);
-
   const navigate = useNavigate();
-
   const inputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const buttonContainerRef = useRef<HTMLDivElement>(null);

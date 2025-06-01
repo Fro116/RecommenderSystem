@@ -4,11 +4,19 @@ import { Routes, Route, useLocation } from 'react-router-dom';
 import HomePage from './HomePage';
 import ViewPage from './ViewPage';
 import './App.css';
+import {
+    enable as enableDarkMode,
+    disable as disableDarkMode,
+    setFetchMethod,
+    isEnabled as isDarkReaderEnabled,
+    type DynamicThemeFix
+} from 'darkreader';
 
 const App: React.FC = () => {
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const location = useLocation();
 
+  // viewport height and mobile detection
   useEffect(() => {
     const vh = window.innerHeight * 0.01;
     document.documentElement.style.setProperty('--vh', `${vh}px`);
@@ -17,10 +25,32 @@ const App: React.FC = () => {
       document.documentElement.style.setProperty('--vh', `${vh}px`);
     };
     window.addEventListener('resize', handleResize);
-
     setIsMobile(window.matchMedia?.('(hover: none)').matches ?? false);
-
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // DarkReader
+  useEffect(() => {
+    if (typeof window !== 'undefined' && typeof window.fetch === 'function') {
+      setFetchMethod(window.fetch);
+    }
+    const fixes: DynamicThemeFix = {
+      css: `
+        header input::placeholder {
+          color: #8c8c8c !important;
+        }
+      `,
+      invert: [],
+      ignoreInlineStyle: [],
+      ignoreImageAnalysis: [],
+      disableStyleSheetsProxy: false
+    };
+    enableDarkMode({}, fixes);
+    return () => {
+      if (isDarkReaderEnabled()) {
+        disableDarkMode();
+      }
+    };
   }, []);
 
   const isHomePage = location.pathname === '/';
@@ -29,14 +59,11 @@ const App: React.FC = () => {
     ? { height: 'calc(var(--vh, 1vh) * 100)', overflowY: 'hidden' }
     : {};
 
-
   return (
     <div className={containerClass} style={containerStyle}>
       <Routes>
         <Route path="/" element={<HomePage />} />
-        {/* Updated Route Path */}
         <Route path="/user/:source/:username" element={<ViewPage isMobile={isMobile} />} />
-        {/* Other routes */}
       </Routes>
     </div>
   );
