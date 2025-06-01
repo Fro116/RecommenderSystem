@@ -278,7 +278,7 @@ def create_optimizer(model, config):
     )
 
 
-class LambdaScheduler(object):
+class ConstantScheduler(object):
     def __init__(self):
         self.steps = 0
 
@@ -288,8 +288,7 @@ class LambdaScheduler(object):
 
 
 def create_learning_rate_schedule(optimizer, tokens_per_batch, epochs):
-    # TODO tune schedule
-    return optim.lr_scheduler.LambdaLR(optimizer, LambdaScheduler())
+    return optim.lr_scheduler.LambdaLR(optimizer, ConstantScheduler())
 
 
 class EarlyStopper:
@@ -323,30 +322,42 @@ def wsum(values, weights):
 
 def make_task_weights():
     # rescale losses so each task is equally weighted
-    # TODO scale by causal
-    scale = {
-        0: {
-            "watch": 4.936433904778252,
-            "rating": 1.2916892428443572,
-        },
-        1: {
-            "watch": 2.65301127739087,
-            "rating": 1.082482734702636,
-        },
-    }
+    if args.modeltype == "causal":
+        scale = {
+            0: {
+                "watch": 5.564432094339503,
+                "rating": 1.2555994665648476,
+            },
+            1: {
+                "watch": 3.7259071988829593,
+                "rating": 1.1956148524173345,
+            },
+        }
+    elif args.modeltype == "masked":
+        scale = {
+            0: {
+                "watch": 4.618602403897067,
+                "rating": 1.1958987168236102,
+            },
+            1: {
+                "watch": 2.5443243303769867,
+                "rating": 1.0527565486045412,
+            },
+        }
+    else:
+        assert False
     scale = [scale[x][y] for x in ALL_MEDIUMS for y in ALL_METRICS]
     # task balancing
-    if args.finetune is None:
-        medium_weight = {0: 0.25, 1: 1}
+    if args.modeltype == "causal":
+        metric_weight = {"watch": 0.25, "rating": 1}
+    elif args.modeltype == "masked":
         metric_weight = {"watch": 1, "rating": 0.25}
     else:
+        assert False
+    if args.finetune is None:
+        medium_weight = {0: 0.25, 1: 1}
+    else:
         medium_weight = {args.finetune_medium: 1, 1 - args.finetune_medium: 0}
-        if args.modeltype == "causal":
-            metric_weight = {"watch": 0.25, "rating": 1}
-        elif args.modeltype == "masked":
-            metric_weight = {"watch": 1, "rating": 0.25}
-        else:
-            assert False
     weights = [
         medium_weight[x] * metric_weight[y] for x in ALL_MEDIUMS for y in ALL_METRICS
     ]

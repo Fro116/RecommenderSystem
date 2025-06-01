@@ -135,7 +135,6 @@ class Llama3(nn.Module):
             "num_kv_heads": config["num_kv_heads"],
             "embed_dim": config["embed_dim"],
             "intermediate_dim": config["intermediate_dim"],
-            "max_seq_len": config["max_sequence_length"] * 2,
         }
         if config["causal"]:
             # we split each token into an item and action token

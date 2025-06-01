@@ -21,6 +21,7 @@ function archive(date)
     ]
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)
+    rm(datadir, recursive=true, force=true)
 end
 
 function backup()
