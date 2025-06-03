@@ -31,7 +31,6 @@ const HomePage: React.FC = () => {
     'Anime-Planet': 'Type an Anime-Planet username',
   };
 
-  // ... (fetchAutocomplete, useEffects, handleInputChange remain the same) ...
   const fetchAutocomplete = async () => {
      if (query.trim() === '') {
          setAutocompleteResults([]); return;
@@ -59,7 +58,6 @@ const HomePage: React.FC = () => {
   };
 
 
-  // Renamed back from handleSearch in previous steps, this triggers the navigation
   const triggerSearch = (username: string) => {
       const trimmedUsername = username.trim();
       if (!trimmedUsername) return;
@@ -67,37 +65,32 @@ const HomePage: React.FC = () => {
       const sourceKey = SOURCE_MAP[activeSource];
       console.log(`Navigating to /user/${sourceKey}/${trimmedUsername}`);
       navigate(`/user/${sourceKey}/${trimmedUsername}`);
-      // Note: Clearing query state happens in handleSearch now
   }
 
-  // This handles the form submission (e.g., pressing Enter)
   const handleSearch = (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
-      if (!query.trim()) return; // Don't search if query is empty
-      triggerSearch(query); // Navigate using the current query
-      setQuery(''); // *** ADDED: Clear the query state after triggering search ***
-      if (inputRef.current) inputRef.current.blur(); // Optionally blur input
+      if (!query.trim()) return;
+      triggerSearch(query);
+      setQuery('');
+      if (inputRef.current) inputRef.current.blur();
   };
 
-  // This handles clicking an autocomplete item
   const handleAutocompleteClick = (item: AutocompleteItem) => {
-      setAutocompleteDisabled(true); // Prevent fetch firing again
-      setQuery(item.username); // Set input briefly to clicked item (will be cleared below)
-      setAutocompleteResults([]); // Hide autocomplete
-      triggerSearch(item.username); // Navigate using the clicked item's username
-      setQuery(''); // *** ADDED: Clear the query state after triggering search ***
-      if (inputRef.current) inputRef.current.blur(); // Optionally blur input
+      setAutocompleteDisabled(true);
+      setQuery(item.username);
+      setAutocompleteResults([]);
+      triggerSearch(item.username);
+      setQuery('');
+      if (inputRef.current) inputRef.current.blur();
   };
 
   const handleButtonClick = (source: SourceType) => {
-      // ... (remains the same)
       setActiveSource(source);
       setAutocompleteResults([]);
       inputRef.current?.focus();
   };
 
    useEffect(() => {
-     // ... (click outside useEffect remains the same)
      const handleClickOutside = (event: MouseEvent) => { if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) { setAutocompleteResults([]); } };
      document.addEventListener('mousedown', handleClickOutside);
      return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -106,7 +99,6 @@ const HomePage: React.FC = () => {
 
   // --- Render structure ---
   return (
-    // ... (rest of the JSX remains the same) ...
     <>
        <header>
          <form onSubmit={handleSearch}>
@@ -146,9 +138,9 @@ const HomePage: React.FC = () => {
          </div>
        )}
 
-        <div className="home-overlay">
-            Recs☆Moe is a recommender system for anime and manga
-        </div>
+       <h1 className="home-overlay">
+            Recs☆Moe is a recommender system for anime and manga
+       </h1>
     </>
   );
 };

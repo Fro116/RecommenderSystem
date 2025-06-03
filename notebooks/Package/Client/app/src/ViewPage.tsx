@@ -24,7 +24,6 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
   const [loadingMore, setLoadingMore] = useState<boolean>(false);
   const [showSynopsis, setShowSynopsis] = useState<{ [index: number]: boolean }>({});
   const [cardRotation, setCardRotation] = useState<{ [index: number]: number }>({});
-  // Global flip state: 'none', 'selected-details', or 'selected-synopsis'
   const [flipState, setFlipState] = useState<'none' | 'selected-details' | 'selected-synopsis'>('none');
 
   // Refs
@@ -32,11 +31,18 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const initialFetchStartedRef = useRef<boolean>(false);
 
-  // Ref to access latest cardRotation state within closures
   const cardRotationRef = useRef(cardRotation);
   useEffect(() => {
     cardRotationRef.current = cardRotation;
   }, [cardRotation]);
+
+  useEffect(() => {
+    const siteDefaultTitle = document.title;
+    document.title = `${username}'s Room | Recs☆Moe`;
+    return () => {
+      document.title = siteDefaultTitle;
+    };
+  }, [source, username]);
 
   // --- Functions ---
   const determineCardTypeFromResult = useCallback(
