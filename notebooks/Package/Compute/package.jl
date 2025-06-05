@@ -58,7 +58,14 @@ function build(basedir::String, name::String, tag::String, args::String)
         "{tag}" => tag,
         "{args}" => args,
     )
-    run(`sh -c $deploy`)
+    for attempt in 1:3
+        try
+            run(`sh -c $deploy`)
+            break
+        catch e
+            println("attempt $attempt: error $e")
+        end
+    end
     run(`docker system prune -af --filter until=24h`)
 end
 

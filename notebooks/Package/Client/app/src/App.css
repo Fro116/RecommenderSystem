@@ -521,25 +521,26 @@ header input:hover {
   pointer-events: none;
 }
 
+/* Loading ViewPage */
 .loading-container {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  flex-grow: 1; /* Allows it to take up space in the flex container */
+  flex-grow: 1;
   padding: 40px;
   text-align: center;
-  color: #555; /* Softer text color */
+  color: #eee;
 }
 
 .loading-spinner {
-  border: 6px solid #f3f3f3; /* Light grey */
-  border-top: 6px solid #F48FB1; /* Pink to match theme */
+  border: 6px solid rgba(243, 243, 243, 0.3);
+  border-top: 6px solid #F48FB1;
   border-radius: 50%;
   width: 50px;
   height: 50px;
   animation: spin 1s linear infinite;
-  margin-bottom: 20px; /* Space between spinner and text */
+  margin-bottom: 20px;
 }
 
 @keyframes spin {
@@ -548,6 +549,74 @@ header input:hover {
 }
 
 .loading-container p {
-  font-size: 1.2em;
+  font-size: 1.75em;
   font-weight: 500;
+  text-shadow: 0px 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* 404 Page */
+.not-found-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-grow: 1;
+  padding: 40px;
+  height: 100%;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  position: relative;
+  z-index: 0;
+}
+
+.not-found-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: -1;
+}
+
+.not-found-text-content {
+  display: inline-block;
+  cursor: pointer;
+  outline: none;
+  text-align: center;
+  color: #ffffff;
+  transition: color 0.2s ease-in-out;
+}
+
+.not-found-text-content:hover {
+  color: #cccccc;
+}
+
+.not-found-text-content .not-found-title {
+  font-size: 7em;
+  font-weight: bold;
+  color: #F48FB1;
+  margin-top: 0;
+  margin-bottom: 0.1em;
+  line-height: 1;
+  position: relative;
+  z-index: 1;
+  transition: color 0.2s ease-in-out;
+}
+
+.not-found-text-content:hover .not-found-title {
+  color: #D870A0;
+}
+
+.not-found-text-content .not-found-message {
+  font-size: 1.75em;
+  font-weight: 500;
+  margin-top: 0;
+  margin-bottom: 0;
+  line-height: 1.2;
+  position: relative;
+  z-index: 1;
 }
