@@ -523,7 +523,7 @@ def train():
         grad_accum_steps = 1
         if world_size == 1:
             # emulate training on a 8 gpu setup with gradient accumulation
-            single_gpu_batch_size = 8 if config["causal"] else 16
+            single_gpu_batch_size = 8 if config["causal"] else 8
             assert local_batch_size % single_gpu_batch_size == 0
             grad_accum_steps = (8 * local_batch_size) // single_gpu_batch_size
             local_batch_size = single_gpu_batch_size

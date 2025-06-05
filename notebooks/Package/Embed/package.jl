@@ -30,7 +30,7 @@ function build(basedir::String, name::String, tag::String, args::String)
     # deploy vm
     cmds = [
         "zone=`gcloud compute instances list --filter name=embed-$bluegreen --format 'csv[no-heading](zone)'`",
-        "gcloud compute instances start embed-$bluegreen --zone \$zone",
+        "gcloud compute instance-groups managed resize embed-$(bluegreen)-instance-group --size 1 --region $region",
     ]
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)

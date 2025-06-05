@@ -6,10 +6,10 @@ end
 function blue_green_deploy()
     enable = read("../../data/finetune/bluegreen", String)
     disable = Dict("blue" => "green", "green" => "blue")[enable]
+    region = read("../../secrets/gcp.region.txt", String)
     cmds = [
         "gcloud auth login --cred-file=../../secrets/gcp.auth.json --quiet",
-        "zone=`gcloud compute instances list --filter name=embed-$disable --format 'csv[no-heading](zone)'`",
-        "gcloud compute instances stop embed-$disable --zone \$zone",
+        "gcloud compute instance-groups managed resize embed-$(disable)-instance-group --size 0 --region $region",
     ]
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)
