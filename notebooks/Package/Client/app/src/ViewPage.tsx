@@ -11,6 +11,30 @@ interface ViewPageProps {
   isMobile: boolean;
 }
 
+const numBackgroundImagesL = 83;
+const numBackgroundImagesN = 79;
+const backgroundImagesL = [
+  ...Array.from({ length: numBackgroundImagesL }, (_, i) =>
+    `https://cdn.recs.moe/images/backgrounds/loading.${i + 1}.large.webp`
+  ),
+];
+const backgroundImagesN = [
+  ...Array.from({ length: numBackgroundImagesN }, (_, i) =>
+    `https://cdn.recs.moe/images/backgrounds/notfound.${i + 1}.large.webp`
+  ),
+];
+const loadingMessages = [
+  'Dusting off some hidden gems...',
+  'Consulting with the head maid...',
+  'Polishing your recommendations...',
+  'The maids are working hard...',
+  'Analyzing your watch history...',
+  'Tidying up the final selections...',
+  'Please wait a moment...',
+  'Scrubbing away fanservice...',
+  'Preparing your room...',
+];
+
 const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
   // Hooks and State
   const navigate = useNavigate();
@@ -20,6 +44,8 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
   const [totalResults, setTotalResults] = useState<number>(0);
   const [cardType, setCardType] = useState<CardType>('Anime');
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [loadingText, setLoadingText] = useState<string>('');
+  const [loadingBgImage, setLoadingBgImage] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [loadingMore, setLoadingMore] = useState<boolean>(false);
   const [showSynopsis, setShowSynopsis] = useState<{ [index: number]: boolean }>({});
@@ -66,8 +92,6 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
 
   const fetchResults = useCallback(
     (payload: Payload, offset: number = 0, append: boolean = false, isInitialLoad: boolean = false) => {
-      console.log(`WorkspaceResults called (isInitial: ${isInitialLoad}, append: ${append})`, payload);
-
       if (isInitialLoad) {
         setIsLoading(true);
         setError('');
@@ -85,7 +109,6 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
       const extendedPayload = { ...payload, pagination: { offset, limit } };
       const payloadString = JSON.stringify(extendedPayload);
       const compressedPayload = pako.gzip(payloadString);
-      console.log('Sending fetch payload:', extendedPayload);
 
       fetch(UPDATE_URL, {
         method: 'POST',
@@ -93,7 +116,10 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
         body: compressedPayload,
       })
         .then((response) => {
-          console.log(`Workspace status: ${response.status}`);
+          if (response.status === 404) {
+            navigate('/404', { replace: true });
+            return null;
+          }
           if (!response.ok) {
             return response.text().then((text) => {
               throw new Error(`Workspace failed: ${response.statusText} (${response.status}) ${text || ''}`);
@@ -102,11 +128,10 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
           return response.json();
         })
         .then((data) => {
-          console.log('Received data:', data);
+          if (!data) return;
           if (!data || data.view === undefined || data.state === undefined || data.total === undefined) {
             throw new Error('Invalid data structure received from server.');
           }
-          console.log('Setting state based on received data.');
           const resolvedMedium = (data.medium as CardType) || determineCardTypeFromResult(data.view, payload.action);
           const newResults = data.view;
 
@@ -136,16 +161,13 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
           if (!isInitialLoad && !append) setIsLoading(false);
 
           if (isInitialLoad && data.followup_action) {
-            console.log('Followup action detected. Triggering in background:', data.followup_action);
             const followupPayload = { state: data.state, action: data.followup_action, pagination: extendedPayload.pagination };
-            console.log('Sending followup payload (async):', followupPayload);
             fetch(UPDATE_URL, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' },
               body: pako.gzip(JSON.stringify(followupPayload)),
             })
               .then((res) => {
-                console.log(`Async Followup fetch status: ${res.status}`);
                 if (!res.ok) {
                   res.text().then((text) => console.warn(`Async Followup fetch failed (${res.status}): ${text}`));
                   return null;
@@ -153,14 +175,12 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
                 return res.json();
               })
               .then((followupData) => {
-                console.log('Received async followup data:', followupData);
                 if (
                   followupData &&
                   followupData.view !== undefined &&
                   followupData.state !== undefined &&
                   followupData.total !== undefined
                 ) {
-                  console.log('Async Followup data is valid. Updating state in background.');
                   const followupResolvedMedium =
                     (followupData.medium as CardType) || determineCardTypeFromResult(followupData.view, followupPayload.action);
                   setApiState(followupData.state);
@@ -205,7 +225,11 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
       }
       return;
     }
-    console.log(`ViewPage initial effect running. Source: ${source}, Username: ${username}`);
+    const backgroundImages = Math.random() < 0.9 ? backgroundImagesL : backgroundImagesN;
+    const randomBgIndex = Math.floor(Math.random() * backgroundImages.length);
+    setLoadingBgImage(backgroundImages[randomBgIndex]);
+    const randomTextIndex = Math.floor(Math.random() * loadingMessages.length);
+    setLoadingText(loadingMessages[randomTextIndex]);
     const initialPayload: AddUserPayload = { state: '', action: { type: 'add_user', source: source, username: username } };
     initialFetchStartedRef.current = true;
     fetchResults(initialPayload, 0, false, true);
@@ -218,7 +242,6 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting && !loadingMore && results.length < totalResults) {
-            console.log('Load more triggered');
             const offset = results.length;
             const payload: MediaTypePayload = { state: apiState, action: { type: 'set_media', medium: cardType } };
             fetchResults(payload, offset, true, false);
@@ -242,7 +265,6 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
 
   const handleMediaTypeChange = (type: CardType) => {
     if (type === cardType || isLoading || loadingMore || !apiState) return;
-    console.log(`Changing media type to: ${type}`);
     setCardType(type);
     setShowSynopsis({});
     const payload: MediaTypePayload = { state: apiState, action: { type: 'set_media', medium: type } };
@@ -334,9 +356,14 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
   // --- Render Logic ---
   if (isLoading && results.length === 0) {
     return (
-      <div className="loading-container">
+      <div
+        className="loading-container"
+        style={{
+          backgroundImage: loadingBgImage ? `url('${loadingBgImage}')` : 'none',
+        }}
+      >
         <div className="loading-spinner"></div>
-        <p>Loading Recommendations...</p>
+	<p>{loadingText}</p>
       </div>
     );
   }

@@ -215,7 +215,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
             state["users"][i]["embeds"] = merge(state["users"][i]["embeds"], d_embed)
         end
     else
-        @assert false
+        return HTTP.Response(400, [])
     end
     r, ok = render(state, d["pagination"])
     if !ok

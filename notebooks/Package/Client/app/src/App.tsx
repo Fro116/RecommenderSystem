@@ -1,8 +1,10 @@
 // src/App.tsx
 import React, { useState, useEffect } from 'react';
+// Remove useParams from this import line if it's not used elsewhere in THIS file
 import { Routes, Route, useLocation } from 'react-router-dom';
 import HomePage from './HomePage';
 import ViewPage from './ViewPage';
+import NotFoundPage from './NotFoundPage';
 import './App.css';
 import {
     enable as enableDarkMode,
@@ -54,16 +56,21 @@ const App: React.FC = () => {
   }, []);
 
   const isHomePage = location.pathname === '/';
+
+  // The problematic 'isNotFoundPage' line that used useParams() has been removed.
+
   const containerClass = isHomePage ? 'container homepage' : 'container';
   const containerStyle: React.CSSProperties = isHomePage
     ? { height: 'calc(var(--vh, 1vh) * 100)', overflowY: 'hidden' }
-    : {};
+    : { display: 'flex', flexDirection: 'column', minHeight: 'calc(var(--vh, 1vh) * 100)' };
+
 
   return (
     <div className={containerClass} style={containerStyle}>
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/user/:source/:username" element={<ViewPage isMobile={isMobile} />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </div>
   );
