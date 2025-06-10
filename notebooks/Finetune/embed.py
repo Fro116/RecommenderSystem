@@ -142,6 +142,7 @@ def predict(users, task, medium):
             "userid": np.zeros((len(users), max_seq_len), dtype=np.int32),
             "time": np.zeros((len(users), max_seq_len), dtype=np.float64),
             "rope_input_pos": np.zeros((len(users), max_seq_len), dtype=np.int32),
+            "token_mask_ids": np.zeros((len(users), max_seq_len), dtype=np.int32),
             # item features
             "0_matchedid": np.zeros((len(users), max_seq_len), dtype=np.int32),
             "0_distinctid": np.zeros((len(users), max_seq_len), dtype=np.int32),
@@ -172,16 +173,22 @@ def predict(users, task, medium):
                 d[modeltype]["userid"][u, i] = userid
                 d[modeltype]["time"][u, i] = x["history_max_ts"]
                 if modeltype == "causal":
-                    d[modeltype]["rope_input_pos"][u, i] = min(i, len(items))
+                    d[modeltype]["rope_input_pos"][u, i] = i if i < len(items) else len(items)
+                    d[modeltype]["token_mask_ids"][u, i] = 0 if i < len(items) else i
                 # item features
                 d[modeltype][f"{m}_matchedid"][u, i] = x["matchedid"]
                 d[modeltype][f"{m}_distinctid"][u, i] = x["distinctid"]
                 d[modeltype][f"{n}_matchedid"][u, i] = -1
                 d[modeltype][f"{n}_distinctid"][u, i] = -1
                 # action features
-                d[modeltype]["status"][u, i] = x["status"]
-                d[modeltype]["rating"][u, i] = x["rating"]
-                d[modeltype]["progress"][u, i] = x["progress"]
+                if modeltype == "causal" and i >= len(items) and len(items) > 0:
+                    d[modeltype]["status"][u, i] = items[-1]["status"]
+                    d[modeltype]["rating"][u, i] = items[-1]["rating"]
+                    d[modeltype]["progress"][u, i] = items[-1]["progress"]
+                else:
+                    d[modeltype]["status"][u, i] = x["status"]
+                    d[modeltype]["rating"][u, i] = x["rating"]
+                    d[modeltype]["progress"][u, i] = x["progress"]
     for k1 in d:
         for k2 in d[k1]:
             d[k1][k2] = torch.tensor(d[k1][k2]).to(device)

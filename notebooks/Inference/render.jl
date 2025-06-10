@@ -189,7 +189,7 @@ end
             "medium" => medium,
             "matchedid" => -1,
             "distinctid" => -1,
-            "status" => -1,
+            "status" => 0,
             "rating" => 0,
             "progress" => 0,
         )
@@ -205,7 +205,7 @@ end
                 "medium" => medium,
                 "matchedid" => df.matchedid[i],
                 "distinctid" => df.distinctid[i],
-                "status" => -1,
+                "status" => 0,
                 "rating" => 0,
                 "progress" => 0,
             )
@@ -304,8 +304,8 @@ function ranking(state, idxs)
         source = state["users"][i]["source"]
         test_items = []
         ranking_items = get_ranking_items(m, source)
-        for i in idxs
-            item = copy(ranking_items[i-1])
+        for idx in idxs
+            item = copy(ranking_items[idx-1])
             item["history_max_ts"] = ts
             push!(test_items, item)
         end

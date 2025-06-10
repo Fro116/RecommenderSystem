@@ -69,18 +69,3 @@ export const SOURCE_MAP: Record<SourceType, string> = {
   Kitsu: 'kitsu',
   'Anime-Planet': 'animeplanet',
 };
-
-export const backgroundImages: Record<"loading_main" | "loading_backup" | "notfound_main" | "notfound_backup", string[]> = {
-  loading_main: Array.from({ length: 31 }, (_, i) =>
-    `https://cdn.recs.moe/images/backgrounds/loading_main/${i + 1}.large.webp`
-  ),
-  loading_backup: Array.from({ length: 45 }, (_, i) =>
-    `https://cdn.recs.moe/images/backgrounds/loading_backup/${i + 1}.large.webp`
-  ),
-  notfound_main: Array.from({ length: 51 }, (_, i) =>
-    `https://cdn.recs.moe/images/backgrounds/notfound_main/${i + 1}.large.webp`
-  ),
-  notfound_backup: Array.from({ length: 20 }, (_, i) =>
-    `https://cdn.recs.moe/images/backgrounds/notfound_backup/${i + 1}.large.webp`
-  ),
-};

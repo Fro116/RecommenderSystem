@@ -235,11 +235,6 @@ class TransformerModel(nn.Module):
         else:
             assert False
 
-    def shift_left(self, x):
-        y = torch.zeros_like(x)
-        y[..., :-1] = x[..., 1:]
-        return y
-
     def shift_right(self, x):
         y = torch.zeros_like(x)
         y[..., 1:] = x[..., :-1]
@@ -248,9 +243,9 @@ class TransformerModel(nn.Module):
     def split_tokens(self, d):
         item_tokens = {}
         action_tokens = {}
-        userid_mask = d["userid"] == self.shift_left(d["userid"])
+        userid_mask = d["userid"] == self.shift_right(d["userid"])
         for k, v in d.items():
-            if k in ["userid", "rope_input_pos"]:
+            if k in ["userid", "rope_input_pos", "token_mask_ids"]:
                 item_tokens[k] = v
                 action_tokens[k] = v
             elif (
@@ -325,8 +320,12 @@ class TransformerModel(nn.Module):
                 rope_input_pos = self.interleave(
                     2*d["action_tokens"]["rope_input_pos"], 2*d["item_tokens"]["rope_input_pos"]+1
                 )
+                token_mask_ids = self.interleave(
+                    d["action_tokens"]["token_mask_ids"], d["item_tokens"]["token_mask_ids"]
+                )
             else:
                 rope_input_pos = None
+                token_mask_ids = torch.zeros_like(userid)
             # attention_masks
             m, n = userid.shape
 
@@ -336,7 +335,10 @@ class TransformerModel(nn.Module):
             def causal_mask(b, h, q_idx, kv_idx):
                 return q_idx >= kv_idx
 
-            maskfn = and_masks(document_mask, causal_mask)
+            def token_mask(b, h, q_idx, kv_idx):
+                return (token_mask_ids[b][kv_idx] == 0) | (token_mask_ids[b][q_idx] == token_mask_ids[b][kv_idx])
+
+            maskfn = and_masks(document_mask, causal_mask, token_mask)
             block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
             e = self.transformers(e, block_mask, rope_input_pos)
             return e

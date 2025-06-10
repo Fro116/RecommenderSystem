@@ -1,8 +1,16 @@
 // src/NotFoundPage.tsx
 import React, { useState, useEffect } from 'react'; // Import useState and useEffect
 import { useNavigate } from 'react-router-dom';
-import { backgroundImages } from './types';
 import './App.css';
+
+const backgroundImages: Record<"loading" | "notfound", string[]> = {
+  loading: Array.from({ length: 23 }, (_, i) =>
+    `https://cdn.recs.moe/images/backgrounds/loading/${i + 1}.large.webp`
+  ),
+  notfound: Array.from({ length: 35 }, (_, i) =>
+    `https://cdn.recs.moe/images/backgrounds/notfound/${i + 1}.large.webp`
+  ),
+};
 
 const NotFoundPage: React.FC = () => {
   const navigate = useNavigate();
@@ -13,14 +21,10 @@ const NotFoundPage: React.FC = () => {
     document.title = 'Page Not Found | Recs☆Moe';
     const r = Math.random();
     let bgImages: string[];
-    if (r < 0.9 * 0.99) {
-      bgImages = backgroundImages.notfound_main;
-    } else if (r < 0.9) {
-      bgImages = backgroundImages.notfound_backup;
-    } else if (r < 0.9 + 0.1 * 0.99) {
-      bgImages = backgroundImages.loading_main;
+    if (r < 0.9) {
+      bgImages = backgroundImages.notfound;
     } else {
-      bgImages = backgroundImages.loading_backup;
+      bgImages = backgroundImages.loading;
     }
     const randomBgIndex = Math.floor(Math.random() * bgImages.length);
     setCurrentBgImage(bgImages[randomBgIndex]);
