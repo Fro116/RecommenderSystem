@@ -1,6 +1,6 @@
 // src/NotFoundPage.tsx
-import React, { useState, useEffect } from 'react'; // Import useState and useEffect
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import './App.css';
 
 const backgroundImages: Record<"loading" | "notfound", string[]> = {
@@ -14,11 +14,22 @@ const backgroundImages: Record<"loading" | "notfound", string[]> = {
 
 const NotFoundPage: React.FC = () => {
   const navigate = useNavigate();
-  const [currentBgImage, setCurrentBgImage] = useState<string>('');
+  const location = useLocation();
+  const [bgImageUrls, setBgImageUrls] = useState<string[]>([]);
+  const [isPortrait, setIsPortrait] = useState(window.innerHeight > window.innerWidth);
+
+  const isItemPath = location.pathname.startsWith('/item/');
 
   useEffect(() => {
+    const handleResize = () => setIsPortrait(window.innerHeight > window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    const pageTitle = isItemPath ? 'Feature In Development' : 'Page Not Found';
     const originalTitle = document.title;
-    document.title = 'Page Not Found | Recs☆Moe';
+    document.title = `${pageTitle} | Recs☆Moe`;
     const r = Math.random();
     let bgImages: string[];
     if (r < 0.9) {
@@ -26,42 +37,61 @@ const NotFoundPage: React.FC = () => {
     } else {
       bgImages = backgroundImages.loading;
     }
-    const randomBgIndex = Math.floor(Math.random() * bgImages.length);
-    setCurrentBgImage(bgImages[randomBgIndex]);
+
+    const numImages = isPortrait ? 4 : 1;
+    const shuffled = [...bgImages].sort(() => 0.5 - Math.random());
+    setBgImageUrls(shuffled.slice(0, numImages));
+
     const metaRobots = document.createElement('meta');
     metaRobots.name = 'robots';
     metaRobots.content = 'noindex';
     document.head.appendChild(metaRobots);
+
     return () => {
       document.title = originalTitle;
       if (document.head.contains(metaRobots)) {
         document.head.removeChild(metaRobots);
       }
-    };  
-  }, []);
+    };
+  }, [isItemPath, isPortrait]);
 
   const handleTextClick = () => {
     navigate('/');
   };
 
   return (
-    <div
-      className="not-found-container"
-      style={{ backgroundImage: currentBgImage ? `url('${currentBgImage}')` : 'none' }}
-    >
-      <div
-        className="not-found-text-content"
-        onClick={handleTextClick}
-        role="button"
-        tabIndex={0}
-        onKeyPress={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            handleTextClick();
-          }
-        }}
-      >
-        <h1 className="not-found-title">404</h1>
-        <p className="not-found-message">Page not found. Return to home.</p>
+    <div className="not-found-container">
+      <div className="not-found-background-stack">
+        {bgImageUrls.map((url, index) => (
+          <div
+            key={index}
+            className="not-found-background-image"
+            style={{ backgroundImage: `url('${url}')` }}
+          />
+        ))}
+      </div>
+      <div className="not-found-content-overlay">
+        <div
+          className="not-found-text-content"
+          onClick={handleTextClick}
+          role="button"
+          tabIndex={0}
+          onKeyPress={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') handleTextClick();
+          }}
+        >
+        {isItemPath ? (
+          <>
+            <h1 className="not-found-title">Coming Soon</h1>
+            <p className="not-found-message">This feature is currently in development. Stay tuned for updates!</p>
+          </>
+        ) : (
+          <>
+            <h1 className="not-found-title">404</h1>
+            <p className="not-found-message">Page not found. Return to home.</p>
+          </>
+        )}
+        </div>
       </div>
     </div>
   );

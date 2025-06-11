@@ -23,3 +23,10 @@ CREATE TABLE autocomplete_users (
     data BYTEA
 );
 CREATE UNIQUE INDEX autocomplete_users_source_prefix_idx ON autocomplete_users (source, prefix);
+
+CREATE TABLE autocomplete_items (
+    medium INT,
+    prefix TEXT,
+    data BYTEA
+);
+CREATE UNIQUE INDEX autocomplete_items_medium_prefix_idx ON autocomplete_items (medium, prefix);

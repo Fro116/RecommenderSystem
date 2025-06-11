@@ -73,30 +73,186 @@ Oxygen.@post "/autocomplete" function autocomplete(r::HTTP.Request)::HTTP.Respon
         encoding = :gzip
     end
     d = decode(r)
+    if d["type"] == "user"
+        return autocomplete_user(d, encoding)
+    elseif d["type"] == "item"
+        return autocomplete_item(d, encoding)
+    else
+        return HTTP.Response(400, [])
+    end
+end
+
+function autocomplete_user(d::Dict, encoding)::HTTP.Response
+    prefix = lowercase(sanitize(d["prefix"]))
+    d = Dict(
+        "source" => d["source"],
+        "prefix" => prefix,
+        "type" => d["type"],
+    )
     r_ac = HTTP.post(
         "$DATABASE_READ_URL/read_autocomplete",
-        encode(
-            Dict(
-                "source" => d["source"],
-                "prefix" => lowercase(sanitize(d["prefix"])),
-                "type" => d["type"],
-            ),
-            :msgpack,
-        )...,
+        encode(d, :msgpack)...,
         status_exception = false,
     )
     if HTTP.iserror(r_ac)
-        acs = []
+        ret = []
     else
         d_ac = decode(r_ac)
         acs = decompress(d_ac["data"])
-        for x in acs
-            x["matched"] = fill(false, length(x["username"]))
-            x["matched"][1:length(d["prefix"])] .= true
+        ret = []
+        for y in acs
+            x = Dict()
+            x["avatar"] = y["avatar"]
+            x["username"] = y["username"]
+            x["matched"] = fill(false, length(y["username"]))
+            x["matched"][1:length(prefix)] .= true
             x["missing_avatar"] = "https://s4.anilist.co/file/anilistcdn/user/avatar/large/default.png"
+            x["age"] = nothing
+            if !isnothing(y["birthday"])
+                age = round(floor(time() - y["birthday"]) / 86400 / 365)
+                if (age > 0 && age < 100)
+                    x["age"] = age
+                end
+            end
+            gender_map = Dict(0 => "Male", 1 => "Female", 2 => "Nonbinary")
+            x["gender"] = get(gender_map, y["gender"], nothing)
+            x["joined"] = nothing
+            if !isnothing(y["created_at"])
+                joinyear = Dates.year(Dates.unix2datetime(y["created_at"]))
+                if joinyear >= 2000 && joinyear <= Dates.year(Dates.now())
+                    x["joined"] = joinyear
+                end
+            end
+            x["last_online"] = nothing
+            inactivity_secs = 86400 * 365
+            if !isnothing(y["last_online"])
+                if time() - y["last_online"] < inactivity_secs
+                    x["last_online"] = "Now"
+                else
+                    lastonline_year = Dates.year(Dates.unix2datetime(y["last_online"]))
+                    if lastonline_year >= 2000 && lastonline_year <= Dates.year(Dates.now())
+                        x["last_online"] = lastonline_year
+                    end
+                end
+            else
+                x["last_online"] = nothing
+            end
+            push!(ret, x)
         end
     end
-    ret = Dict("prefix" => d["prefix"], "autocompletes" => acs)
+    ret = Dict("prefix" => d["prefix"], "autocompletes" => ret)
+    HTTP.Response(200, encode(ret, :json, encoding)...)
+end
+
+@memoize function get_autocomplete_items_map(medium::Integer)
+    m = Dict(0 => "manga", 1 => "anime")[medium]
+    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String, ntasks = 1)
+    seen = Set()
+    records = []
+    for i = 1:DataFrames.nrow(df)
+        k = df.matchedid[i]
+        if k == 0 || k ∈ seen
+            continue
+        end
+        push!(seen, k)
+        if !ismissing(df.title[i])
+            r = (df.source[i], df.itemid[i], df.matchedid[i], df.title[i])
+            push!(records, r)
+        end
+        if !ismissing(df.english_title[i])
+            r = (
+                df.source[i],
+                df.itemid[i],
+                df.matchedid[i],
+                df.english_title[i],
+            )
+            push!(records, r)
+        end
+        if !ismissing(df.alternative_titles[i])
+            for t in JSON3.read(df.alternative_titles[i])
+                r = (df.source[i], df.itemid[i], df.matchedid[i], t)
+                push!(records, r)
+            end
+        end
+    end
+    ret = Dict()
+    seen_ret = Set()
+    for (source, itemid, matchedid, title) in records
+        seen_k = (source, itemid, lowercase(title))
+        if seen_k in seen_ret
+            continue
+        end
+        push!(seen_ret, seen_k)
+        k = (source, itemid)
+        if k ∉ keys(ret)
+            ret[k] = []
+        end
+        push!(ret[k], (matchedid, title))
+    end
+    ret
+end
+
+function autocomplete_item(d::Dict, encoding)::HTTP.Response
+    prefix = lowercase(lstrip(d["prefix"]))
+    args = Dict(
+        "medium" => Dict("Manga" => 0, "Anime" => 1)[d["medium"]],
+        "prefix" => prefix,
+        "type" => d["type"],
+    )
+    r_ac = HTTP.post(
+        "$DATABASE_READ_URL/read_autocomplete",
+        encode(args, :msgpack)...,
+        status_exception = false,
+    )
+    if HTTP.iserror(r_ac)
+        ret = []
+    else
+        ret = []
+        d_ac = decode(r_ac)
+        acs = decompress(d_ac["data"])
+        titlemap = get_autocomplete_items_map(args["medium"])
+        for (source, itemid, title, _) in acs
+            k = (source, itemid)
+            if k ∉ keys(titlemap)
+                continue
+            end
+            for (matchedid, alt_title) in titlemap[k]
+                if title != lowercase(alt_title)
+                    continue
+                end
+                matched = fill(false, length(alt_title))
+                match = findfirst(prefix, lowercase(alt_title))
+                for (i, idx) in Iterators.enumerate(eachindex(alt_title))
+                    if idx == match[1]
+                        matched[i:i+length(prefix)-1] .= true
+                    end
+                end
+                card = get(get_media_info(args["medium"]), matchedid, nothing)
+                if isnothing(card)
+                    continue
+                end
+                if !isnothing(card["images"])
+                    image = first(card["images"])
+                else
+                    image = first(card["missing_images"])
+                end
+                entry = Dict(
+                    "matchedid" => matchedid,
+                    "matched_title" => alt_title,
+                    "matched" => matched,
+                    "title" => card["title"],
+                    "image" => image,
+                    "mediatype" => card["type"],
+                    "startdate" => card["startdate"],
+                    "enddate" => card["enddate"],
+                    "episodes" => card["episodes"],
+                    "chapters" => card["chapters"],
+                )
+                push!(ret, entry)
+            end
+        end
+    end
+    ret = Dict("prefix" => d["prefix"], "autocompletes" => ret)
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
@@ -279,12 +435,23 @@ function compile(port::Integer)
         HTTP.post(
             "http://localhost:$PORT/autocomplete",
             encode(
-                Dict("source" => source, "prefix" => lowercase(username), "type" => "user"),
+                Dict("source" => source, "prefix" => username, "type" => "user"),
                 :json,
                 :gzip,
             )...,
             status_exception = false,
         )
+        for m in ["Manga", "Anime"]
+            HTTP.post(
+                "http://localhost:$PORT/autocomplete",
+                encode(
+                    Dict("medium" => m, "prefix" => username[1:1], "type" => "item"),
+                    :json,
+                    :gzip,
+                )...,
+                status_exception = false,
+            )
+        end
         logtag("STARTUP", "/add_user")
         apply_action(Dict("type" => "add_user", "source" => source, "username" => username))
         logtag("STARTUP", "/refresh_user")

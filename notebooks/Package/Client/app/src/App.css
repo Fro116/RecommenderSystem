@@ -75,6 +75,8 @@ header input:hover {
   top: 100%;
   left: 0;
   width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
   background: #fff;
   border: 1px solid #ccc;
   border-top: none;
@@ -85,10 +87,11 @@ header input:hover {
 
 .autocomplete-item {
   display: flex;
-  align-items: center;
+  align-items: center; /* Changed to center for vertical alignment */
   padding: 10px 16px;
   cursor: pointer;
   font-size: 18px;
+  text-align: left;
 }
 
 .autocomplete-item:hover {
@@ -100,7 +103,6 @@ header input:hover {
   height: 32px;
   margin-right: 10px;
   object-fit: cover;
-  /* Ensures the image covers the square without being stretched */
 }
 
 .autocomplete-match {
@@ -111,6 +113,45 @@ header input:hover {
 .autocomplete-unmatch {
   font-weight: bold;
   color: #FB8C00;
+}
+
+.autocomplete-avatar-user {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  margin-right: 16px;
+}
+
+.autocomplete-avatar-item {
+  height: 72px; /* Increased height to match 3 lines of text */
+  width: auto;
+  object-fit: cover;
+  border-radius: 4px;
+  margin-right: 16px;
+}
+
+/* STYLES for Autocomplete Item Text */
+.autocomplete-item-text-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.autocomplete-title {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.autocomplete-metadata {
+  font-size: 15px;
+  color: #777;
+  margin-top: 2px;
+}
+
+.autocomplete-matched {
+  font-size: 15px;
+  margin-top: 2px;
 }
 
 
@@ -185,6 +226,112 @@ header input:hover {
 .flip-all-button.selected:hover {
   border-color: #FB8C00;
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+}
+
+/* Query Mode Dropdown Button */
+.query-mode-button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 0;
+  background-color: #e0e0e0;
+  border: 1px solid #ccc;
+  color: #333333;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  overflow: hidden;
+}
+
+.query-mode-button:hover {
+  border-color: #FB8C00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+}
+
+.query-mode-button-title {
+  flex: 0 0 220px;
+  padding: 10px 16px;
+  font-size: 16px;
+  font-weight: bold;
+  background-color: #ffffff;
+  color: #fff;
+  text-align: center;
+}
+
+.query-mode-button-description {
+  flex-grow: 1;
+  padding: 10px 16px;
+  font-size: 15px;
+  color: #333;
+  text-align: left;
+  border-left: 1px solid #ccc;
+}
+
+.query-mode-button-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+}
+
+/* Query Mode Dropdown List */
+.query-mode-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background-color: #e0e0e0;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.query-mode-item {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  border-bottom: 1px solid #eee;
+}
+
+.query-mode-item:last-child {
+  border-bottom: none;
+}
+
+.query-mode-item:hover {
+  background-color: #f0f0f0;
+}
+
+.query-mode-item.active .query-mode-description {
+  background-color: #F48FB1;
+  color: #fff;
+  border-left-color: #F48FB1; /* Blend the separator line */
+}
+
+.query-mode-title {
+  flex: 0 0 220px;
+  padding: 10px 16px;
+  font-size: 16px;
+  font-weight: bold;
+  background-color: #ffffff;
+  color: #333;
+  text-align: center;
+}
+
+.query-mode-description {
+  flex-grow: 1;
+  padding: 10px 16px;
+  font-size: 15px;
+  color: #333;
+  text-align: left;
+  border-left: 1px solid #ccc;
+  margin-top: 0;
 }
 
 /* Source buttons */
@@ -492,13 +639,39 @@ header input:hover {
   justify-content: center;
 }
 
+.search-container {
+  position: relative;
+  width: 80%;
+  margin: 0 auto;
+}
+
+.mode-dropdown-container {
+  width: 80%;
+  margin: 10px auto 0;
+  text-align: center;
+}
+
 /* Responsive tweaks */
 @media (max-width: 600px) {
+  header {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .search-container {
+    width: 100%;
+    padding: 0 26px;
+  }
+
+  .mode-dropdown-container {
+    width: 100%;
+    padding: 0 26px;
+  }
+
   header input {
     width: 100%;
   }
-  
-  /* Added extra horizontal padding between source buttons and screen edges */
+
   .source-buttons {
     padding: 0 20px;
   }
@@ -511,6 +684,31 @@ header input:hover {
   .toggle-button {
     font-size: 12px;
     padding: 6px 12px;
+  }
+
+  .query-mode-button-title {
+    flex-basis: 30%;
+  }
+
+  .query-mode-button-description {
+    font-size: 15px;
+  }
+
+  .query-mode-list .query-mode-title {
+    flex-basis: 30%; /* Ensure dropdown items match the button on mobile */
+  }
+
+  .autocomplete-container {
+    max-height: 45dvh;
+  }
+
+  .autocomplete-title {
+    font-size: 16px;
+  }
+
+  .autocomplete-metadata,
+  .autocomplete-matched {
+    font-size: 13px;
   }
 }
 
@@ -556,30 +754,49 @@ header input:hover {
 
 /* 404 Page */
 .not-found-container {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden; /* No scrolling on desktop */
+}
+
+.not-found-background-stack {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.not-found-background-image {
+  width: 100%;
+  height: 100%; /* The single tile on desktop fills the container */
+  background-size: cover;
+  background-position: center;
+}
+
+.not-found-content-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  flex-grow: 1;
   padding: 40px;
-  height: 100%;
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  position: relative;
-  z-index: 0;
 }
 
-.not-found-container::before {
+.not-found-content-overlay::before {
   content: '';
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: rgba(0, 0, 0, 0.5);
-  z-index: -1;
+  background-color: rgba(0, 0, 0, 0.5); /* The dark overlay */
+  z-index: 1;
 }
 
 .not-found-text-content {
@@ -588,6 +805,8 @@ header input:hover {
   outline: none;
   text-align: center;
   color: #ffffff;
+  position: relative; /* Ensure text is on top of the overlay */
+  z-index: 2;
   transition: color 0.2s ease-in-out;
 }
 
@@ -596,7 +815,7 @@ header input:hover {
 }
 
 .not-found-text-content .not-found-title {
-  font-size: 7em;
+  font-size: clamp(5em, 22vw, 7em);
   font-weight: bold;
   color: #F48FB1;
   margin-top: 0;
@@ -619,4 +838,19 @@ header input:hover {
   line-height: 1.2;
   position: relative;
   z-index: 1;
+}
+
+/* 404 Page - Portrait Orientation Styles */
+@media (orientation: portrait) {
+  .not-found-background-stack {
+    overflow-y: scroll;
+    scrollbar-width: none;
+  }
+  .not-found-background-stack::-webkit-scrollbar {
+    display: none;
+  }
+  .not-found-background-image {
+    height: auto;
+    padding-top: 56.25%; /* Use 16:9 aspect-ratio box for the 4 tiles */
+  }
 }

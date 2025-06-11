@@ -36,10 +36,10 @@ function save_profiles()
             ts = parse(Float64, df.db_refreshed_at[i])
             data = decompress(df.data[i])
             user = import_profile(df.source[i], data, ts)
-            r = (user["source"], user["username"], ts, user["avatar"])
+            r = (user["source"], user["username"], ts, user["avatar"], user["last_online"], user["gender"], user["birthday"], user["created_at"])
             records[i] = r
         end
-        df = DataFrames.DataFrame(records, [:source, :username, :accessed_at, :avatar])
+        df = DataFrames.DataFrame(records, [:source, :username, :accessed_at, :avatar, :last_online, :gender, :birthday, :created_at])
         CSV.write(
             "$datadir/profiles.$idx.csv",
             df,
@@ -151,6 +151,10 @@ function save_user_autcompletes()
             "username" => df.username[i],
             "avatar" => df.avatar[i],
             "accessed_at" => df.accessed_at[i],
+            "last_online" => df.last_online[i],
+            "gender" => df.gender[i],
+            "birthday" => df.birthday[i],
+            "created_at" => df.created_at[i],
         )
     end
     acs = Dict(v => AutoComplete(d[v]) for v in values(source_map))
@@ -173,7 +177,7 @@ function save_user_autcompletes()
                 end
                 push!(seen[source], prefix)
                 vals = autocomplete(acs[source], prefix, 10; sortcol = "accessed_at")
-                vals = [Dict(k => x[2][k] for k in ["username", "avatar"]) for x in vals]
+                vals = [Dict(k => x[2][k] for k in ["username", "avatar", "last_online", "gender", "birthday", "created_at"]) for x in vals]
                 push!(records, (s, prefix, text_encode(vals)))
             end
         end
@@ -183,8 +187,7 @@ function save_user_autcompletes()
 end
 
 function upload_autocompletes()
-    cmd = "chmod +x ./save_autocomplete.sh && ./save_autocomplete.sh"
-    qrun(`sh -c $cmd`)
+    qrun(`./save_autocomplete.sh`)
 end
 
 import_data()
