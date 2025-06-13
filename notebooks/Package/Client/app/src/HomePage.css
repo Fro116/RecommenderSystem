@@ -1,0 +1,88 @@
+/* HomePage specific styles */
+.container.homepage { height: calc(var(--vh, 1vh) * 100); overflow-y: hidden; }
+/* Source buttons */
+.source-buttons {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.source-button {
+  padding: 10px 24px;
+  margin: 6px;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background-color: #e0e0e0;
+  color: #333333;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.source-button:hover {
+  border-color: #FB8C00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+}
+
+.source-button.selected {
+  background-color: #F48FB1;
+  color: #fff;
+  border-color: #ccc;
+}
+
+.source-button.selected:hover {
+  border-color: #FB8C00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+}
+
+/* Footer */
+.home-overlay {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 20px;
+  background-color: rgba(250, 250, 250, 0.95);
+  text-align: center;
+  font-size: 16px;
+  color: #333;
+  z-index: 10;
+  font-weight: normal;
+  margin: 0;
+}
+
+/* Error banner - HomePage also has an error banner */
+.error-banner {
+  background-color: #fdecea;
+  color: #611a15;
+  padding: 10px 20px;
+  border-radius: 8px;
+  margin: 12px auto;
+  max-width: 600px;
+  border: 1px solid #f5c6cb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.error-banner button {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  cursor: pointer;
+  color: #611a15;
+  line-height: 1;
+}
+
+@media (max-width: 600px) {
+  .source-buttons {
+    padding: 0 20px;
+  }
+
+  .source-button {
+    flex: 1 1 45%;
+    margin: 6px;
+  }
+}

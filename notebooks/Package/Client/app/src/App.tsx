@@ -4,7 +4,7 @@ import { Routes, Route, useLocation } from 'react-router-dom';
 import HomePage from './HomePage';
 import ViewPage from './ViewPage';
 import NotFoundPage from './NotFoundPage';
-import './App.css';
+import './Global.css';
 import {
     enable as enableDarkMode,
     disable as disableDarkMode,

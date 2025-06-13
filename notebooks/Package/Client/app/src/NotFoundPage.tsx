@@ -1,7 +1,7 @@
+import './NotFoundPage.css';
 // src/NotFoundPage.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import './App.css';
 
 const backgroundImages: Record<"loading" | "notfound", string[]> = {
   loading: Array.from({ length: 23 }, (_, i) =>

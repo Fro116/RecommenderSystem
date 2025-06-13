@@ -1,8 +1,9 @@
+import './Header.css';
+import './HomePage.css';
 // src/HomePage.tsx
 import React, { useState, useEffect, useRef, FormEvent, ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SourceType, AutocompleteItem, API_BASE, SOURCE_MAP } from './types';
-import './App.css';
 
 type QueryMode = 'user' | 'item';
 type ItemType = 'anime' | 'manga';

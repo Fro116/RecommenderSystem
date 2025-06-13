@@ -1,3 +1,4 @@
+import './CardImage.css';
 // src/components/CardImage.tsx
 import React, { useState, useEffect } from 'react';
 import { Result, getBiggestImageUrl } from '../types'; // Import types and helper

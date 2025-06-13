@@ -91,8 +91,7 @@ end
 function autocomplete(
     ac::AutoComplete{V},
     prefix::String,
-    N::Int;
-    sortcol::Union{Nothing,String} = nothing,
+    N::Int
 ) where {V}
     current = ac.root
     for c in prefix
@@ -115,9 +114,7 @@ function autocomplete(
                 push!(next_queue, (child, path * string(c)))
             end
         end
-        if sortcol !== nothing
-            sort!(level_results, by = x -> x[2][sortcol], rev = true)
-        end
+        sort!(level_results, by = x -> x[2]["sortkey"], rev = true)
         for tup in level_results
             push!(results, tup)
             if length(results) == N
@@ -155,6 +152,7 @@ function save_user_autcompletes()
             "gender" => df.gender[i],
             "birthday" => df.birthday[i],
             "created_at" => df.created_at[i],
+            "sortkey" => (!isnothing(df.avatar[i]) && !ismissing(df.avatar[i]), df.accessed_at[i]),
         )
     end
     acs = Dict(v => AutoComplete(d[v]) for v in values(source_map))
@@ -176,7 +174,7 @@ function save_user_autcompletes()
                     continue
                 end
                 push!(seen[source], prefix)
-                vals = autocomplete(acs[source], prefix, 10; sortcol = "accessed_at")
+                vals = autocomplete(acs[source], prefix, 10)
                 vals = [Dict(k => x[2][k] for k in ["username", "avatar", "last_online", "gender", "birthday", "created_at"]) for x in vals]
                 push!(records, (s, prefix, text_encode(vals)))
             end

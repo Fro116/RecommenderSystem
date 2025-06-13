@@ -1,11 +1,12 @@
 // src/ViewPage.tsx
+import './Header.css';
+import './ViewPage.css';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import pako from 'pako';
 import { Result, CardType, MediaTypePayload, Payload, AddUserPayload, getBiggestImageUrl, UPDATE_URL } from './types';
 import CardImage from './components/CardImage';
 import ManualScrollDiv from './components/ManualScrollDiv';
-import './App.css';
 
 interface ViewPageProps {
   isMobile: boolean;
@@ -247,15 +248,19 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
     setFlipState('none');
   };
 
-  const handleMediaTypeChange = (type: CardType) => {
-    if (type === cardType || isLoading || loadingMore || !apiState) return;
-    setCardType(type);
-    setShowSynopsis({});
-    const payload: MediaTypePayload = { state: apiState, action: { type: 'set_media', medium: type } };
-    fetchResults(payload, 0, false, false);
+  const toggleMediaType = () => {
+    // Guard against toggling while a fetch is in progress.
+    if (isLoading || loadingMore || !apiState) return;
+
+    // Determine the new type by flipping the current one.
+    const newType = cardType === 'Anime' ? 'Manga' : 'Anime';
+
+    // Set the new state and fetch the results for the new type.
+    setCardType(newType);
+    setShowSynopsis({}); // Reset synopsis view on toggle
+    fetchResults({ state: apiState, action: { type: 'set_media', medium: newType } }, 0, false, false);
   };
 
-  // Updated handleFlipToggle with delayed clearing of synopsis for a smooth transition:
   const handleFlipToggle = (e: React.MouseEvent<HTMLButtonElement>) => {
     let newState: 'none' | 'selected-details' | 'selected-synopsis';
     const newMapping: { [index: number]: number } = {};
@@ -357,40 +362,60 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
 
   const isLoadingMediaType = isLoading && !loadingMore && results.length > 0;
 
+  // Determine the text for the flip button based on the current state.
+  let flipButtonText = "Show Titles";
+  if (flipState === 'selected-details') {
+    flipButtonText = "Show Synopsis";
+  } else if (flipState === 'selected-synopsis') {
+    flipButtonText = "Show Thumbnails";
+  }
+
+  // Generate profile URL based on the source
+  let profileUrl = '';
+  if (source === 'mal') {
+    profileUrl = `https://myanimelist.net/profile/${username}`;
+  } else if (source === 'anilist') {
+    profileUrl = `https://anilist.co/user/${username}`;
+  } else if (source === 'animeplanet') {
+    profileUrl = `https://www.anime-planet.com/users/${username}`;
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       {/* Header */}
       <header className="header--toggle">
         <div className="header-toggle">
-          <button
-            className={`header-toggle-button ${cardType === 'Anime' ? 'selected' : ''}`}
-            onClick={() => handleMediaTypeChange('Anime')}
-            disabled={isLoading || loadingMore}
-          >
-            Anime
-          </button>
-          <button
-            className={`header-toggle-button ${cardType === 'Manga' ? 'selected' : ''}`}
-            onClick={() => handleMediaTypeChange('Manga')}
-            disabled={isLoading || loadingMore}
-          >
-            Manga
-          </button>
+          <div className="recommendations-title">
+            <h2>
+              <Link to="/" className="recsmoe-brand-link">Recs☆Moe</Link>'s picks for{' '}
+              {profileUrl ? (
+                <a href={profileUrl} target="_blank" rel="noopener noreferrer" className="profile-link">
+                  {username}
+                </a>
+              ) : (
+                <span className="profile-no-link">{username}</span>
+              )}
+            </h2>
+          </div>
+          <div className="media-toggle" onClick={toggleMediaType}>
+            <div
+              className={`toggle-option ${cardType === 'Anime' ? 'active' : ''}`}
+            >
+              Anime
+            </div>
+            <div
+              className={`toggle-option ${cardType === 'Manga' ? 'active' : ''}`}
+            >
+              Manga
+            </div>
+            <div className={`toggle-slider ${cardType}`}></div>
+          </div>
           <button
             className={`flip-all-button ${flipState !== 'none' ? 'selected' : ''}`}
             onClick={handleFlipToggle}
             disabled={isLoading || loadingMore}
           >
-            <img
-              src={
-                flipState === 'selected-details'
-                  ? '/flip-icon-details.webp'
-                  : flipState === 'selected-synopsis'
-                  ? '/flip-icon-synopsis.webp'
-                  : '/flip-icon.webp'
-              }
-              alt="Flip All Cards"
-            />
+            {flipButtonText}
           </button>
         </div>
       </header>

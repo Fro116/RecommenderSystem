@@ -1,0 +1,24 @@
+/* Global styles */
+/* Global resets */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #fafafa;
+}
+
+/* Container - This might be global or App.tsx specific */
+.container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.container.homepage { /* Specific to homepage, move to HomePage.css */
+  height: calc(var(--vh, 1vh) * 100);
+  overflow-y: hidden;
+}

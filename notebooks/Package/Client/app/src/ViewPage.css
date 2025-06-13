@@ -1,0 +1,251 @@
+/* ViewPage.css */
+header.header--toggle { padding: 10px 20px 0; }
+.header-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  margin-bottom: 10px;
+}
+
+.recommendations-title {
+  flex-grow: 1;
+  color: #333;
+  text-align: left;
+}
+
+.recommendations-title h2 {
+  font-size: 20px;
+  font-weight: 500;
+  margin: 0;
+}
+
+.recsmoe-brand-link {
+  color: inherit;
+  text-decoration: none;
+  transition: color 0.15s ease;
+  font-weight: 600;
+}
+
+.recsmoe-brand-link:hover {
+  color: #FB8C00;
+  text-decoration: underline;
+}
+
+.profile-link {
+  color: inherit;
+  text-decoration: none;
+  transition: color 0.15s ease;
+  font-weight: 600;
+}
+
+.profile-link:hover {
+  color: #FB8C00;
+  text-decoration: underline;
+}
+
+.profile-no-link {
+  color: #333;
+  font-weight: 600;
+}
+
+/* Redesigned Toggle Switch */
+.media-toggle {
+  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  background-color: #e0e0e0;
+  border-radius: 18px;
+  padding: 2px;
+  border: 1px solid #ccc;
+  height: 36px;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  overflow: hidden; /* Clip the slider to the bounds */
+  cursor: pointer;
+}
+
+.media-toggle:hover {
+  border-color: #FB8C00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+}
+
+.toggle-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  z-index: 2; /* Ensure text is above slider */
+  transition: color 0.3s ease;
+  padding: 0 12px;
+  width: 50%; /* Make clickable area the full half */
+  box-sizing: border-box;
+}
+
+.toggle-option.active {
+  color: #fff;
+}
+
+.toggle-slider {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: calc(50% - 2px);
+  background-color: #F48FB1;
+  border-radius: 16px;
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  z-index: 1; /* Ensure slider is below text */
+}
+
+.toggle-slider.Anime {
+  transform: translateX(0);
+}
+
+.toggle-slider.Manga {
+  transform: translateX(calc(100% + 2px));
+}
+
+/* Redesigned Flip All Button */
+.flip-all-button {
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 15px;
+  cursor: pointer;
+  border: 1px solid #ccc;
+  border-radius: 18px;
+  background-color: #e0e0e0;
+  color: #333333;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  min-width: 155px;
+}
+
+.flip-all-button:hover {
+  border-color: #FB8C00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+}
+
+.flip-all-button:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.flip-all-button.selected {
+  background-color: #F48FB1;
+  color: #fff;
+  border-color: #ccc;
+}
+
+.flip-all-button.selected:hover {
+  border-color: #FB8C00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+}
+
+/* Grid */
+.grid-view {
+  width: 95%;
+  margin: 0 auto;
+  padding-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(275px, 1fr));
+  gap: 16px;
+  scrollbar-width: none;
+}
+
+.grid-view::-webkit-scrollbar {
+  display: none;
+}
+
+.grid-container {
+  flex: 1;
+  width: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.grid-container::-webkit-scrollbar {
+  display: none;
+}
+
+/* Error banner */
+.error-banner {
+  background-color: #fdecea;
+  color: #611a15;
+  padding: 10px 20px;
+  border-radius: 8px;
+  margin: 12px auto;
+  max-width: 600px;
+  border: 1px solid #f5c6cb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.error-banner button {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  cursor: pointer;
+  color: #611a15;
+  line-height: 1;
+}
+
+/* Loading ViewPage */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-grow: 1;
+  padding: 40px;
+  text-align: center;
+  color: #eee;
+}
+
+.loading-spinner {
+  border: 6px solid rgba(243, 243, 243, 0.3);
+  border-top: 6px solid #F48FB1;
+  border-radius: 50%;
+  width: 50px;
+  height: 50px;
+  animation: spin 1s linear infinite;
+  margin-bottom: 20px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-container p {
+  font-size: 1.75em;
+  font-weight: 500;
+  text-shadow: 0px 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+@media (max-width: 600px) {
+  .header-toggle {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+  }
+  .recommendations-title {
+    width: 100%;
+    text-align: center;
+    margin-bottom: 4px;
+    flex-grow: 0;
+  }
+  .recommendations-title h2 {
+    font-size: 18px;
+  }
+}
