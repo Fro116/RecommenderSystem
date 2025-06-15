@@ -126,18 +126,6 @@ function get_idmaps()
     Dict("matched" => matched2source, "source" => source2matched)
 end
 
-function get_media_details()
-    d = Dict()
-    for medium in ["manga", "anime"]
-        df = CSV.read("$datadir/$medium.csv", DataFrames.DataFrame, ntasks=1)
-        for i = 1:DataFrames.nrow(df)
-            k = (df.medium[i], df.matchedid[i])
-            d[k] = Dict("mediatype" => df.mediatype[i])
-        end
-    end
-    d
-end
-
 function get_relations()
     idmaps = get_idmaps()
     medium_map = Dict("manga" => 0, "anime" => 1)
@@ -156,25 +144,6 @@ function get_relations()
                 continue
             end
             push!(relations, (mskey..., mtkey..., df.relation[i]))
-        end
-    end
-    details = get_media_details()
-    manga_types = Set(["Manhwa", "Manhua", "Manga", "OEL", "Doujinshi", "One-shot"])
-    novel_types = Set(["Light Novel", "Novel"])
-    for i = 1:length(relations)
-        m1, id1, m2, id2, r = relations[i]
-        if m1 != m2 && r ∉ ["adaptation", "source"]
-            relations[i] = (m1, id1, m2, id2, "adaptation")
-            continue
-        end
-        if r == "unknown"
-            d1 = details[(m1, id1)]["mediatype"]
-            d2 = details[(m2, id2)]["mediatype"]
-            if d1 in manga_types && d2 in novel_types ||
-               d1 in novel_types && d2 in manga_types
-                relations[i] = (m1, id1, m2, id2, "adaptation")
-                continue
-            end
         end
     end
     DataFrames.DataFrame(
@@ -242,7 +211,7 @@ function import_data(datetag::AbstractString)
     CSV.write("$datadir/media_relations.csv", get_relations())
     gen_splits()
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}"
-    files = vcat(["$m.csv" for m in MEDIUMS], ["list_tag", "images.csv"])
+    files = vcat(["$m.csv" for m in MEDIUMS], ["list_tag", "images.csv", "media_relations.csv"])
     for f in files
         cmd = replace(
             save_template,

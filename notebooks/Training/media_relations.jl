@@ -14,8 +14,49 @@ const datadir = "../../data/training"
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1).matchedid) + 1
 end
 
-function get_relations(source_medium::Int, target_medium::Int, relations)
+function get_media_details()
+    d = Dict()
+    for medium in ["manga", "anime"]
+        df = CSV.read("$datadir/$medium.csv", DataFrames.DataFrame, ntasks=1)
+        for i = 1:DataFrames.nrow(df)
+            k = (df.medium[i], df.matchedid[i])
+            d[k] = Dict("mediatype" => df.mediatype[i])
+        end
+    end
+    d
+end
+
+@memoize function get_media_relations()
     df = CSV.read("$datadir/media_relations.csv", DataFrames.DataFrame, ntasks=1)
+    details = get_media_details()
+    manga_types = Set(["Manhwa", "Manhua", "Manga", "OEL", "Doujinshi", "One-shot"])
+    novel_types = Set(["Light Novel", "Novel"])
+    for i = 1:DataFrames.nrow(df)
+        if df.relation[i] != "unknown"
+            continue
+        end
+        m1 = df.source_medium[i]
+        id1 = df.source_matchedid[i]
+        m2 = df.target_medium[i]
+        id2 = df.target_matchedid[i]
+        if m1 != m2
+            df.relation[i] = "adaptation"
+            continue
+        else
+            d1 = details[(m1, id1)]["mediatype"]
+            d2 = details[(m2, id2)]["mediatype"]
+            if d1 in manga_types && d2 in novel_types ||
+               d1 in novel_types && d2 in manga_types
+                df.relation[i] = "adaptation"
+                continue
+            end
+        end
+    end
+    df
+end
+
+function get_relations(source_medium::Int, target_medium::Int, relations)
+    df = get_media_relations()
     df = filter(
         x ->
             x.source_medium == source_medium &&
@@ -217,7 +258,7 @@ end
 function save_adaptations(medium)
     # M[i, j] = 1 if i is an adaptation of j
     cross_medium = 1 - medium
-    get_relations(medium, cross_medium, Set(["adaptation", "source"]))
+    get_relations(medium, cross_medium, Set(["adaptation", "source", "alternative_version", "parent_story", "side_story"]))
 end
 
 function save_data(m::Int)
@@ -228,7 +269,8 @@ function save_data(m::Int)
     d["$m.adaptations"] = save_adaptations(m)
     fn = "media_relations.$m.jld2"
     JLD2.save("$datadir/$fn", d)
-    template = raw"tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
+    tag = read("$datadir/list_tag", String)
+    template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
     cmd = replace(
         template,
         "{INPUT}" => "$datadir/$fn",

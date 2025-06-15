@@ -7,6 +7,7 @@ import OpenCV
 import ProgressMeter: @showprogress
 import Random
 
+include("../../julia_utils/hash.jl")
 include("../../julia_utils/stdout.jl")
 
 const basedir = "../../.."
@@ -28,26 +29,46 @@ function import_data()
     )
 end
 
+function add_imagehashes()
+    df = CSV.read("$datadir/images.csv", DataFrames.DataFrame)
+    df[!, "imagehash"] .= ""
+    Threads.@threads for i = 1:DataFrames.nrow(df)
+        if !df.saved[i]
+            continue
+        end
+        fn = "$datadir/images/$(df.filename[i])"
+        @assert ispath(fn)
+        df.imagehash[i] = open(fn) do f
+            stringhash(read(f))
+        end
+    end
+    CSV.write("$datadir/images.csv", df)
+end
+
 function get_diffs()
     df = CSV.read("$datadir/images.csv", DataFrames.DataFrame)
+    hashes = Dict{String,String}()
     src_exts = Dict()
     src_images = Set()
     dst_images = Set()
     for i = 1:DataFrames.nrow(df)
         fn = "$datadir/images/$(df.filename[i])"
-        if df.saved[i]
-            @assert ispath(fn)
-        else
+        if !df.saved[i]
             continue
         end
         name, ext = split(df.filename[i], ".")
         src_exts[name] = ext
+        hashes[name] = df.imagehash[i]
         push!(src_images, name)
     end
     if ispath("$datadir/srimages.csv")
         srdf = CSV.read("$datadir/srimages.csv", DataFrames.DataFrame)
         for i = 1:DataFrames.nrow(srdf)
             name, _, _ = split(srdf.filename[i], ".")
+            if srdf.imagehash[i] != get(hashes, name, nothing)
+                logerror("mismatched image hash for $(srdf.source[i]) $(srdf.itemid[i]) $name")
+                continue
+            end
             push!(dst_images, name)
         end
     end
@@ -85,10 +106,18 @@ function super_resolution(src, dst)
         cmds = [
             "cd $basedir/../nunif",
             ". .venv/bin/activate",
-            "python3 -m waifu2x.cli --style art_scan --method $model --noise-level 3 -i $abssrc -o $absdst",
+            "python3 -m waifu2x.cli --style art_scan --method $model --noise-level 3 --batch-size 16 --gpu 0 -i $abssrc -o $absdst",
         ]
         cmd = join(cmds, " && ")
-        qrun(`sh -c $cmd`)
+        for retry in 1:3
+            try
+                run(`sh -c $cmd`)
+                break
+            catch e
+                logerror("error $e when running $cmd")
+                sleep(30)
+            end
+        end
         Threads.@threads for x in Glob.glob("$dst/*.png")
             stem = join(split(x, ".")[1:end-1], ".")
             try
@@ -104,7 +133,7 @@ function sr_images(images)
     tmpdir = "$datadir/tmp"
     rm("$datadir/srimages", recursive=true, force=true)
     mkpath("$datadir/srimages")
-    @showprogress for batch in collect(Iterators.partition(images, 1000))
+    @showprogress for batch in collect(Iterators.partition(images, 1024))
         rm(tmpdir, recursive = true, force = true)
         mkpath("$tmpdir/src")
         mkpath("$tmpdir/dst")
@@ -138,6 +167,7 @@ function save_image_metadata(to_delete)
         source = df.source[i]
         medium = df.medium[i]
         itemid = df.itemid[i]
+        imagehash = df.imagehash[i]
         name, _ = split(df.filename[i], ".")
         for j = 1:length(sizes)
             basename = "$name.$(sizes[j]).webp"
@@ -146,7 +176,7 @@ function save_image_metadata(to_delete)
             end
             height, width = size(Images.load("$datadir/srimages/$basename"))
             rows[length(sizes)*(i-1)+j] =
-                (source, medium, itemid, name, basename, height, width)
+                (source, medium, itemid, name, basename, height, width, imagehash)
         end
     end
     rows = filter(x -> !isnothing(x), rows)
@@ -158,7 +188,7 @@ function save_image_metadata(to_delete)
     if !isempty(rows)
         srdf_to_add = DataFrames.DataFrame(
             rows,
-            [:source, :medium, :itemid, :imageid, :filename, :height, :width],
+            [:source, :medium, :itemid, :imageid, :filename, :height, :width, :imagehash],
         )
         srdf = vcat(srdf, srdf_to_add)
     end
@@ -187,6 +217,7 @@ function encode_images()
     rm(datadir, recursive = true, force = true)
     mkpath(datadir)
     import_data()
+    add_imagehashes()
     matched, to_add, to_delete = get_diffs()
     logtag(
         "IMAGES",
