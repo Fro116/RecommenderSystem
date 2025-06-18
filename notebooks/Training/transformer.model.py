@@ -323,6 +323,7 @@ class TransformerModel(nn.Module):
                 token_mask_ids = self.interleave(
                     d["action_tokens"]["token_mask_ids"], d["item_tokens"]["token_mask_ids"]
                 )
+                # TODO make a binary mask of duplicated item ids, shuffle them to the end, and cut
             else:
                 rope_input_pos = None
                 token_mask_ids = torch.zeros_like(userid)

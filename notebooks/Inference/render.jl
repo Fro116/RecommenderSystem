@@ -8,6 +8,7 @@ const datadir = "../../data/finetune";
 
 const registry = JLD2.load("$datadir/model.registry.jld2")
 const relations = merge([JLD2.load("$datadir/media_relations.$m.jld2") for m in [0, 1]]...)
+const item_similarity = JLD2.load("$datadir/clip.jld2")
 const status_map = Dict(
     "none" => 0,
     "wont_watch" => 1,
@@ -217,19 +218,30 @@ end
 function retrieval(state)
     m = state["medium"]
     p = zeros(Float32, num_items(m))
+    for a in state["items"]
+        am = a["medium"]
+        if m == am
+            x = item_similarity["embeddings.$m"][:, a["matchedid"]+1]
+        else
+            x = item_similarity["embeddings.$am"][:, a["matchedid"]+1]
+            x = item_similarity["crossproject.$am"] * x
+        end
+        p += item_similarity["embeddings.$m"]' * x
+    end
     for u in state["users"]
         p += logsoftmax(
             registry["transformer.masked.$m.watch.weight"] * u["embeds"]["masked.$m"] +
             registry["transformer.masked.$m.watch.bias"],
         )[1:num_items(m)]
+        # TODO incorporate other retrieval sources like ptw items or sequels
     end
+    # skip the default id for longtail items
+    p[1] = -Inf
     for u in state["users"]
         statuses = Dict(0 => Dict(), 1 => Dict())
         for x in u["user"]["items"]
             statuses[x["medium"]][x["matchedid"]+1] = x["status"]
         end
-        # skip the default id for longtail items
-        p[1] = -Inf
         # skip watched items
         for (x, s) in statuses[m]
             if s ∉ [status_map["deleted"], status_map["planned"]]

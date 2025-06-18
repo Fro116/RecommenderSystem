@@ -125,6 +125,7 @@ function get_similar_pairs(medium::Int)
         x -> x.source_matchedid != 0 && x.target_matchedid != 0 && x.count != 0,
         df,
     )
+    df
 end
 
 function get_adaptations(medium::Int)
@@ -133,16 +134,17 @@ function get_adaptations(medium::Int)
         x -> x.source_medium == medium && x.target_medium != medium && x.relation in ["adaptation", "source"],
         df,
     )
-    new_source_ids =
-        ifelse.(df.source_medium .== 0, df.source_matchedid, df.target_matchedid)
-    new_target_ids =
-        ifelse.(df.source_medium .== 0, df.target_matchedid, df.source_matchedid)
-    DataFrames.DataFrame(
+    df = DataFrames.DataFrame(
         cliptype = "adaptation$medium",
-        source_matchedid = new_source_ids,
-        target_matchedid = new_target_ids,
+        source_matchedid = df.source_matchedid,
+        target_matchedid = df.target_matchedid,
         count = 1,
     )
+    df = DataFrames.filter(
+        x -> x.source_matchedid != 0 && x.target_matchedid != 0 && x.count != 0,
+        df,
+    )
+    df
 end
 
 function save_data()
@@ -151,16 +153,23 @@ function save_data()
     display(
         DataFrames.combine(
             DataFrames.groupby(df, :cliptype),
+            :source_matchedid => (x -> length(Set(x))) => "Items",
             DataFrames.nrow => "Pairs",
-            :count => (c -> sum(abs.(c))) => "Votes"
+            :count => (c -> sum(abs.(c))) => "Votes",
         )
     )
     Random.shuffle!(df)
-    test_frac = 0.1
-    mask = rand(DataFrames.nrow(df)) .< test_frac
-    train_df = df[.!mask, :]
+    test_frac = 0.1 # TODO decrease
+    ids = Set()
+    for i in 1:DataFrames.nrow(df)
+        push!(ids, (df.cliptype[i], df.source_matchedid[i]))
+        push!(ids, (df.cliptype[i], df.target_matchedid[i]))
+    end
+    test_ids = Set(x for x in ids if rand() < test_frac)
+    mask = [(x.cliptype, x.source_matchedid) in test_ids || (x.cliptype, x.target_matchedid) in test_ids for x in eachrow(df)]
     test_df = df[mask, :]
-    CSV.write("$datadir/training.csv", train_df)
+    training_df = df[.!mask, :]
+    CSV.write("$datadir/training.csv", training_df)
     CSV.write("$datadir/test.csv", test_df)
 end
 

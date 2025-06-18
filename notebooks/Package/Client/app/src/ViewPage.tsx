@@ -4,7 +4,7 @@ import './ViewPage.css';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import pako from 'pako';
-import { Result, CardType, MediaTypePayload, Payload, AddUserPayload, getBiggestImageUrl, UPDATE_URL } from './types';
+import { Result, CardType, MediaTypePayload, Payload, AddUserPayload, getBiggestImageUrl, UPDATE_URL, AddItemPayload } from './types';
 import CardImage from './components/CardImage';
 import ManualScrollDiv from './components/ManualScrollDiv';
 
@@ -27,7 +27,12 @@ const loadingMessages = [
 const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
   // Hooks and State
   const navigate = useNavigate();
-  const { source, username } = useParams<{ source: string; username: string }>();
+  const { source, username, itemType, itemid } = useParams<{
+    source: string;
+    username?: string;
+    itemType?: 'anime' | 'manga';
+    itemid?: string;
+  }>();
   const [results, setResults] = useState<Result[]>([]);
   const [apiState, setApiState] = useState<string>('');
   const [totalResults, setTotalResults] = useState<number>(0);
@@ -50,34 +55,23 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
     cardRotationRef.current = cardRotation;
   }, [cardRotation]);
 
+  const isUserMode = !!(source && username);
+  const isItemMode = !!(source && itemType && itemid);
+
   useEffect(() => {
     const siteDefaultTitle = document.title;
-    document.title = `${username}'s Room | Recs☆Moe`;
+    if (isUserMode) {
+      document.title = `${username}'s Room | Recs☆Moe`;
+    } else if (isItemMode) {
+      document.title = `Recommendations | Recs☆Moe`;
+    }
     return () => {
       document.title = siteDefaultTitle;
     };
-  }, [source, username]);
+  }, [isUserMode, isItemMode, username]);
+
 
   // --- Functions ---
-  const determineCardTypeFromResult = useCallback(
-    (view: Result[] | undefined, action?: Payload['action']): CardType => {
-      if (view && view.length > 0) {
-        const firstItemType = view[0].type?.toUpperCase();
-        if (['TV', 'MOVIE', 'OVA', 'SPECIAL', 'ONA', 'MUSIC'].includes(firstItemType || ''))
-          return 'Anime';
-        if (
-          ['MANGA', 'NOVEL', 'LIGHT NOVEL', 'ONE-SHOT', 'DOUJINSHI', 'MANHWA', 'MANHUA', 'OEL'].includes(
-            firstItemType || ''
-          )
-        )
-          return 'Manga';
-      }
-      if (action?.type === 'set_media') return action.medium;
-      return 'Anime';
-    },
-    []
-  );
-
   const fetchResults = useCallback(
     (payload: Payload, offset: number = 0, append: boolean = false, isInitialLoad: boolean = false) => {
       if (isInitialLoad) {
@@ -120,7 +114,6 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
           if (!data || data.view === undefined || data.state === undefined || data.total === undefined) {
             throw new Error('Invalid data structure received from server.');
           }
-          const resolvedMedium = (data.medium as CardType) || determineCardTypeFromResult(data.view, payload.action);
           const newResults = data.view;
 
           if (!append && !isInitialLoad) {
@@ -141,7 +134,7 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
           setApiState(data.state);
           setTotalResults(data.total);
           setResults(append ? (prev) => [...prev, ...newResults] : newResults);
-          setCardType(resolvedMedium);
+          setCardType(data.medium);
           setError('');
 
           if (isInitialLoad) setIsLoading(false);
@@ -169,12 +162,10 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
                   followupData.state !== undefined &&
                   followupData.total !== undefined
                 ) {
-                  const followupResolvedMedium =
-                    (followupData.medium as CardType) || determineCardTypeFromResult(followupData.view, followupPayload.action);
                   setApiState(followupData.state);
                   setTotalResults(followupData.total);
                   setResults(followupData.view);
-                  setCardType(followupResolvedMedium);
+                  setCardType(followupData.medium);
                   resetCardStates();
                   gridViewRef.current?.scrollTo(0, 0);
                 } else {
@@ -198,27 +189,42 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
           setLoadingMore(false);
         });
     },
-    [isMobile, determineCardTypeFromResult, flipState]
+    [isMobile, flipState, navigate]
   );
 
   // --- Other useEffects ---
   useEffect(() => {
-    if (initialFetchStartedRef.current || !source || !username) {
-      if (!source || !username) {
-        console.warn('Missing source or username in URL. Redirecting home.');
+    if (initialFetchStartedRef.current) return;
+
+    let payload: Payload | null = null;
+
+    if (isUserMode) {
+        payload = { state: '', action: { type: 'add_user', source: source!, username: username! } };
+    } else if (isItemMode) {
+        payload = {
+            state: '',
+            action: {
+                type: 'add_item',
+                medium: itemType === 'anime' ? 'Anime' : 'Manga',
+                source: source!,
+                itemid: itemid!
+            }
+        };
+    }
+
+    if (payload) {
+        const randomTextIndex = Math.floor(Math.random() * loadingMessages.length);
+        setLoadingText(loadingMessages[randomTextIndex]);
+        initialFetchStartedRef.current = true;
+        fetchResults(payload, 0, false, true);
+    } else {
+        console.warn('Missing or invalid URL parameters. Redirecting home.');
         setError('Invalid URL. Please start a search from the homepage.');
         setIsLoading(false);
         const timer = setTimeout(() => navigate('/'), 3000);
         return () => clearTimeout(timer);
-      }
-      return;
     }
-    const randomTextIndex = Math.floor(Math.random() * loadingMessages.length);
-    setLoadingText(loadingMessages[randomTextIndex]);
-    const initialPayload: AddUserPayload = { state: '', action: { type: 'add_user', source: source, username: username } };
-    initialFetchStartedRef.current = true;
-    fetchResults(initialPayload, 0, false, true);
-  }, [fetchResults, navigate, source, username]);
+}, [fetchResults, navigate, source, username, itemType, itemid, isUserMode, isItemMode]);
 
   useEffect(() => {
     const currentLoadMoreRef = loadMoreRef.current;
@@ -372,11 +378,11 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
 
   // Generate profile URL based on the source
   let profileUrl = '';
-  if (source === 'mal') {
+  if (isUserMode && source === 'mal') {
     profileUrl = `https://myanimelist.net/profile/${username}`;
-  } else if (source === 'anilist') {
+  } else if (isUserMode && source === 'anilist') {
     profileUrl = `https://anilist.co/user/${username}`;
-  } else if (source === 'animeplanet') {
+  } else if (isUserMode && source === 'animeplanet') {
     profileUrl = `https://www.anime-planet.com/users/${username}`;
   }
 
@@ -386,15 +392,21 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
       <header className="header--toggle">
         <div className="header-toggle">
           <div className="recommendations-title">
-            <h2>
-              <Link to="/" className="recsmoe-brand-link">Recs☆Moe</Link>'s picks for{' '}
-              {profileUrl ? (
-                <a href={profileUrl} target="_blank" rel="noopener noreferrer" className="profile-link">
-                  {username}
-                </a>
-              ) : (
-                <span className="profile-no-link">{username}</span>
+          <h2>
+              <Link to="/" className="recsmoe-brand-link">Recs☆Moe</Link>'s picks
+              {isUserMode && (
+                <>
+                  {' for '}
+                  {profileUrl ? (
+                    <a href={profileUrl} target="_blank" rel="noopener noreferrer" className="profile-link">
+                      {username}
+                    </a>
+                  ) : (
+                    <span className="profile-no-link">{username}</span>
+                  )}
+                </>
               )}
+              {isItemMode && ' based on your selection'}
             </h2>
           </div>
           <div className="media-toggle" onClick={toggleMediaType}>

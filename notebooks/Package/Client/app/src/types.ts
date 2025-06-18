@@ -33,6 +33,16 @@ export interface AddUserPayload {
   };
 }
 
+export interface AddItemPayload {
+  state: string;
+  action: {
+    type: 'add_item';
+    medium: CardType;
+    source: string;
+    itemid: string;
+  };
+}
+
 export interface MediaTypePayload {
   state: string;
   action: {
@@ -41,7 +51,7 @@ export interface MediaTypePayload {
   };
 }
 
-export type Payload = AddUserPayload | MediaTypePayload;
+export type Payload = AddUserPayload | MediaTypePayload | AddItemPayload;
 
 export interface AutocompleteItem {
   // User properties
@@ -62,6 +72,8 @@ export interface AutocompleteItem {
   image?: any;
   episodes?: number | null;
   chapters?: number | null;
+  source?: string;
+  itemid?: string;
 
   // Common properties
   matched: boolean[];

@@ -1,6 +1,6 @@
+// src/HomePage.tsx
 import './Header.css';
 import './HomePage.css';
-// src/HomePage.tsx
 import React, { useState, useEffect, useRef, FormEvent, ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SourceType, AutocompleteItem, API_BASE, SOURCE_MAP } from './types';
@@ -143,24 +143,50 @@ const HomePage: React.FC = () => {
     const triggerSearch = (value: string) => {
         const trimmed = value.trim(); if (!trimmed) return;
         setErrorMessage('');
-        if (queryMode === 'user') {
-            const key = SOURCE_MAP[activeSource];
-            navigate(`/user/${key}/${trimmed}`);
-        } else {
-            navigate(`/item/${itemType}/${encodeURIComponent(trimmed)}`);
-        }
+        // This function is now only used for user searches.
+        const key = SOURCE_MAP[activeSource];
+        navigate(`/user/${key}/${trimmed}`);
     };
 
     const handleSearch = (e: FormEvent<HTMLFormElement>) => {
-        e.preventDefault(); if (!query.trim()) return;
-        triggerSearch(query); setQuery(''); inputRef.current?.blur();
+        e.preventDefault();
+    
+        if (queryMode === 'item') {
+            // If in item mode and there's at least one suggestion,
+            // treat 'Enter' as a click on the first suggestion.
+            if (autocompleteResults.length > 0) {
+                handleAutocompleteClick(autocompleteResults[0]);
+            }
+            // If there are no suggestions, do nothing.
+            return;
+        }
+    
+        // The rest of the function handles 'user' mode searches.
+        if (!query.trim()) return;
+        triggerSearch(query);
+        setQuery('');
+        inputRef.current?.blur();
     };
 
     const handleAutocompleteClick = (item: AutocompleteItem) => {
         setAutocompleteDisabled(true);
-        const val = queryMode === 'user' ? item.username! : item.matched_title!;
-        setQuery(val); setAutocompleteResults([]);
-        triggerSearch(val); setQuery(''); inputRef.current?.blur();
+        setAutocompleteResults([]);
+        inputRef.current?.blur();
+        setQuery('');
+    
+        if (queryMode === 'user') {
+            const val = item.username!;
+            triggerSearch(val);
+        } else {
+            // For item search, navigate to the view page and let it handle the fetch.
+            const { source, itemid } = item;
+            if (source && itemid) {
+                navigate(`/item/${itemType}/${source}/${itemid}`);
+            } else {
+                console.error("Autocomplete item is missing 'source' or 'itemid'", item);
+                setErrorMessage("Selected item is invalid and cannot be used.");
+            }
+        }
     };
 
     const handleButtonClick = (value: string) => {
@@ -324,7 +350,7 @@ const HomePage: React.FC = () => {
             )}
 
             {errorMessage && (
-                <div className="error-banner" style={{ marginTop: '15px', width: '80%', maxWidth: '600px', margin: '0 auto' }}>
+                <div className="error-banner" style={{ margin: '40px auto 0', width: '80%', maxWidth: '600px' }}>
                     <span>{errorMessage}</span>
                     <button onClick={() => setErrorMessage('')}>&times;</button>
                 </div>

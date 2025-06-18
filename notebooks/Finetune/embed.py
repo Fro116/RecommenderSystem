@@ -130,10 +130,10 @@ def predict(users, task, medium):
     max_user_len = 1024
     if task == "retrieval":
         modeltypes = ["masked"]
-        max_seq_len = 1024
+        max_seq_len = max_user_len
     elif task == "ranking":
         modeltypes = ["causal"]
-        max_seq_len = 2048
+        max_seq_len = max_user_len+1024
     else:
         assert False
     d = {
@@ -281,15 +281,16 @@ for modeltype in ["causal", "masked"]:
     torch.cuda.empty_cache()
 for task in ["retrieval", "ranking"]:
     for medium in [0, 1]:
+        batch_size = 16
         test_user = {
             "user": {"source": "mal"},
             "items": [],
             "timestamp": time.time(),
             "test_items": [make_masked_item(time.time())],
         }
-        predict([test_user], task, medium)
+        predict([test_user]*batch_size, task, medium)
         request_buffers[(task, medium)] = RequestBuffer(
-            batch_size=32,
+            batch_size=batch_size,
             timeout_seconds=0.01,
             max_queue_size=1024,
             batch_fn=lambda x, t=task, m=medium: predict(x, t, m),

@@ -237,6 +237,8 @@ function autocomplete_item(d::Dict, encoding)::HTTP.Response
                     image = first(card["missing_images"])
                 end
                 entry = Dict(
+                    "source" => source,
+                    "itemid" => itemid,
                     "matchedid" => matchedid,
                     "matched_title" => alt_title,
                     "matched" => matched,
@@ -299,6 +301,21 @@ function refresh_user(source, username)
     d["refresh"]
 end
 
+@memoize function get_matchedid_map(medium::Integer)
+    m = Dict(0 => "manga", 1 => "anime")[medium]
+    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String, ntasks = 1)
+    d = Dict()
+    for i = 1:DataFrames.nrow(df)
+        k = (df.source[i], df.itemid[i])
+        v = df.matchedid[i]
+        if v == 0 || k ∈ keys(d)
+            continue
+        end
+        d[k] = v
+    end
+    d
+end
+
 Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     encoding = nothing
     if occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
@@ -306,12 +323,17 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     end
     d = decode(r)
     state = d["state"]
+    action = d["action"]
     if isempty(d["state"])
-        state = Dict{String,Any}("medium" => 1, "users" => [])
+        if action["type"] == "add_item"
+            default_medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
+        else
+            default_medium = 1
+        end
+        state = Dict{String,Any}("medium" => default_medium, "users" => [], "items" => [])
     else
         state = MsgPack.unpack(Base64.base64decode(d["state"]))
     end
-    action = d["action"]
     followup_action = nothing
     if action["type"] == "add_user"
         username = sanitize(action["username"])
@@ -330,6 +352,15 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
         end
         d_embed = decode(r_embed)
         push!(state["users"], d_embed)
+    elseif action["type"] == "add_item"
+        source = action["source"]
+        medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
+        itemid = action["itemid"]
+        matchedid = get(get_matchedid_map(medium), (source, itemid), nothing)
+        if isnothing(matchedid)
+            return HTTP.Response(404, [])
+        end
+        push!(state["items"], Dict("medium" => medium, "matchedid" => matchedid))
     elseif action["type"] == "refresh_user"
         username = sanitize(action["username"])
         source = action["source"]
@@ -401,8 +432,14 @@ function compile(port::Integer)
     if HTTP.iserror(r)
         logerror("bluegreen error $(r.status)")
     end
-    profiles = CSV.read(
+    test_users = CSV.read(
         "$secretdir/test.users.csv",
+        DataFrames.DataFrame,
+        stringtype = String,
+        ntasks = 1,
+    )
+    test_items = CSV.read(
+        "$secretdir/test.items.csv",
         DataFrames.DataFrame,
         stringtype = String,
         ntasks = 1,
@@ -430,7 +467,22 @@ function compile(port::Integer)
         end
         state = d["state"]
     end
-    for (source, username) in zip(profiles.source, profiles.username)
+    for (source, medium, itemid) in zip(test_items.source, test_items.medium, test_items.itemid)
+        m = Dict(0=>"Manga", 1=>"Anime")[medium]
+        logtag("STARTUP", "/autocomplete")
+        HTTP.post(
+            "http://localhost:$PORT/autocomplete",
+            encode(
+                Dict("medium" => m, "prefix" => source[1:1], "type" => "item"),
+                :json,
+                :gzip,
+            )...,
+            status_exception = false,
+        )
+        logtag("STARTUP", "/add_item")
+        apply_action(Dict("type" => "add_item", "source" => source, "medium" => m, "itemid" => itemid))
+    end
+    for (source, username) in zip(test_users.source, test_users.username)
         logtag("STARTUP", "/autocomplete")
         HTTP.post(
             "http://localhost:$PORT/autocomplete",
@@ -441,17 +493,6 @@ function compile(port::Integer)
             )...,
             status_exception = false,
         )
-        for m in ["Manga", "Anime"]
-            HTTP.post(
-                "http://localhost:$PORT/autocomplete",
-                encode(
-                    Dict("medium" => m, "prefix" => username[1:1], "type" => "item"),
-                    :json,
-                    :gzip,
-                )...,
-                status_exception = false,
-            )
-        end
         logtag("STARTUP", "/add_user")
         apply_action(Dict("type" => "add_user", "source" => source, "username" => username))
         logtag("STARTUP", "/refresh_user")
