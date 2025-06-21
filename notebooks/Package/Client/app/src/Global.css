@@ -1,5 +1,4 @@
-/* Global styles */
-/* Global resets */
+/* Global.css */
 * {
   box-sizing: border-box;
 }
@@ -10,15 +9,9 @@ body {
   background-color: #fafafa;
 }
 
-/* Container - This might be global or App.tsx specific */
 .container {
   position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
-}
-
-.container.homepage { /* Specific to homepage, move to HomePage.css */
-  height: calc(var(--vh, 1vh) * 100);
-  overflow-y: hidden;
 }

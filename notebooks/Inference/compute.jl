@@ -2,6 +2,7 @@ module embed
 
 import Base64
 import Oxygen
+import Random
 include("../Training/import_list.jl")
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
@@ -192,6 +193,12 @@ end
     ret
 end
 
+function temporally_consistent_sample(arr::Vector, salt::String, window::Real)
+    t = time()
+    seed = hash((floor(Int, t / window), salt))
+    rand(Random.Xoshiro(seed), arr)
+end
+
 function autocomplete_item(d::Dict, encoding)::HTTP.Response
     prefix = lowercase(lstrip(d["prefix"]))
     args = Dict(
@@ -231,10 +238,11 @@ function autocomplete_item(d::Dict, encoding)::HTTP.Response
                 if isnothing(card)
                     continue
                 end
+                salt = string((args["medium"], k))
                 if !isnothing(card["images"])
-                    image = first(card["images"])
+                    image = temporally_consistent_sample(card["images"], salt, 60)
                 else
-                    image = first(card["missing_images"])
+                    image = temporally_consistent_sample(card["missing_images"], salt, 60)
                 end
                 entry = Dict(
                     "source" => source,
@@ -258,6 +266,20 @@ function autocomplete_item(d::Dict, encoding)::HTTP.Response
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
+function get_user_url(source, username, userid)
+    if source == "mal"
+        return "https://myanimelist.net/profile/$username"
+    elseif source == "anilist"
+        return "https://anilist.co/user/$userid"
+    elseif source == "kitsu"
+        return "https://kitsu.app/users/$userid"
+    elseif source == "animeplanet"
+        return "https://anime-planet.com/users/$username"
+    else
+        @assert false
+    end
+end
+
 function add_user(d::Dict, medium::Integer)::HTTP.Response
     r_read = HTTP.post(
         "$DATABASE_READ_URL/read_user_history",
@@ -273,7 +295,16 @@ function add_user(d::Dict, medium::Integer)::HTTP.Response
     data["items"] = standardize.(data["items"])
     u = import_user(d_read["source"], data, d_read["db_refreshed_at"])
     u["timestamp"] = time()
-    ret = Dict("user" => u, "source" => d["source"], "username" => d["username"])
+    usermap = data["usermap"]
+    ret = Dict(
+        "user" => u,
+        "source" => d["source"],
+        "username" => d["username"],
+        "header" => Dict(
+            "titlename" => usermap["username"],
+            "titleurl" => get_user_url(d["source"], usermap["username"], usermap["userid"]),
+        ),
+    )
     r_embed = request(
         "POST",
         "$MODEL_URL/embed?medium=$medium&task=retrieval",
@@ -360,7 +391,19 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
         if isnothing(matchedid)
             return HTTP.Response(404, [])
         end
-        push!(state["items"], Dict("medium" => medium, "matchedid" => matchedid))
+        card = get(get_media_info(medium), matchedid, nothing)
+        if isnothing(card)
+            return HTTP.Response(404, [])
+        end
+        d_item = Dict(
+            "medium" => medium,
+            "matchedid" => matchedid,
+            "header" => Dict(
+                "titlename" => card["title"],
+                "titleurl" => card["url"],
+            ),
+        )
+        push!(state["items"], d_item)
     elseif action["type"] == "refresh_user"
         username = sanitize(action["username"])
         source = action["source"]
@@ -416,6 +459,9 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
         "medium" => Dict(0 => "Manga", 1 => "Anime")[state["medium"]],
         "followup_action" => followup_action,
     )
+    header = first(vcat(state["users"], state["items"]))["header"]
+    ret["titlename"] = header["titlename"]
+    ret["titleurl"] = header["titleurl"]
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 

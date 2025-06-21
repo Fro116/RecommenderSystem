@@ -1,12 +1,14 @@
 // src/ViewPage.tsx
 import './Header.css';
 import './ViewPage.css';
+import './components/DetailPane.css';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import pako from 'pako';
-import { Result, CardType, MediaTypePayload, Payload, AddUserPayload, getBiggestImageUrl, UPDATE_URL, AddItemPayload } from './types';
+import { Result, CardType, MediaTypePayload, Payload, getBiggestImageUrl, UPDATE_URL, stringToHslColor } from './types';
 import CardImage from './components/CardImage';
 import ManualScrollDiv from './components/ManualScrollDiv';
+import DetailPane from './components/DetailPane';
 
 interface ViewPageProps {
   isMobile: boolean;
@@ -35,40 +37,49 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
   }>();
   const [results, setResults] = useState<Result[]>([]);
   const [apiState, setApiState] = useState<string>('');
+  const [titleName, setTitleName] = useState<string>('');
+  const [titleUrl, setTitleUrl] = useState<string>('');
   const [totalResults, setTotalResults] = useState<number>(0);
   const [cardType, setCardType] = useState<CardType>('Anime');
+  const [displayCardType, setDisplayCardType] = useState<CardType>('Anime');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [loadingText, setLoadingText] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [loadingMore, setLoadingMore] = useState<boolean>(false);
-  const [showSynopsis, setShowSynopsis] = useState<{ [index: number]: boolean }>({});
+  const [selectedItem, setSelectedItem] = useState<Result | null>(null);
   const [cardRotation, setCardRotation] = useState<{ [index: number]: number }>({});
-  const [flipState, setFlipState] = useState<'none' | 'selected-details' | 'selected-synopsis'>('none');
+  const [pinnedCardIndex, setPinnedCardIndex] = useState<number | null>(null);
+
+  const getInitialViewType = (): 'grid' | 'list' => {
+    const stored = localStorage.getItem('viewType');
+    if (stored === 'grid' || stored === 'list') {
+        return stored;
+    }
+    return 'grid';
+  };
+  const [viewType, setViewType] = useState<'grid' | 'list'>(getInitialViewType());
+  useEffect(() => {
+    localStorage.setItem('viewType', viewType);
+  }, [viewType]);
+
 
   // Refs
   const gridViewRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const initialFetchStartedRef = useRef<boolean>(false);
 
-  const cardRotationRef = useRef(cardRotation);
-  useEffect(() => {
-    cardRotationRef.current = cardRotation;
-  }, [cardRotation]);
-
   const isUserMode = !!(source && username);
   const isItemMode = !!(source && itemType && itemid);
 
   useEffect(() => {
     const siteDefaultTitle = document.title;
-    if (isUserMode) {
-      document.title = `${username}'s Room | Recs☆Moe`;
-    } else if (isItemMode) {
-      document.title = `Recommendations | Recs☆Moe`;
+    if (titleName) {
+      document.title = `${titleName} | Recs☆Moe`;
     }
     return () => {
       document.title = siteDefaultTitle;
     };
-  }, [isUserMode, isItemMode, username]);
+  }, [titleName]);
 
 
   // --- Functions ---
@@ -78,7 +89,6 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
         setIsLoading(true);
         setError('');
         setResults([]);
-        resetCardStates();
       } else if (append) {
         setLoadingMore(true);
         setError('');
@@ -116,25 +126,13 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
           }
           const newResults = data.view;
 
-          if (!append && !isInitialLoad) {
-            const targetSide = flipState === 'none' ? 0 : 180;
-            const currentRotations = cardRotationRef.current;
-            const nextCardRotationState: { [index: number]: number } = {};
-            newResults.forEach((_item: Result, index: number) => {
-              const currentActualRotation = currentRotations[index] || 0;
-              const isVisuallyFlipped = Math.round(currentActualRotation / 180) % 2 !== 0;
-              const isTargetFlipped = targetSide === 180;
-              nextCardRotationState[index] =
-                isVisuallyFlipped !== isTargetFlipped ? currentActualRotation + 180 : currentActualRotation;
-            });
-            setCardRotation(nextCardRotationState);
-            setShowSynopsis({});
-          }
-
           setApiState(data.state);
           setTotalResults(data.total);
           setResults(append ? (prev) => [...prev, ...newResults] : newResults);
           setCardType(data.medium);
+          setDisplayCardType(data.medium); // Sync display type with the new data
+          if (data.titlename) setTitleName(data.titlename);
+          if (data.titleurl) setTitleUrl(data.titleurl);
           setError('');
 
           if (isInitialLoad) setIsLoading(false);
@@ -166,7 +164,9 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
                   setTotalResults(followupData.total);
                   setResults(followupData.view);
                   setCardType(followupData.medium);
-                  resetCardStates();
+                  setDisplayCardType(followupData.medium); // Also sync display type on followup
+                  if (followupData.titlename) setTitleName(followupData.titlename);
+                  if (followupData.titleurl) setTitleUrl(followupData.titleurl);
                   gridViewRef.current?.scrollTo(0, 0);
                 } else {
                   console.warn('Async Followup data invalid or empty. No state update.', followupData);
@@ -189,7 +189,7 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
           setLoadingMore(false);
         });
     },
-    [isMobile, flipState, navigate]
+    [isMobile, navigate]
   );
 
   // --- Other useEffects ---
@@ -247,104 +247,40 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
     };
   }, [results.length, totalResults, loadingMore, apiState, cardType, isLoading, fetchResults]);
 
-  // --- Card Interaction Handlers ---
-  const resetCardStates = () => {
-    setCardRotation({});
-    setShowSynopsis({});
-    setFlipState('none');
-  };
-
   const toggleMediaType = () => {
     // Guard against toggling while a fetch is in progress.
     if (isLoading || loadingMore || !apiState) return;
-
-    // Determine the new type by flipping the current one.
     const newType = cardType === 'Anime' ? 'Manga' : 'Anime';
-
-    // Set the new state and fetch the results for the new type.
     setCardType(newType);
-    setShowSynopsis({}); // Reset synopsis view on toggle
     fetchResults({ state: apiState, action: { type: 'set_media', medium: newType } }, 0, false, false);
   };
 
-  const handleFlipToggle = (e: React.MouseEvent<HTMLButtonElement>) => {
-    let newState: 'none' | 'selected-details' | 'selected-synopsis';
-    const newMapping: { [index: number]: number } = {};
-    if (flipState === 'none') {
-      newState = 'selected-details';
-      // Force details view: flip any card facing front and set synopsis to false.
-      for (let i = 0; i < results.length; i++) {
-        const currentRotation = cardRotation[i] || 0;
-        newMapping[i] = currentRotation % 360 === 0 ? currentRotation + 180 : currentRotation;
-      }
-      const detailsMapping: { [index: number]: boolean } = {};
-      for (let i = 0; i < results.length; i++) {
-        detailsMapping[i] = false;
-      }
-      setShowSynopsis(detailsMapping);
-    } else if (flipState === 'selected-details') {
-      newState = 'selected-synopsis';
-      // Force synopsis view: flip any card facing front and set synopsis to true.
-      for (let i = 0; i < results.length; i++) {
-        const currentRotation = cardRotation[i] || 0;
-        newMapping[i] = currentRotation % 360 === 0 ? currentRotation + 180 : currentRotation;
-      }
-      const synopsisMapping: { [index: number]: boolean } = {};
-      for (let i = 0; i < results.length; i++) {
-        synopsisMapping[i] = true;
-      }
-      setShowSynopsis(synopsisMapping);
-    } else {
-      newState = 'none';
-      // When transitioning from selected-synopsis to none, continue the rotation.
-      for (let i = 0; i < results.length; i++) {
-        const currentRotation = cardRotation[i] || 0;
-        newMapping[i] = currentRotation % 360 === 180 ? currentRotation + 180 : currentRotation;
-      }
-      // Delay clearing the synopsis until after the flip animation completes to avoid a jarring flash.
-      setTimeout(() => {
-        setShowSynopsis({});
-      }, 300);
+  const handleCardClick = (item: Result, index: number) => {
+    setSelectedItem(item);
+    if (!isMobile) {
+      setPinnedCardIndex(index);
+      setCardRotation(prev => ({ ...prev, [index]: 180 }));
     }
-    setFlipState(newState);
-    setCardRotation(newMapping);
-    e.currentTarget.blur();
   };
 
-  // Desktop hover handlers (only when no global override)
+  const closeDetailPane = () => {
+    setSelectedItem(null);
+    if (pinnedCardIndex !== null) {
+      setCardRotation(prev => ({ ...prev, [pinnedCardIndex]: 0 }));
+    }
+    setPinnedCardIndex(null);
+  };
+
+  // Desktop hover handlers for grid view
   const handleMouseEnter = (index: number) => {
-    if (!isMobile && flipState === 'none') {
-      const r = cardRotation[index] || 0;
-      if (r % 360 === 0) {
-        setCardRotation((prev) => ({ ...prev, [index]: r + 180 }));
-      }
+    if (!isMobile) {
+      setCardRotation(prev => ({ ...prev, [index]: 180 }));
     }
   };
 
   const handleMouseLeave = (index: number) => {
-    if (!isMobile && flipState === 'none') {
-      const r = cardRotation[index] || 0;
-      if (r % 360 === 180) {
-        setCardRotation((prev) => ({ ...prev, [index]: r - 180 }));
-      }
-    }
-  };
-
-  // Mobile tap handlers (always allowed)
-  const handleCardFrontClick = (index: number) => {
-    if (isMobile) {
-      setCardRotation((prev) => ({ ...prev, [index]: (prev[index] || 0) + 180 }));
-    }
-  };
-
-  const handleCardBackClick = (index: number) => {
-    if (isMobile && showSynopsis[index]) {
-      setCardRotation((prev) => ({ ...prev, [index]: (prev[index] || 0) + 180 }));
-      setTimeout(() => {
-        setShowSynopsis((prev) => ({ ...prev, [index]: false }));
-      }, 300);
-    } else {
-      setShowSynopsis((prev) => ({ ...prev, [index]: !prev[index] }));
+    if (!isMobile && index !== pinnedCardIndex) {
+      setCardRotation(prev => ({ ...prev, [index]: 0 }));
     }
   };
 
@@ -353,7 +289,7 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
     return (
       <div className="loading-container">
         <div className="loading-spinner"></div>
-	<p>{loadingText}</p>
+        <p>{loadingText}</p>
       </div>
     );
   }
@@ -366,25 +302,29 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
     );
   }
 
-  const isLoadingMediaType = isLoading && !loadingMore && results.length > 0;
-
-  // Determine the text for the flip button based on the current state.
-  let flipButtonText = "Show Titles";
-  if (flipState === 'selected-details') {
-    flipButtonText = "Show Synopsis";
-  } else if (flipState === 'selected-synopsis') {
-    flipButtonText = "Show Thumbnails";
-  }
-
-  // Generate profile URL based on the source
-  let profileUrl = '';
-  if (isUserMode && source === 'mal') {
-    profileUrl = `https://myanimelist.net/profile/${username}`;
-  } else if (isUserMode && source === 'anilist') {
-    profileUrl = `https://anilist.co/user/${username}`;
-  } else if (isUserMode && source === 'animeplanet') {
-    profileUrl = `https://www.anime-planet.com/users/${username}`;
-  }
+  const listViewHeader = (
+    <div className="list-view-header">
+      <div className="header-cell image-cell"></div>
+      <div className="header-cell title-cell">Title</div>
+      {displayCardType === 'Anime' ? (
+        <>
+          <div className="header-cell detail-cell">Season</div>
+          <div className="header-cell detail-cell type-cell">Type</div>
+          <div className="header-cell detail-cell">Episodes</div>
+          <div className="header-cell detail-cell">Duration</div>
+          <div className="header-cell detail-cell tags-cell">Tags</div>
+        </>
+      ) : (
+        <>
+          <div className="header-cell detail-cell">Year</div>
+          <div className="header-cell detail-cell type-cell">Type</div>
+          <div className="header-cell detail-cell">Volumes</div>
+          <div className="header-cell detail-cell">Chapters</div>
+          <div className="header-cell detail-cell tags-cell">Tags</div>
+        </>
+      )}
+    </div>
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -392,45 +332,31 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
       <header className="header--toggle">
         <div className="header-toggle">
           <div className="recommendations-title">
-          <h2>
+            <h2>
               <Link to="/" className="recsmoe-brand-link">Recs☆Moe</Link>'s picks
-              {isUserMode && (
+              {titleName && (
                 <>
                   {' for '}
-                  {profileUrl ? (
-                    <a href={profileUrl} target="_blank" rel="noopener noreferrer" className="profile-link">
-                      {username}
-                    </a>
-                  ) : (
-                    <span className="profile-no-link">{username}</span>
-                  )}
+                  <a href={titleUrl || '#'} target="_blank" rel="noopener noreferrer" className="profile-link">
+                    {titleName}
+                  </a>
                 </>
               )}
-              {isItemMode && ' based on your selection'}
             </h2>
           </div>
           <div className="media-toggle" onClick={toggleMediaType}>
-            <div
-              className={`toggle-option ${cardType === 'Anime' ? 'active' : ''}`}
-            >
-              Anime
-            </div>
-            <div
-              className={`toggle-option ${cardType === 'Manga' ? 'active' : ''}`}
-            >
-              Manga
-            </div>
+            <div className={`toggle-option ${cardType === 'Anime' ? 'active' : ''}`}>Anime</div>
+            <div className={`toggle-option ${cardType === 'Manga' ? 'active' : ''}`}>Manga</div>
             <div className={`toggle-slider ${cardType}`}></div>
           </div>
-          <button
-            className={`flip-all-button ${flipState !== 'none' ? 'selected' : ''}`}
-            onClick={handleFlipToggle}
-            disabled={isLoading || loadingMore}
-          >
-            {flipButtonText}
-          </button>
+          <div className="view-type-toggle" onClick={() => setViewType(viewType === 'grid' ? 'list' : 'grid')}>
+            <div className={`toggle-option ${viewType === 'grid' ? 'active' : ''}`}>Grid</div>
+            <div className={`toggle-option ${viewType === 'list' ? 'active' : ''}`}>List</div>
+            <div className={`toggle-slider ${viewType}`}></div>
+          </div>
         </div>
       </header>
+      
       {/* Error Banner */}
       {error && results.length > 0 && (
         <div className="error-banner">
@@ -438,173 +364,148 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
           <button onClick={() => setError('')}>&times;</button>
         </div>
       )}
-      {/* Results Grid */}
+
+      {/* Results Grid/List */}
       {results.length > 0 ? (
         <div className="grid-container" ref={gridViewRef}>
-          <div className="grid-view">
+          <div className={viewType === 'grid' ? 'grid-view' : 'list-view'}>
+            {viewType === 'list' && listViewHeader}
             {results.map((item, index) => {
-              const currentRotation = cardRotation[index] ?? (flipState === 'none' ? 0 : 180);
-              const localShowSynopsis =
-                typeof showSynopsis[index] !== 'undefined' ? showSynopsis[index] : flipState === 'selected-synopsis';
-              return (
-                <div
-                  key={`${apiState}-${item.url}-${index}`}
-                  className="card"
-                  onMouseEnter={() => handleMouseEnter(index)}
-                  onMouseLeave={() => handleMouseLeave(index)}
-                >
-                  <div className="card-inner" style={{ transform: `rotateY(${currentRotation}deg)` }}>
-                    <CardImage item={item} onClick={() => handleCardFrontClick(index)} />
-                    <div className="card-back" onClick={() => handleCardBackClick(index)}>
-                      <div
-                        className="card-back-bg"
-                        style={{
-                          backgroundImage: `url(${getBiggestImageUrl(item.image) || getBiggestImageUrl(item.missing_image)})`,
-                        }}
-                      ></div>
-                      <div className="card-back-container">
+              if (viewType === 'grid') {
+                return (
+                  <div 
+                    key={`${apiState}-${item.url}-${index}`} 
+                    className="card" 
+                    onClick={() => handleCardClick(item, index)}
+                    onMouseEnter={() => handleMouseEnter(index)}
+                    onMouseLeave={() => handleMouseLeave(index)}
+                  >
+                    <div className="card-inner" style={{ transform: `rotateY(${cardRotation[index] || 0}deg)` }}>
+                      <div className="card-front">
+                        <CardImage item={item} onClick={() => {}} />
+                      </div>
+                      <div className="card-back">
                         <div
-                          className="card-back-header"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            window.open(item.url, '_blank', 'noopener,noreferrer');
-                          }}
-                        >
-                          <div>{item.title}</div>
-                          {item.english_title && (
-                            <div className="card-back-english-title">{item.english_title}</div>
-                          )}
-                        </div>
-                        <ManualScrollDiv className="card-back-body">
-                          {isLoadingMediaType ? (
-                            <div className="card-details-loading">Loading...</div>
-                          ) : localShowSynopsis ? (
-                            <p style={{ whiteSpace: 'pre-line' }}>{item.synopsis || 'No synopsis available.'}</p>
-                          ) : (
-                            <div className="card-details">
-                              <table>
-                                <tbody>
-                                  {item.type && (
-                                    <tr>
-                                      <td>
-                                        <strong>Medium:</strong>
-                                      </td>
-                                      <td>{item.type}</td>
-                                    </tr>
-                                  )}
-                                  {cardType === 'Anime' ? (
-                                    <>
-                                      {item.season && (
-                                        <tr>
-                                          <td>
-                                            <strong>Season:</strong>
-                                          </td>
-                                          <td>{item.season}</td>
-                                        </tr>
-                                      )}
-                                      {item.episodes != null && (
-                                        <tr>
-                                          <td>
-                                            <strong>Episodes:</strong>
-                                          </td>
-                                          <td>{item.episodes}</td>
-                                        </tr>
-                                      )}
-                                      {item.duration && (
-                                        <tr>
-                                          <td>
-                                            <strong>Duration:</strong>
-                                          </td>
-                                          <td>{item.duration}</td>
-                                        </tr>
-                                      )}
-                                      {item.studios && (
-                                        <tr>
-                                          <td>
-                                            <strong>Studio:</strong>
-                                          </td>
-                                          <td>{item.studios}</td>
-                                        </tr>
-                                      )}
-                                    </>
-                                  ) : (
-                                    <>
-                                      {item.volumes != null && (
-                                        <tr>
-                                          <td>
-                                            <strong>Volumes:</strong>
-                                          </td>
-                                          <td>{item.volumes}</td>
-                                        </tr>
-                                      )}
-                                      {item.chapters != null && (
-                                        <tr>
-                                          <td>
-                                            <strong>Chapters:</strong>
-                                          </td>
-                                          <td>{item.chapters}</td>
-                                        </tr>
-                                      )}
-                                      {item.studios && (
-                                        <tr>
-                                          <td>
-                                            <strong>Author:</strong>
-                                          </td>
-                                          <td>{item.studios}</td>
-                                        </tr>
-                                      )}
-                                    </>
-                                  )}
-                                  {item.status && (
-                                    <tr>
-                                      <td>
-                                        <strong>Status:</strong>
-                                      </td>
-                                      <td>{item.status}</td>
-                                    </tr>
-                                  )}
-                                  {item.startdate && (
-                                    <tr>
-                                      <td>
-                                        <strong>Start&nbsp;Date:</strong>
-                                      </td>
-                                      <td>{item.startdate}</td>
-                                    </tr>
-                                  )}
-                                  {item.enddate && (
-                                    <tr>
-                                      <td>
-                                        <strong>End Date:</strong>
-                                      </td>
-                                      <td>{item.enddate}</td>
-                                    </tr>
-                                  )}
-                                  {item.source && (
-                                    <tr>
-                                      <td>
-                                        <strong>Source:</strong>
-                                      </td>
-                                      <td>{item.source}</td>
-                                    </tr>
-                                  )}
-                                  {item.genres && (
-                                    <tr>
-                                      <td>
-                                        <strong>Genres:</strong>
-                                      </td>
-                                      <td>{item.genres}</td>
-                                    </tr>
-                                  )}
-                                </tbody>
-                              </table>
+                          className="card-back-bg"
+                          style={{ backgroundImage: `url(${getBiggestImageUrl(item.image) || getBiggestImageUrl(item.missing_image)})`}}
+                        ></div>
+                        <div className="card-back-container">
+                          <div
+                            className="card-back-header"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.open(item.url, '_blank', 'noopener,noreferrer');
+                            }}
+                          >
+                            <h2 className="card-back-title">{item.title}</h2>
+                            {item.english_title && <h3 className="card-back-english-title">{item.english_title}</h3>}
+                          </div>
+                          <ManualScrollDiv className="card-back-body">
+                            <div className="card-back-details-section">
+                              <h4>Details</h4>
+                              <div className="card-back-details-table">
+                                {displayCardType === 'Anime' ? (
+                                  <>
+                                    <div><strong>Type</strong><span>{item.type || '-'}</span></div>
+                                    <div><strong>Season</strong><span>{item.season || '-'}</span></div>
+                                    <div><strong>Source</strong><span>{item.source || '-'}</span></div>
+                                    <div><strong>Episodes</strong><span>{item.episodes ?? '-'}</span></div>
+                                    <div><strong>Duration</strong><span>{item.duration || '-'}</span></div>
+                                    <div><strong>Studio</strong><span>{item.studios || '-'}</span></div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div><strong>Type</strong><span>{item.type || '-'}</span></div>
+                                    <div><strong>Year</strong><span>{item.startdate ? item.startdate.substring(0, 4) : '-'}</span></div>
+                                    <div><strong>Status</strong><span>{item.status || '-'}</span></div>
+                                    <div><strong>Volumes</strong><span>{item.volumes ?? '-'}</span></div>
+                                    <div><strong>Chapters</strong><span>{item.chapters ?? '-'}</span></div>
+                                    <div><strong>Magazine</strong><span>{item.studios || '-'}</span></div>
+                                  </>
+                                )}
+                              </div>
                             </div>
-                          )}
-                        </ManualScrollDiv>
+                            {item.genres && (
+                              <div className="card-back-tags-section">
+                                <h4>Tags</h4>
+                                <div className="card-back-tags-container">
+                                  {item.genres.split(', ').map(tag => {
+                                    const backgroundColor = stringToHslColor(tag, 50, 40);
+                                    return (
+                                      <span key={tag} className="tag" style={{ backgroundColor }}>
+                                        {tag}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </ManualScrollDiv>
+                          <div className="card-back-cta">
+                            Click for more information
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              );
+                );
+              } else {
+                // LIST VIEW ITEM
+                return (
+                  <div key={`${apiState}-${item.url}-${index}`} className="list-item" onClick={() => setSelectedItem(item)}>
+                    <div className="item-cell image-cell">
+                       <img
+                          src={getBiggestImageUrl(item.image) || getBiggestImageUrl(item.missing_image) || ''}
+                          alt={item.title}
+                          className="list-item-image"
+                          loading="lazy"
+                       />
+                    </div>
+                    <div className="item-cell title-cell">
+                        {isMobile ? (
+                          <>
+                            <div className="list-item-title">{item.title}</div>
+                            {item.english_title && <div className="list-item-english-title">{item.english_title}</div>}
+                          </>
+                        ) : (
+                          <a 
+                            href={item.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer" 
+                            className="list-item-title-link" 
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="list-item-title">{item.title}</div>
+                            {item.english_title && <div className="list-item-english-title">{item.english_title}</div>}
+                          </a>
+                        )}
+                        <div className="list-item-mobile-details">
+                           {displayCardType === 'Anime'
+                             ? [item.season, item.type, item.episodes && `${item.episodes} ep`, item.duration].filter(Boolean).join(' • ')
+                             : [item.startdate ? item.startdate.substring(0, 4) : null, item.type, item.volumes && `${item.volumes} vol`, item.chapters && `${item.chapters} ch`].filter(Boolean).join(' • ')
+                           }
+                        </div>
+                    </div>
+                    {displayCardType === 'Anime' ? (
+                      <>
+                        <div className="item-cell detail-cell">{item.season || '-'}</div>
+                        <div className="item-cell detail-cell type-cell">{item.type || '-'}</div>
+                        <div className="item-cell detail-cell">{item.episodes ?? '-'}</div>
+                        <div className="item-cell detail-cell">{item.duration || '-'}</div>
+                        <div className="item-cell detail-cell tags-cell">{item.genres || '-'}</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="item-cell detail-cell">{item.startdate ? item.startdate.substring(0, 4) : '-'}</div>
+                        <div className="item-cell detail-cell type-cell">{item.type || '-'}</div>
+                        <div className="item-cell detail-cell">{item.volumes ?? '-'}</div>
+                        <div className="item-cell detail-cell">{item.chapters ?? '-'}</div>
+                        <div className="item-cell detail-cell tags-cell">{item.genres || '-'}</div>
+                      </>
+                    )}
+                  </div>
+                );
+              }
             })}
             <div ref={loadMoreRef} style={{ height: '10px', gridColumn: '1 / -1', visibility: 'hidden' }}></div>
             {loadingMore && (
@@ -622,6 +523,16 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
         !error && (
           <div style={{ textAlign: 'center', padding: '40px', flexGrow: 1 }}>No recommendations found.</div>
         )
+      )}
+      
+      {/* Detail Pane */}
+      {selectedItem && (
+        <DetailPane 
+          item={selectedItem} 
+          cardType={displayCardType} 
+          onClose={closeDetailPane} 
+          isMobile={isMobile}
+        />
       )}
     </div>
   );

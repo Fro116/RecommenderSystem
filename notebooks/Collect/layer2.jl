@@ -69,7 +69,7 @@ function load_resources()::Vector{Resource}
     mal_resources = [x for x in mal_resources if !isempty(x["proxyurls"])]
 
     malweb_resources =
-        [Dict("location" => "malweb", "proxyurl" => x, "ratelimit" => 4) for x in shared]
+        [Dict("location" => "malweb", "proxyurl" => x, "ratelimit" => 8) for x in shared]
 
     anilist_resources =
         [Dict("location" => "anilist", "proxyurl" => x, "ratelimit" => 4) for x in shared]
@@ -784,6 +784,13 @@ function malweb_get_user(resource::Resource, username::String)
     if r.status >= 400
         logstatus("malweb_get_user", r, url)
         return HTTP.Response(r)
+    end
+    if isempty(r.body)
+        logerror("malweb_get_user received empty payload for $username with status $(r.status)")
+        r = request(resource, "GET", url, Dict("impersonate" => true))
+        if isempty(r.body)
+            return HTTP.Response(500, [])
+        end
     end
 
     asint(x) = parse(Int, replace(x, "," => ""))

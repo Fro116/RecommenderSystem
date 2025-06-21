@@ -264,14 +264,29 @@ const HomePage: React.FC = () => {
                                         }
                                         userMetadata = parts.join(' | ');
                                     }
+
+                                    const imageInfo = item.image?.[0];
+                                    let imageStyle: React.CSSProperties = {};
+                                    if (imageInfo && imageInfo.width > 0) {
+                                        const aspectRatio = imageInfo.height / imageInfo.width;
+                                        if (aspectRatio >= 1.3 && aspectRatio <= 1.6) {
+                                            imageStyle = { height: '72px', width: 'auto' };
+                                        } else {
+                                            imageStyle = { height: '72px', width: '50px', objectFit: 'cover' };
+                                        }
+                                    } else {
+                                        // Default style for items with no image info
+                                        imageStyle = { height: '72px', width: '50px' };
+                                    }
+
                                     return (
                                         <div key={idx} className="autocomplete-item" onMouseDown={e => e.preventDefault()} onClick={() => handleAutocompleteClick(item)}>
                                             {queryMode === 'user'
                                                 ? (item.avatar || item.missing_avatar) && (
                                                     <img className="autocomplete-avatar-user" src={item.avatar || item.missing_avatar!} alt={item.username || ''} onError={e => { if (e.currentTarget.src !== (item.missing_avatar || '')) e.currentTarget.src = item.missing_avatar || ''; }} />
                                                 )
-                                                : item.image?.[0]?.url && (
-                                                    <img className="autocomplete-avatar-item" src={item.image[0].url} alt={item.matched_title || ''} onError={e => { e.currentTarget.style.display = 'none'; }} />
+                                                : imageInfo?.url && (
+                                                    <img className="autocomplete-avatar-item" src={imageInfo.url} alt={item.title || ''} style={imageStyle} onError={e => { e.currentTarget.style.display = 'none'; }}/>
                                                 )
                                             }
                                             {queryMode === 'user' ? (
@@ -310,7 +325,7 @@ const HomePage: React.FC = () => {
                     <div ref={modeDropdownRef} style={{ position: 'relative', width: '100%' }}>
                         <button type="button" className="query-mode-button" onClick={() => setShowModeDropdown(prev => !prev)}>
                             <span className="query-mode-button-title">
-                                {queryMode === 'user' ? 'Search by User' : 'Search by Title'}
+                                {queryMode === 'user' ? 'Search by User' : <React.Fragment>Search by Title <span className="beta-tag">Beta</span></React.Fragment>}
                             </span>
                             <span className="query-mode-button-description">
                                 {queryMode === 'user' ? "Get recommendations based on a user's profile." : 'Discover shows similar to a specific anime or manga.'}
@@ -323,7 +338,7 @@ const HomePage: React.FC = () => {
                                         <div className="query-mode-description">Get recommendations based on a user's profile.</div>
                                     </li>
                                     <li className={`query-mode-item ${queryMode === 'item' ? 'active' : ''}`} onClick={() => { setQueryMode('item'); setShowModeDropdown(false); }}>
-                                        <div className="query-mode-title">Search by Title</div>
+                                        <div className="query-mode-title">Search by Title <span className="beta-tag">Beta</span></div>
                                         <div className="query-mode-description">Discover shows similar to a specific anime or manga.</div>
                                     </li>
                                 </ul>

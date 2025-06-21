@@ -31,9 +31,6 @@ end
     d = Dict()
     medium_map = Dict("manga" => 0, "anime" => 1)
     for i = 1:DataFrames.nrow(df)
-        if df.width[i] >= df.height[i]
-            continue
-        end
         key = (df.source[i], medium_map[df.medium[i]], string(df.itemid[i]))
         if key ∉ keys(d)
             d[key] = Dict()
@@ -50,7 +47,20 @@ end
         push!(d[key][imageid], val)
     end
     for k in keys(d)
-        d[k] = collect(values(d[k]))
+        portrait_images = []
+        landscape_images = []
+        for x in collect(values(d[k]))
+            if first(x)["height"] > first(x)["width"]
+                push!(portrait_images, x)
+            else
+                push!(landscape_images, x)
+            end
+        end
+        if !isempty(portrait_images)
+            d[k] = portrait_images
+        else
+            d[k] = landscape_images
+        end
     end
     d
 end
@@ -76,7 +86,7 @@ end
     collect(values(groups))
 end
 
-function get_url(source, medium, itemid)
+function get_item_url(source, medium, itemid)
     medium_map = Dict(0 => "manga", 1 => "anime")
     source_map = Dict(
         "mal" => "https://myanimelist.net",
@@ -162,7 +172,7 @@ end
         info[df.matchedid[i]] = Dict{String,Any}(
             "title" => df.title[i],
             "english_title" => english_title(df.title[i], df.english_title[i]),
-            "url" => get_url(df.source[i], medium, df.itemid[i]),
+            "url" => get_item_url(df.source[i], medium, df.itemid[i]),
             "type" => df.mediatype[i],
             "startdate" => df.startdate[i],
             "enddate" => df.enddate[i],

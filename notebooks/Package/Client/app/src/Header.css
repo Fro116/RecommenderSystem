@@ -295,3 +295,17 @@ header input:hover {
     font-size: 13px;
   }
 }
+
+.beta-tag {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 8px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: bold;
+  line-height: 1;
+  color: #fff;
+  background-color: #2196F3;
+  border-radius: 8px;
+  text-transform: uppercase;
+}
