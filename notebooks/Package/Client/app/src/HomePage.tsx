@@ -325,44 +325,59 @@ const HomePage: React.FC = () => {
                     <div ref={modeDropdownRef} style={{ position: 'relative', width: '100%' }}>
                         <button type="button" className="query-mode-button" onClick={() => setShowModeDropdown(prev => !prev)}>
                             <span className="query-mode-button-title">
-                                {queryMode === 'user' ? 'Search by User' : <React.Fragment>Search by Title <span className="beta-tag">Beta</span></React.Fragment>}
+                                {queryMode === 'user' ? 'Search by User' : 'Search by Title'}
                             </span>
                             <span className="query-mode-button-description">
-                                {queryMode === 'user' ? "Get recommendations based on a user's profile." : 'Discover shows similar to a specific anime or manga.'}
+                                {queryMode === 'user' ? "Get recommendations based on a user's profile." : 'Discover works similar to a specific anime or manga.'}
+                            </span>
+                            <span className="query-mode-button-chevron">
+                                <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M1.41 0.590088L6 5.17009L10.59 0.590088L12 2.00009L6 8.00009L0 2.00009L1.41 0.590088Z" fill="currentColor"/>
+                                </svg>
                             </span>
                         </button>
-                                {showModeDropdown && (
-                                <ul className="query-mode-list">
-                                    <li className={`query-mode-item ${queryMode === 'user' ? 'active' : ''}`} onClick={() => { setQueryMode('user'); setShowModeDropdown(false); }}>
-                                        <div className="query-mode-title">Search by User</div>
-                                        <div className="query-mode-description">Get recommendations based on a user's profile.</div>
-                                    </li>
-                                    <li className={`query-mode-item ${queryMode === 'item' ? 'active' : ''}`} onClick={() => { setQueryMode('item'); setShowModeDropdown(false); }}>
-                                        <div className="query-mode-title">Search by Title <span className="beta-tag">Beta</span></div>
-                                        <div className="query-mode-description">Discover shows similar to a specific anime or manga.</div>
-                                    </li>
-                                </ul>
-                                )}
+                        {showModeDropdown && (
+                        <ul className="query-mode-list">
+                            <li className={`query-mode-item ${queryMode === 'user' ? 'active' : ''}`} onClick={() => { setQueryMode('user'); setShowModeDropdown(false); }}>
+                                <div className="query-mode-title">Search by User</div>
+                                <div className="query-mode-description">Get recommendations based on a user's profile.</div>
+                            </li>
+                            <li className={`query-mode-item ${queryMode === 'item' ? 'active' : ''}`} onClick={() => { setQueryMode('item'); setShowModeDropdown(false); }}>
+                                <div className="query-mode-title">Search by Title</div>
+                                <div className="query-mode-description">Discover works similar to a specific anime or manga.</div>
+                            </li>
+                        </ul>
+                        )}
                     </div>
                 </div>
-            </header>
 
-            {showButtons && (
-                <div className="source-buttons" ref={buttonContainerRef} style={{ marginTop: '20px' }}>
-                    {queryMode === 'user'
-                        ? (['MyAnimeList', 'AniList', 'Kitsu', 'Anime-Planet'] as SourceType[]).map(src => (
-                            <button key={src} type="button" className={`source-button ${activeSource === src ? 'selected' : ''}`} onClick={() => handleButtonClick(src)}>
-                                {src}
-                            </button>
-                        ))
-                        : (['anime', 'manga'] as ItemType[]).map(type => (
-                            <button key={type} type="button" className={`source-button ${itemType === type ? 'selected' : ''}`} onClick={() => handleButtonClick(type)}>
-                                {type.charAt(0).toUpperCase() + type.slice(1)}
-                            </button>
-                        ))
-                    }
-                </div>
-            )}
+                {showButtons && (
+                    <div className="source-selection-container" ref={buttonContainerRef}>
+                        <h2 className="source-selection-title">
+                            {queryMode === 'user' 
+                                ? 'Find recommendations for a user on:' 
+                                : 'Find series that are similar to:'}
+                        </h2>
+                        <div className="source-buttons">
+                            {queryMode === 'user'
+                                ? (['MyAnimeList', 'AniList', 'Kitsu', 'Anime-Planet'] as SourceType[]).map(src => (
+                                    <button key={src} type="button" className={`source-button ${activeSource === src ? 'selected' : ''}`} onClick={() => handleButtonClick(src)}>
+                                        {src}
+                                    </button>
+                                ))
+                                : (['anime', 'manga'] as ItemType[]).map(type => {
+                                    const buttonText = type === 'anime' ? 'an anime' : 'a manga';
+                                    return (
+                                        <button key={type} type="button" className={`source-button ${itemType === type ? 'selected' : ''}`} onClick={() => handleButtonClick(type)}>
+                                            {buttonText}
+                                        </button>
+                                    );
+                                })
+                            }
+                        </div>
+                    </div>
+                )}
+            </header>
 
             {errorMessage && (
                 <div className="error-banner" style={{ margin: '40px auto 0', width: '80%', maxWidth: '600px' }}>
@@ -371,7 +386,9 @@ const HomePage: React.FC = () => {
                 </div>
             )}
 
-            <h1 className="home-overlay">Recs☆Moe is a recommender system for anime and manga</h1>
+            <footer className="home-footer">
+                <p>Recs☆Moe is a recommender system for anime&nbsp;and&nbsp;manga</p>
+            </footer>
         </>
     );
 };

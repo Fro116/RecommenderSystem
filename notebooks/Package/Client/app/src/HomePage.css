@@ -1,11 +1,40 @@
 /* HomePage specific styles */
-.container.homepage { height: calc(var(--vh, 1vh) * 100); overflow-y: hidden; }
+.container.homepage { height: calc(var(--vh, 1vh) * 100); overflow-y: auto; }
+
+.source-selection-container {
+  margin-top: 20px;
+  padding: 16px 16px 20px;
+  background-color: #f7f7f7;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  width: 80%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.source-selection-title {
+  text-align: center;
+  font-size: 16px;
+  font-weight: 400;
+  color: #666;
+  margin: 0 0 16px 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.source-selection-title .dynamic-article {
+  display: inline-block;
+  min-width: 15px;
+  text-align: center;
+}
+
 /* Source buttons */
 .source-buttons {
   display: flex;
   justify-content: center;
   flex-wrap: wrap;
-  margin-top: 20px;
+  margin-top: 0;
 }
 
 .source-button {
@@ -15,7 +44,7 @@
   font-weight: 500;
   cursor: pointer;
   border: 1px solid #ccc;
-  border-radius: 8px;
+  border-radius: 9999px;
   background-color: #e0e0e0;
   color: #333333;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -38,19 +67,23 @@
 }
 
 /* Footer */
-.home-overlay {
+.home-footer {
   position: fixed;
   bottom: 0;
   left: 0;
-  right: 0;
-  padding: 20px;
-  background-color: rgba(250, 250, 250, 0.95);
-  text-align: center;
-  font-size: 16px;
-  color: #333;
+  width: 100%;
+  background-color: #f0f0f0;
+  border-top: 1px solid #F48FB1;
+  padding: 12px 20px;
   z-index: 10;
-  font-weight: normal;
+}
+
+.home-footer p {
   margin: 0;
+  text-align: center;
+  font-size: clamp(11px, 3.8vw, 14px);
+  color: #666;
+  font-weight: 500;
 }
 
 /* Error banner - HomePage also has an error banner */
@@ -77,12 +110,25 @@
 }
 
 @media (max-width: 600px) {
+  .source-selection-container {
+    width: auto;
+    margin-left: 10px;
+    margin-right: 10px;
+  }
+
   .source-buttons {
-    padding: 0 20px;
+    padding: 0;
   }
 
   .source-button {
     flex: 1 1 45%;
     margin: 6px;
+  }
+}
+
+@media (max-width: 414px) {
+  .home-footer {
+    padding-left: 10px;
+    padding-right: 10px;
   }
 }

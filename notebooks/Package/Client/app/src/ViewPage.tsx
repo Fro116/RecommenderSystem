@@ -50,14 +50,16 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
   const [cardRotation, setCardRotation] = useState<{ [index: number]: number }>({});
   const [pinnedCardIndex, setPinnedCardIndex] = useState<number | null>(null);
 
-  const getInitialViewType = (): 'grid' | 'list' => {
+  const getInitialViewType = useCallback((): 'grid' | 'list' => {
     const stored = localStorage.getItem('viewType');
     if (stored === 'grid' || stored === 'list') {
-        return stored;
+        return stored as 'grid' | 'list';
     }
-    return 'grid';
-  };
+    return isMobile ? 'list' : 'grid';
+  }, [isMobile]);
+
   const [viewType, setViewType] = useState<'grid' | 'list'>(getInitialViewType());
+  
   useEffect(() => {
     localStorage.setItem('viewType', viewType);
   }, [viewType]);
