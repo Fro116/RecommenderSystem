@@ -1,6 +1,5 @@
 import Logging
 
-#Logging.disable_logging(Logging.Info)
 READY::Bool = false
 
 function wait_until_ready(port::Integer)

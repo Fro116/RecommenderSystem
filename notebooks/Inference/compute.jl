@@ -2,6 +2,7 @@ module embed
 
 import Base64
 import Oxygen
+import UUIDs
 import Random
 include("../Training/import_list.jl")
 include("../julia_utils/http.jl")
@@ -20,6 +21,8 @@ include("render.jl")
 
 standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
 sanitize(x) = strip(x)
+
+const serverid = UUIDs.uuid4()
 
 function request(args...; kwargs...)::HTTP.Response
     try
@@ -84,6 +87,7 @@ Oxygen.@post "/autocomplete" function autocomplete(r::HTTP.Request)::HTTP.Respon
 end
 
 function autocomplete_user(d::Dict, encoding)::HTTP.Response
+    speedscope = [time()]
     prefix = lowercase(sanitize(d["prefix"]))
     d = Dict(
         "source" => d["source"],
@@ -95,6 +99,7 @@ function autocomplete_user(d::Dict, encoding)::HTTP.Response
         encode(d, :msgpack)...,
         status_exception = false,
     )
+    push!(speedscope, time())
     if HTTP.iserror(r_ac)
         ret = []
     else
@@ -141,7 +146,8 @@ function autocomplete_user(d::Dict, encoding)::HTTP.Response
             push!(ret, x)
         end
     end
-    ret = Dict("prefix" => d["prefix"], "autocompletes" => ret)
+    push!(speedscope, time())
+    ret = Dict("prefix" => d["prefix"], "autocompletes" => ret, "speedscope" => [serverid, diff(speedscope)])
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
@@ -200,6 +206,7 @@ function temporally_consistent_sample(arr::Vector, salt::String, window::Real)
 end
 
 function autocomplete_item(d::Dict, encoding)::HTTP.Response
+    speedscope = [time()]
     prefix = lowercase(lstrip(d["prefix"]))
     args = Dict(
         "medium" => Dict("Manga" => 0, "Anime" => 1)[d["medium"]],
@@ -211,6 +218,7 @@ function autocomplete_item(d::Dict, encoding)::HTTP.Response
         encode(args, :msgpack)...,
         status_exception = false,
     )
+    push!(speedscope, time())
     if HTTP.iserror(r_ac)
         ret = []
     else
@@ -262,7 +270,8 @@ function autocomplete_item(d::Dict, encoding)::HTTP.Response
             end
         end
     end
-    ret = Dict("prefix" => d["prefix"], "autocompletes" => ret)
+    push!(speedscope, time())
+    ret = Dict("prefix" => d["prefix"], "autocompletes" => ret, "speedscope" => [serverid, diff(speedscope)])
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
@@ -348,6 +357,7 @@ end
 end
 
 Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
+    speedscope = [time()]
     encoding = nothing
     if occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
         encoding = :gzip
@@ -365,6 +375,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     else
         state = MsgPack.unpack(Base64.base64decode(d["state"]))
     end
+    push!(speedscope, time())
     followup_action = nothing
     if action["type"] == "add_user"
         username = sanitize(action["username"])
@@ -447,6 +458,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     else
         return HTTP.Response(400, [])
     end
+    push!(speedscope, time())
     r, ok = render(state, d["pagination"])
     if !ok
         return r
@@ -462,6 +474,8 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     header = first(vcat(state["users"], state["items"]))["header"]
     ret["titlename"] = header["titlename"]
     ret["titleurl"] = header["titleurl"]
+    push!(speedscope, time())
+    ret["speedscpe"] = [serverid, diff(speedscope)]
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
