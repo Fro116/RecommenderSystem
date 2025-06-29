@@ -46,6 +46,7 @@ class ActionEmbedding(nn.Module):
         secs_in_year = secs_in_day * 365.25
         secs_in_season = secs_in_year / 4
         periods = [secs_in_day, secs_in_week, secs_in_season, secs_in_year]
+        # TODO only keep the weekly mode
         periodic_ts = torch.cat([2 * np.pi * periodic_ts / p for p in periods], dim=-1)
         periodic_ts = periodic_ts.to(torch.float32)
         # embed
@@ -437,7 +438,7 @@ class TransformerModel(nn.Module):
             return e
         elif task == "ranking":
             if self.config["causal"]:
-                return self.rating_head(e)
+                return e, self.rating_head(e)
             else:
                 return e
         else:

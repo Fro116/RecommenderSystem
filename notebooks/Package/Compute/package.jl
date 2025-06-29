@@ -22,6 +22,7 @@ function compute(basedir::String)
     copy("notebooks/Inference/compute.jl", app)
     copy("notebooks/Inference/render.jl", app)
     copy("notebooks/Training/import_list.jl", app)
+    copy("notebooks/Finetune/embed.jl", app)
     mediums = ["manga", "anime"]
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     files = vcat(

@@ -2,7 +2,7 @@ import CSV
 import DataFrames
 import JLD2
 import Memoize: @memoize
-import NNlib: gelu, logsoftmax
+import NNlib: gelu, logsoftmax, softmax
 import SparseArrays
 const datadir = "../../data/finetune";
 
@@ -20,11 +20,6 @@ const status_map = Dict(
     "completed" => 7,
     "rewatching" => 8,
 )
-
-@memoize function num_items(medium::Integer)
-    m = Dict(0 => "manga", 1 => "anime")[medium]
-    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks = 1).matchedid) + 1
-end
 
 @memoize function get_images()
     df = CSV.read("$datadir/images.csv", DataFrames.DataFrame, ntasks = 1)
@@ -193,38 +188,6 @@ end
     info
 end
 
-@memoize function get_ranking_items(medium, source)
-    info = Dict()
-    for i = 1:num_items(medium)
-        info[i-1] = Dict{String,Any}(
-            "medium" => medium,
-            "matchedid" => -1,
-            "distinctid" => -1,
-            "status" => 0,
-            "rating" => 0,
-            "progress" => 0,
-        )
-    end
-    m = Dict(0 => "manga", 1 => "anime")[medium]
-    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String, ntasks = 1)
-    for match_source in [true, false]
-        for i = 1:DataFrames.nrow(df)
-            if (df.source[i] != source && match_source) || info[df.matchedid[i]]["matchedid"] != -1
-                continue
-            end
-            info[df.matchedid[i]] = Dict{String,Any}(
-                "medium" => medium,
-                "matchedid" => df.matchedid[i],
-                "distinctid" => df.distinctid[i],
-                "status" => 0,
-                "rating" => 0,
-                "progress" => 0,
-            )
-        end
-    end
-    info
-end
-
 function retrieval(state)
     m = state["medium"]
     p = zeros(Float32, num_items(m))
@@ -324,37 +287,31 @@ function ranking(state, idxs)
     ts = time()
     Threads.@threads for i = 1:length(state["users"])
         source = state["users"][i]["source"]
-        test_items = []
-        ranking_items = get_ranking_items(m, source)
-        for idx in idxs
-            item = copy(ranking_items[idx-1])
-            item["history_max_ts"] = ts
-            push!(test_items, item)
+        d_embed = query_model(state["users"][i]["user"], m, idxs .- 1)
+        if isnothing(d_embed)
+            update_routing_table()
+            return HTTP.Response(500, []), false
         end
-        u = copy(state["users"][i]["user"])
-        u["test_items"] = test_items
-        r_embed = request(
-            "POST",
-            "$MODEL_URL/embed?medium=$m&task=ranking",
-            encode(u, :msgpack)...,
-            status_exception = false,
-        )
-        if HTTP.iserror(r_embed)
-            return HTTP.Response(r_embed.status), false
-        end
-        d_embed = decode(r_embed)
         state["users"][i]["embeds"] = merge(state["users"][i]["embeds"], d_embed)
     end
-    r = zeros(Float32, length(idxs))
-    for u in state["users"]
-        p_watch = logsoftmax(
-            registry["transformer.masked.$m.watch.weight"] * u["embeds"]["masked.$m"] +
-            registry["transformer.masked.$m.watch.bias"],
-        )[idxs]
-        p_baseline = fill(registry["transformer.causal.$m.rating_mean"], length(idxs))
-        p_masked = let
+    score = zeros(Float32, length(idxs))
+    for user in state["users"]
+        u = user["embeds"]
+        # watch feature
+        masked_logits =
+            registry["transformer.masked.$m.watch.weight"] * u["masked.$m"] +
+            registry["transformer.masked.$m.watch.bias"]
+        causal_logits =
+            registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"] +
+            registry["transformer.causal.$m.watch.bias"]
+        p_masked = softmax(masked_logits)[idxs]
+        p_causal = softmax(causal_logits)[idxs]
+        p = sum(registry["$m.retrieval.coefs"] .* [p_masked, p_causal])
+        # rating feature
+        r_baseline = fill(registry["transformer.causal.$m.rating_mean"], length(idxs))
+        r_masked = let
             a = registry["transformer.masked.$m.watch.weight"][idxs, :]'
-            u_emb = repeat(u["embeds"]["masked.$m"], 1, length(idxs))
+            u_emb = repeat(u["masked.$m"], 1, length(idxs))
             h = vcat(u_emb, a)
             h =
                 registry["transformer.masked.$m.rating.weight.1"] * h .+
@@ -363,11 +320,16 @@ function ranking(state, idxs)
             h' * registry["transformer.masked.$m.rating.weight.2"] .+
             only(registry["transformer.masked.$m.rating.bias.2"])
         end
-        p_causal = u["embeds"]["causal.$m"]
-        p_rating = sum(registry["$m.rating.coefs"] .* [p_baseline, p_masked, p_causal])
-        r += p_rating + p_watch / log(10)
+        r_causal = u["causal.ranking.$m"]
+        r = sum(registry["$m.rating.coefs"] .* [r_baseline, r_masked, r_causal])
+        if length(user["user"]["items"]) == 0
+            # TODO reevaluate new-user overrides on newer models
+            score = log.(p) + log(2) .* r
+        else
+            score = log.(p) + log(2) .* r
+        end
     end
-    r, true
+    score, true
 end
 
 function render(state, pagination)

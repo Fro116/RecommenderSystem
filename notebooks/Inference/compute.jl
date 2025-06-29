@@ -8,6 +8,7 @@ include("../Training/import_list.jl")
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
+include("../Finetune/embed.jl")
 
 const PORT = parse(Int, ARGS[1])
 const DATABASE_READ_URL = ARGS[2]
@@ -17,6 +18,7 @@ const secretdir = "../../secrets"
 const bluegreen = read("$datadir/bluegreen", String)
 const MODEL_URLS = (length(ARGS) >= 4) ? [ARGS[4]] : readlines("$secretdir/url.embed.$bluegreen.txt")
 MODEL_URL = first(MODEL_URLS)
+UPDATE_ROUTING_TABLE_TS::Float64 = time()
 include("render.jl")
 
 standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
@@ -24,30 +26,17 @@ sanitize(x) = strip(x)
 
 const serverid = UUIDs.uuid4()
 
-function request(args...; kwargs...)::HTTP.Response
-    try
-        return HTTP.request(args...; kwargs..., connect_timeout=1)
-    catch e
-        if !isa(e, HTTP.ConnectError)
-            return HTTP.Response(500, [])
-        end
-        if !update_routing_table()
-            return HTTP.Response(500, [])
-        end
-        try
-            return HTTP.request(args...; kwargs..., connect_timeout=1)
-        catch
-            return HTTP.Response(500, [])
-        end
-    end
-end
-
 Oxygen.@get "/update_routing_table" function update_routing_table(r::HTTP.Request)::HTTP.Response
     status = update_routing_table() ? 200 : 404
     HTTP.Response(status, [])
 end
 
 function update_routing_table()::Bool
+    global UPDATE_ROUTING_TABLE_TS
+    if time() - UPDATE_ROUTING_TABLE_TS < 30
+        return false
+    end
+    UPDATE_ROUTING_TABLE_TS = time()
     for url in MODEL_URLS
         try
             r = HTTP.get("$url/ready", status_exception=false, connect_timeout=1)
@@ -314,16 +303,11 @@ function add_user(d::Dict, medium::Integer)::HTTP.Response
             "titleurl" => get_user_url(d["source"], usermap["username"], usermap["userid"]),
         ),
     )
-    r_embed = request(
-        "POST",
-        "$MODEL_URL/embed?medium=$medium&task=retrieval",
-        encode(u, :msgpack)...,
-        status_exception = false,
-    )
-    if HTTP.iserror(r_embed)
-        return HTTP.Response(r_embed.status, [])
+    d_embed = query_model(u, medium, nothing)
+    if isnothing(d_embed)
+        update_routing_table()
+        return HTTP.Response(500, [])
     end
-    d_embed = decode(r_embed)
     ret["embeds"] = d_embed
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
@@ -443,16 +427,11 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
             if "masked.$medium" in keys(u["embeds"])
                 continue
             end
-            r_embed = request(
-                "POST",
-                "$MODEL_URL/embed?medium=$medium&task=retrieval",
-                encode(u["user"], :msgpack)...,
-                status_exception = false,
-            )
-            if HTTP.iserror(r_embed)
-                return HTTP.Response(r_embed.status)
+            d_embed = query_model(u["user"], medium, nothing)
+            if isnothing(d_embed)
+                update_routing_table()
+                return HTTP.Response(500, [])
             end
-            d_embed = decode(r_embed)
             state["users"][i]["embeds"] = merge(state["users"][i]["embeds"], d_embed)
         end
     else
@@ -560,6 +539,7 @@ function compile(port::Integer)
             Dict("type" => "refresh_user", "source" => source, "username" => username),
         )
     end
+    logtag("STARTUP", "/set_media")
     for m in ["Manga", "Anime"]
         apply_action(Dict("type" => "set_media", "medium" => m))
     end
