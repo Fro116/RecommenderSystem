@@ -324,9 +324,9 @@ function ranking(state, idxs)
         r = sum(registry["$m.rating.coefs"] .* [r_baseline, r_masked, r_causal])
         if length(user["user"]["items"]) == 0
             # TODO reevaluate new-user overrides on newer models
-            score = log.(p) + log(2) .* r
+            score = log.(p) + r
         else
-            score = log.(p) + log(2) .* r
+            score = log.(p) + r
         end
     end
     score, true

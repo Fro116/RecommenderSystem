@@ -92,24 +92,26 @@ header input:hover {
   color: #FB8C00;
 }
 
-.autocomplete-avatar-user {
-  width: 48px;
-  height: 48px;
-  object-fit: cover;
-  margin-right: 16px;
-}
+ .autocomplete-avatar-user {
+	width: 48px;
+	height: 48px;
+	object-fit: cover;
+	margin-right: 16px;
+	flex-shrink: 0;
+ }
+ 
+ .autocomplete-avatar-item {
+	height: 72px;
+	width: 50px;
+	object-fit: cover;
+	border-radius: 4px;
+ 	margin-right: 16px;
+ 	flex-shrink: 0;
+ 	background-color: #f0f0f0;
+ 	image-rendering: -webkit-optimize-contrast;
+ 	image-rendering: high-quality;
+ }
 
-.autocomplete-avatar-item {
-  height: 72px;
-  width: 50px;
-  object-fit: cover;
-  border-radius: 4px;
-  margin-right: 16px;
-  flex-shrink: 0;
-  background-color: #f0f0f0;
-  image-rendering: -webkit-optimize-contrast;
-  image-rendering: high-quality;
-}
 
 /* STYLES for Autocomplete Item Text */
 .autocomplete-item-text-wrapper {

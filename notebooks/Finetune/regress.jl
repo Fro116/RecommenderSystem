@@ -372,13 +372,13 @@ end
 function ranking_metrics(users, registry, medium::Integer)
     m = medium
     p, r, y, w = get_ranking_features(users, registry, m)
-    w_rating = Float32[x == 0 ? 0 : 2^x for x in w]
-    w_norating = Float32[x == 0 ? 1 : 0 for x in w]
+    w_rating = Float32[x == 0 ? 0 : exp(1)^x for x in w]
+    w_norating = Float32[1 for x in w]
     ret = Dict(
-        "$m.ranking.rnDCG" => weighted_ndcg(p .* r .^ 4, y, w_rating),
-        "$m.ranking.wnDCG" => weighted_ndcg(p .* r .^ 4, y, w_norating),
-        "$m.ranking.rnDCG.baseline" => weighted_ndcg(p, y, w_rating),
-        "$m.ranking.wnDCG.baseline" => weighted_ndcg(p, y, w_norating),
+        "$m.ranking.wnDCG" => weighted_ndcg(p .* exp.(r), y, w_rating),
+        "$m.ranking.nDCG" => weighted_ndcg(p .* exp.(r), y, w_norating),
+        "$m.ranking.wnDCG.baseline" => weighted_ndcg(p, y, w_rating),
+        "$m.ranking.nDCG.baseline" => weighted_ndcg(p, y, w_norating),
     )
 end
 
@@ -413,7 +413,6 @@ function make_metric_dataframe(dict)
     end
     df
 end
-
 
 function save_weights()
     registry = get_registry()

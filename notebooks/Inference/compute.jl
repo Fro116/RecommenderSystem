@@ -18,7 +18,7 @@ const secretdir = "../../secrets"
 const bluegreen = read("$datadir/bluegreen", String)
 const MODEL_URLS = (length(ARGS) >= 4) ? [ARGS[4]] : readlines("$secretdir/url.embed.$bluegreen.txt")
 MODEL_URL = first(MODEL_URLS)
-UPDATE_ROUTING_TABLE_TS::Float64 = time()
+UPDATE_ROUTING_TABLE_TS::Float64 = -Inf
 include("render.jl")
 
 standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
@@ -458,19 +458,7 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
-function compile(port::Integer)
-    while true
-        if !update_routing_table()
-            logtag("STARTUP", "waiting for models to startup")
-            sleep(10)
-        else
-            break
-        end
-    end
-    r = HTTP.get("http://localhost:$PORT/bluegreen", status_exception = false)
-    if HTTP.iserror(r)
-        logerror("bluegreen error $(r.status)")
-    end
+function compile_source(port::Integer, compile_source::AbstractString)
     test_users = CSV.read(
         "$secretdir/test.users.csv",
         DataFrames.DataFrame,
@@ -507,6 +495,9 @@ function compile(port::Integer)
         state = d["state"]
     end
     for (source, medium, itemid) in zip(test_items.source, test_items.medium, test_items.itemid)
+        if source != compile_source
+            continue
+        end
         m = Dict(0=>"Manga", 1=>"Anime")[medium]
         logtag("STARTUP", "/autocomplete")
         HTTP.post(
@@ -518,11 +509,14 @@ function compile(port::Integer)
             )...,
             status_exception = false,
         )
-        logtag("STARTUP", "/add_item")
+        logtag("STARTUP", "/add_item $compile_source")
         apply_action(Dict("type" => "add_item", "source" => source, "medium" => m, "itemid" => itemid))
     end
     for (source, username) in zip(test_users.source, test_users.username)
-        logtag("STARTUP", "/autocomplete")
+        if source != compile_source
+            continue
+        end
+        logtag("STARTUP", "/autocomplete $compile_source")
         HTTP.post(
             "http://localhost:$PORT/autocomplete",
             encode(
@@ -532,16 +526,34 @@ function compile(port::Integer)
             )...,
             status_exception = false,
         )
-        logtag("STARTUP", "/add_user")
+        logtag("STARTUP", "/add_user $compile_source")
         apply_action(Dict("type" => "add_user", "source" => source, "username" => username))
-        logtag("STARTUP", "/refresh_user")
+        logtag("STARTUP", "/refresh_user $compile_source")
         apply_action(
             Dict("type" => "refresh_user", "source" => source, "username" => username),
         )
     end
-    logtag("STARTUP", "/set_media")
+    logtag("STARTUP", "/set_media $compile_source")
     for m in ["Manga", "Anime"]
         apply_action(Dict("type" => "set_media", "medium" => m))
+    end
+end
+
+function compile(port::Integer)
+    while true
+        if !update_routing_table()
+            logtag("STARTUP", "waiting for models to startup")
+            sleep(10)
+        else
+            break
+        end
+    end
+    r = HTTP.get("http://localhost:$PORT/bluegreen", status_exception = false)
+    if HTTP.iserror(r)
+        logerror("bluegreen error $(r.status)")
+    end
+    Threads.@threads for source in ["mal", "anilist", "kitsu", "animeplanet"]
+        compile_source(port, source)
     end
 end
 

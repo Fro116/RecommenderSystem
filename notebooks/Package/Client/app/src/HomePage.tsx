@@ -265,29 +265,15 @@ const HomePage: React.FC = () => {
                                         userMetadata = parts.join(' | ');
                                     }
 
-                                    const imageInfo = item.image?.[0];
-                                    let imageStyle: React.CSSProperties = {};
-                                    if (imageInfo && imageInfo.width > 0) {
-                                        const aspectRatio = imageInfo.height / imageInfo.width;
-                                        if (aspectRatio >= 1.3 && aspectRatio <= 1.6) {
-                                            imageStyle = { height: '72px', width: 'auto' };
-                                        } else {
-                                            imageStyle = { height: '72px', width: '50px', objectFit: 'cover' };
-                                        }
-                                    } else {
-                                        // Default style for items with no image info
-                                        imageStyle = { height: '72px', width: '50px' };
-                                    }
-
                                     return (
                                         <div key={idx} className="autocomplete-item" onMouseDown={e => e.preventDefault()} onClick={() => handleAutocompleteClick(item)}>
                                             {queryMode === 'user'
                                                 ? (item.avatar || item.missing_avatar) && (
                                                     <img className="autocomplete-avatar-user" src={item.avatar || item.missing_avatar!} alt={item.username || ''} onError={e => { if (e.currentTarget.src !== (item.missing_avatar || '')) e.currentTarget.src = item.missing_avatar || ''; }} />
                                                 )
-                                                : imageInfo?.url && (
-                                                    <img className="autocomplete-avatar-item" src={imageInfo.url} alt={item.title || ''} style={imageStyle} onError={e => { e.currentTarget.style.display = 'none'; }}/>
-                                                )
+                                                : item.image?.[0]?.url && (
+                                                    <img className="autocomplete-avatar-item" src={item.image[0].url} alt={item.title || ''} onError={e => { e.currentTarget.style.display = 'none'; }}/>
+                                                )
                                             }
                                             {queryMode === 'user' ? (
                                                 <div className="autocomplete-item-text-wrapper">
