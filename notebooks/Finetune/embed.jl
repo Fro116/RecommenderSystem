@@ -60,7 +60,7 @@ end
 function query_model(
     user,
     medium::Integer,
-    test_matchedids::Union{Vector,Nothing},
+    test_matchedids::Union{Vector,Nothing};
     timeout::Real = 10,
     retries::Int = 1,
 )
@@ -81,7 +81,7 @@ function query_model(
     end
     retry() =
         retries == 0 ? nothing :
-        query_model(user, medium, task; test_matchedids=test_matchedids, timeout = timeout, retries = retries - 1)
+        query_model(user, medium, test_matchedids; timeout = timeout, retries = retries - 1)
     model = models[(medium, task)]
     reqid = lock(model.lock) do
         model.reqid += 1

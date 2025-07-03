@@ -1,5 +1,6 @@
 import CSV
 import DataFrames
+import Dates
 import JLD2
 import Memoize: @memoize
 import NNlib: gelu, logsoftmax, softmax
@@ -115,6 +116,16 @@ function render_card(d)
     d
 end
 
+function is_unreleased(status, startdate)
+    if !ismissing(startdate) && Dates.Date(startdate) < Dates.now()
+        return false
+    end
+    if !ismissing(status) && status in ["Upcoming", "TBA"]
+        return true
+    end
+    false
+end
+
 @memoize function get_media_info(medium)
     info = Dict()
     m = Dict(0 => "manga", 1 => "anime")[medium]
@@ -184,6 +195,11 @@ end
             "images" => get_images(df.source[i], medium, df.itemid[i]),
             "missing_images" => get_missing_images(),
         )
+    end
+    for (k, v) in collect(info)
+         if is_unreleased(v["status"], v["startdate"])
+            delete!(info, k)
+        end
     end
     info
 end

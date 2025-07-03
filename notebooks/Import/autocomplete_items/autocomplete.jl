@@ -70,7 +70,10 @@ function get_media_groups(medium::AbstractString)
     df
 end
 
-get_media_groups(medium::Int) = get_media_groups(Dict(0 => "manga", 1 => "anime")[medium])
+function get_media_groups(medium::Int)
+    df = get_media_groups(Dict(0 => "manga", 1 => "anime")[medium])
+    filter(x -> !(coalesce(x.status, nothing) in ["Upcoming", "TBA"]), df)
+end
 
 function get_title_records(medium::Int)
     df = get_media_groups(medium)
