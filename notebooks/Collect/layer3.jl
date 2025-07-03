@@ -366,15 +366,22 @@ Oxygen.@post "/mal_media" function mal_media(r::HTTP.Request)::HTTP.Response
     data = decode(r)
     medium = data["medium"]
     itemid = data["itemid"]
-    details = @retry get_mal_media("mal", medium, itemid)
-    if isa(details, Errors)
-        return HTTP.Response(Int(details), [])
+    malmedia = @retry get_mal_media("mal", medium, itemid)
+    if isa(malmedia, Errors)
+        return HTTP.Response(Int(malmedia), [])
     end
-    relations = @retry get_mal_media("malweb", medium, itemid)
-    if isa(relations, Errors)
-        return HTTP.Response(Int(relations), [])
+    malwebmedia = @retry get_mal_media("malweb", medium, itemid)
+    if isa(malwebmedia, Errors)
+        return HTTP.Response(Int(malwebmedia), [])
     end
-    HTTP.Response(200, encode(merge(details, relations), :msgpack)...)
+    details = malmedia["details"]
+    details["userrec"] = malwebmedia["recommendations"]
+    details["reviews"] = malwebmedia["reviews"]
+    ret = Dict(
+        "details" => details,
+        "relations" => malwebmedia["relations"],
+    )
+    HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
 function get_mal_media(location::String, medium::String, itemid::Integer)

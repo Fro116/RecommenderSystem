@@ -6,7 +6,7 @@ const LAYER_1_URLS = split(ARGS[3], ",")
 const DEFAULT_IMPERSONATE = parse(Bool, ARGS[4])
 const DEFAULT_TIMEOUT = parse(Int, ARGS[5])
 const USE_SHARED_IPS = parse(Bool, ARGS[6])
-const API_VERSION = "5.0.0"
+const API_VERSION = "5.1.0"
 
 import CSV
 import DataFrames
@@ -662,14 +662,36 @@ function malweb_get_username(resource::Resource, userid::Integer)
 end
 
 function malweb_get_media(resource::Resource, medium::String, itemid::Integer)
+    ret = Dict()
     url = "https://myanimelist.net/$medium/$itemid"
     r = request(resource, "GET", url, Dict("impersonate" => true))
     if r.status >= 400
         logstatus("malweb_get_media", r, url)
         return HTTP.Response(r)
     end
-    relations = malweb_get_media_relations(r.body, medium, itemid)
-    ret = Dict("relations" => relations)
+    ret["relations"] = malweb_get_media_relations(r.body, medium, itemid)
+    url = "https://myanimelist.net/$medium/$itemid/$itemid/userrecs"
+    r = request(resource, "GET", url, Dict("impersonate" => true))
+    if r.status >= 400
+        logstatus("malweb_get_media", r, url)
+        return HTTP.Response(r)
+    end
+    ret["recommendations"] = malweb_get_media_recommendations(r.body, medium, itemid)
+    reviews = []
+    reviews_page = 0
+    next_page = true
+    while next_page
+        reviews_page += 1
+        url = "https://myanimelist.net/$medium/$itemid/$itemid/reviews?spoiler=on&p=$reviews_page"
+        r = request(resource, "GET", url, Dict("impersonate" => true))
+        if r.status >= 400
+            logstatus("malweb_get_media", r, url)
+            return HTTP.Response(r)
+        end
+        revs, next_page = malweb_get_media_reviews(r.body, medium, itemid)
+        append!(reviews, revs)
+    end
+    ret["reviews"] = reviews
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
@@ -776,6 +798,85 @@ function malweb_get_media_relations(text::String, medium::String, itemid::Intege
         logerror("malweb_get_media_relations $medium $itemid could not parse relations")
     end
     collect(records)
+end
+
+function malweb_get_media_recommendations(text::String, medium::String, itemid::Integer)
+    all_recommendations = []
+    item_chunks = split(
+        text,
+        r"""<div class="picSurround"><a href="https://myanimelist.net/(?:anime|manga)/""",
+    )
+    if length(item_chunks) < 2
+        return []
+    end
+    user_rec_regex =
+        r"(?s)class=\"spaceit_pad detail-user-recs-text\"[^>]*>(.*?)</div>.*?Recommended by <a href=\"/profile/([^\"]+)\">"
+    for chunk in item_chunks[2:end]
+        rec_itemid_match = match(r"^([0-9]+)/", chunk)
+        if isnothing(rec_itemid_match)
+            continue
+        end
+        rec_itemid = parse(Int, rec_itemid_match.captures[1])
+        for user_match in eachmatch(user_rec_regex, chunk)
+            raw_text, username = user_match.captures
+            final_text =
+                replace(
+                    raw_text,
+                    r"<span style=\"display: none;\"[^>]*>" => "",
+                    "</span>" => "",
+                    r"<a [^>]*?>read more</a>" => "",
+                    "&nbsp;" => " ",
+                    r"<br\s*/?>" => "\n",
+                ) |>
+                html_unescape |>
+                (s -> replace(s, r"<[^>]*>" => "")) |>
+                strip
+            push!(
+                all_recommendations,
+                Dict("itemid" => rec_itemid, "username" => username, "text" => final_text),
+            )
+        end
+    end
+    all_recommendations
+end
+
+function malweb_get_media_reviews(text::String, medium::String, itemid::Integer)
+    entries = []
+    review_block_regex =
+        r"(?s)<div class=\"review-element js-review-element\".*?</div>\s*</div>\s*</div>"
+    for m in eachmatch(review_block_regex, text)
+        block = m.match
+        username_match = match(r"class=\"username\">\s*<a\s.*?>(.*?)</a>", block)
+        text_match = match(r"(?s)<div class=\"text\">(.*?)</div>", block)
+        if isnothing(username_match) || isnothing(text_match)
+            continue
+        end
+        username = strip(only(username_match.captures))
+        raw_text = only(text_match.captures)
+        final_text =
+            replace(
+                raw_text,
+                r"<span class=\"js-visible\".*?</span>"s => "",
+                "<span class=\"js-hidden\" style=\"display: none;\">" => "",
+                "</span>" => "",
+                r"<br\s*\/?>" => "\n",
+            ) |>
+            html_unescape |>
+            (s -> replace(s, r"<[^>]*>" => "")) |>
+            strip
+        rating_match = match(r"Reviewer’s Rating: <span class=\"num\">(\d+)</span>", block)
+        rating = isnothing(rating_match) ? nothing : parse(Int, only(rating_match.captures))
+        upvotes_match = match(r"data-reactions='.*?\"num\":(\d+)", block)
+        upvotes = isnothing(upvotes_match) ? 0 : parse(Int, only(upvotes_match.captures))
+        entry = Dict(
+            "username" => username,
+            "text" => final_text,
+            "rating" => rating,
+            "upvotes" => upvotes
+        )
+        push!(entries, entry)
+    end
+    (entries, occursin(r""">More Reviews</a>""", text))
 end
 
 function malweb_get_user(resource::Resource, username::String)
@@ -1085,7 +1186,7 @@ end
 
 function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
     url = "https://graphql.anilist.co"
-    query = """
+    initial_query = """
     query (\$id: Int, \$MEDIA: MediaType)
     {
         Media (id: \$id, type:\$MEDIA) {
@@ -1180,7 +1281,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
             externalLinks {
                 url
             }
-            reviews {
+            reviews(sort: RATING_DESC, perPage: 25, page: {reviews_page}) {
                 nodes {
                     userId
                     summary
@@ -1191,8 +1292,11 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
                     createdAt
                     updatedAt
                 }
+                pageInfo {
+                    hasNextPage
+                }
             }
-            recommendations(sort: RATING_DESC) {
+            recommendations(sort: RATING_DESC, perPage: 25, page: {recommendations_page}) {
                 nodes {
                     rating
                     mediaRecommendation {
@@ -1200,96 +1304,194 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
                         type
                     }
                 }
+                pageInfo {
+                    hasNextPage
+                }
             }
             isRecommendationBlocked
             isReviewBlocked
             modNotes
         }
     }"""
-    variables = Dict("id" => itemid, "MEDIA" => uppercase(medium))
-    r = request(
-        resource,
-        "POST",
-        url,
-        encode(Dict("query" => query, "variables" => variables), :json)...,
-    )
-    if r.status >= 400
-        logstatus("anilist_get_media", r, url)
-        return HTTP.Response(r)
+    function get_paged_query(components)
+        header = """
+    query (\$id: Int, \$MEDIA: MediaType)
+    {
+        Media (id: \$id, type:\$MEDIA) {
+        """
+        footer = """
+        }
+    }"""
+        paged_components = Dict(
+            "reviews" => """
+            reviews(sort: RATING_DESC, perPage: 25, page: {reviews_page}) {
+                nodes {
+                    userId
+                    summary
+                    body
+                    rating
+                    ratingAmount
+                    score
+                    createdAt
+                    updatedAt
+                }
+                pageInfo {
+                    hasNextPage
+                }
+            }""",
+            "recommendations" => """
+            recommendations(sort: RATING_DESC, perPage: 25, page: {recommendations_page}) {
+                nodes {
+                    rating
+                    mediaRecommendation {
+                        id
+                        type
+                    }
+                }
+                pageInfo {
+                    hasNextPage
+                }
+            }
+            """
+        )
+        query = header
+        for k in components
+            query *= paged_components[k]
+        end
+        query *= footer
+        query
     end
-
     function season(year, season)
         if isnothing(year) || isnothing(season)
             return nothing
         end
         "$year $season"
     end
-    json = JSON3.read(r.body)
-    data = json["data"]["Media"]
-    details = Dict(
-        "version" => API_VERSION,
-        "itemid" => data["id"],
-        "malid" => data["idMal"],
-        "medium" => medium,
-        "title" => data["title"],
-        "mediatype" => optget(data, "format"),
-        "status" => optget(data, "status"),
-        "summary" => optget(data, "description"),
-        "startdate" => optget(data, "startDate"),
-        "enddate" => optget(data, "endDate"),
-        "seasonYear" => optget(data, "seasonYear"),
-        "season" => optget(data, "season"),
-        "episodes" => optget(data, "episodes"),
-        "duration" => optget(data, "duration"),
-        "chapters" => optget(data, "chapters"),
-        "volumes" => optget(data, "volumes"),
-        "countryOfOrigin" => optget(data, "countryOfOrigin"),
-        "isLicensed" => optget(data, "isLicensed"),
-        "source" => optget(data, "source"),
-        "hashtag" => optget(data, "hashtag"),
-        "trailer" => optget(data, "trailer"),
-        "updatedAt" => optget(data, "updatedAt"),
-        "coverImage" => optget(data, "coverImage"),
-        "bannerimage" => optget(data, "bannerImage"),
-        "genres" => optget(data, "genres"),
-        "synonyms" => optget(data, "synonyms"),
-        "isLocked" => optget(data, "isLocked"),
-        "tags" => optget(data, "tags"),
-        "charactersPeek" => [
-            Dict("role" => x["role"], "name" => x["node"]["name"]["full"]) for
-            x in get(data["characters"], "edges", [])
-        ],
-        "staffPeek" => [
-            Dict("role" => x["role"], "name" => x["node"]["name"]["full"]) for
-            x in get(data["staff"], "edges", [])
-        ],
-        "studios" => [x["name"] for x in get(data["studios"], "nodes", [])],
-        "externalUrls" => [x["url"] for x in get(data["studios"], "externalLinks", [])],
-        "isAdult" => optget(data, "isAdult"),
-        "reviewsPeek" => get(data["reviews"], "nodes", []),
-        "recommendationsPeek" => [
-            Dict(
-                "rating" => x["rating"],
-                "medium" => x["mediaRecommendation"]["type"],
-                "itemid" => x["mediaRecommendation"]["id"],
-            ) for x in get(data["recommendations"], "nodes", [])
-            if !isnothing(x["mediaRecommendation"])
-        ],
-        "isRecommendationBlocked" => optget(data, "isRecommendationBlocked"),
-        "isReviewBlocked" => optget(data, "isReviewBlocked"),
-        "modNotes" => optget(data, "modNotes"),
-    )
+    details = Dict()
     relations = []
-    for e in get(data["relations"], "edges", [])
-        d = Dict(
-            "version" => API_VERSION,
-            "relation" => e["relationType"],
-            "itemid" => itemid,
-            "medium" => medium,
-            "target_id" => e["node"]["id"],
-            "target_medium" => e["node"]["type"],
+    pages = Dict("reviews" => 1, "recommendations" => 1)
+    while !isempty(pages)
+        variables = Dict("id" => itemid, "MEDIA" => uppercase(medium))
+        is_first_page = all(values(pages) .== 1)
+        if is_first_page
+            query = initial_query
+        else
+            query = get_paged_query(collect(keys(pages)))
+        end
+        for (k, v) in pages
+            query = replace(query, "{$(k)_page}" => v)
+        end
+        r = request(
+            resource,
+            "POST",
+            url,
+            encode(Dict("query" => query, "variables" => variables), :json)...,
         )
-        push!(relations, d)
+        if r.status >= 400
+            logstatus("anilist_get_media", r, url)
+            return HTTP.Response(r)
+        end
+        json = JSON3.read(r.body)
+        data = json["data"]["Media"]
+        if is_first_page
+            page_details = Dict(
+                "version" => API_VERSION,
+                "itemid" => data["id"],
+                "malid" => data["idMal"],
+                "medium" => medium,
+                "title" => data["title"],
+                "mediatype" => optget(data, "format"),
+                "status" => optget(data, "status"),
+                "summary" => optget(data, "description"),
+                "startdate" => optget(data, "startDate"),
+                "enddate" => optget(data, "endDate"),
+                "seasonYear" => optget(data, "seasonYear"),
+                "season" => optget(data, "season"),
+                "episodes" => optget(data, "episodes"),
+                "duration" => optget(data, "duration"),
+                "chapters" => optget(data, "chapters"),
+                "volumes" => optget(data, "volumes"),
+                "countryOfOrigin" => optget(data, "countryOfOrigin"),
+                "isLicensed" => optget(data, "isLicensed"),
+                "source" => optget(data, "source"),
+                "hashtag" => optget(data, "hashtag"),
+                "trailer" => optget(data, "trailer"),
+                "updatedAt" => optget(data, "updatedAt"),
+                "coverImage" => optget(data, "coverImage"),
+                "bannerimage" => optget(data, "bannerImage"),
+                "genres" => optget(data, "genres"),
+                "synonyms" => optget(data, "synonyms"),
+                "isLocked" => optget(data, "isLocked"),
+                "tags" => optget(data, "tags"),
+                "charactersPeek" => [
+                    Dict("role" => x["role"], "name" => x["node"]["name"]["full"])
+                    for x in get(data["characters"], "edges", [])
+                ],
+                "staffPeek" => [
+                    Dict("role" => x["role"], "name" => x["node"]["name"]["full"])
+                    for x in get(data["staff"], "edges", [])
+                ],
+                "studios" => [x["name"] for x in get(data["studios"], "nodes", [])],
+                "externalUrls" =>
+                    [x["url"] for x in get(data["studios"], "externalLinks", [])],
+                "isAdult" => optget(data, "isAdult"),
+                "reviewsPeek" => collect(get(data["reviews"], "nodes", [])),
+                "recommendationsPeek" => [
+                    Dict(
+                        "rating" => x["rating"],
+                        "medium" => x["mediaRecommendation"]["type"],
+                        "itemid" => x["mediaRecommendation"]["id"],
+                    ) for x in get(data["recommendations"], "nodes", []) if
+                    !isnothing(x["mediaRecommendation"])
+                ],
+                "isRecommendationBlocked" => optget(data, "isRecommendationBlocked"),
+                "isReviewBlocked" => optget(data, "isReviewBlocked"),
+                "modNotes" => optget(data, "modNotes"),
+            )
+            page_relations = []
+            for e in get(data["relations"], "edges", [])
+                d = Dict(
+                    "version" => API_VERSION,
+                    "relation" => e["relationType"],
+                    "itemid" => itemid,
+                    "medium" => medium,
+                    "target_id" => e["node"]["id"],
+                    "target_medium" => e["node"]["type"],
+                )
+                push!(page_relations, d)
+            end
+        else
+            page_details = Dict()
+            if "reviews" in keys(pages)
+                page_details["reviewsPeek"] = collect(get(data["reviews"], "nodes", []))
+            end
+            if "recommendations" in keys(pages)
+                page_details["recommendationsPeek"] = [
+                    Dict(
+                        "rating" => x["rating"],
+                        "medium" => x["mediaRecommendation"]["type"],
+                        "itemid" => x["mediaRecommendation"]["id"],
+                    ) for x in get(data["recommendations"], "nodes", []) if
+                    !isnothing(x["mediaRecommendation"])
+                ]
+            end
+            page_relations = []
+        end
+        for k in collect(keys(pages))
+            if data[k]["pageInfo"]["hasNextPage"]
+                pages[k] += 1
+            else
+                delete!(pages, k)
+            end
+        end
+        for (k, v) in page_details
+            if k ∉ keys(details)
+                details[k] = v
+            else
+                append!(details[k], v)
+            end
+        end
+        append!(relations, page_relations)
     end
     ret = Dict("details" => details, "relations" => relations)
     HTTP.Response(200, encode(ret, :msgpack)...)
@@ -2097,8 +2299,132 @@ function animeplanet_get_media(
             text,
         )
     ]
+    recommendations = []
+    recommendations_page = 1
+    has_next_page = true
+    while has_next_page
+        url = "https://www.anime-planet.com/$medium/$itemid/recommendations/$medium?page=$recommendations_page"
+        r = request(resource, "GET", url, Dict("sessionid" => sessionid))
+        text = parse_animeplanet_response(resource, r, x -> !occursin("<h1>You searched for $itemid</h1>", x))
+        if text isa HTTP.Response
+            logstatus("animeplanet_get_media", text, url)
+            return text
+        end
+        entries, has_next_page = animeplanet_get_media_recommendations(text, medium, itemid)
+        append!(recommendations, entries)
+        recommendations_page += 1
+    end
+    details["recommendations"] = recommendations
+    reviews = []
+    reviews_page = 1
+    has_next_page = true
+    while has_next_page
+        url = "https://www.anime-planet.com/$medium/$itemid/reviews?page=$reviews_page"
+        r = request(resource, "GET", url, Dict("sessionid" => sessionid))
+        text = parse_animeplanet_response(resource, r, x -> !occursin("<h1>You searched for $itemid</h1>", x))
+        if text isa HTTP.Response
+            logstatus("animeplanet_get_media", text, url)
+            return text
+        end
+        entries, has_next_page = animeplanet_get_media_reviews(text, medium, itemid)
+        append!(reviews, entries)
+        reviews_page += 1
+    end
+    details["reviews"] = reviews
     ret = Dict("details" => details, "relations" => relations)
     HTTP.Response(200, encode(ret, :msgpack)...)
+end
+
+function animeplanet_get_media_recommendations(text::String, medium::String, itemid::String)
+    entries = []
+    item_chunks = split(text, r"""<h3 class="flipMain">""")
+    user_rec_regex =
+        r"(?s)<h5>.*?<a href=\"/users/([^\"]+)\">\1</a>.*?</h5>\s*<p class=\"recReason\">(.*?)</p>"
+    for chunk in item_chunks[2:end]
+        itemid_match = match(r"<a href=\"/(?:anime|manga)/([^\"]+)\">", chunk)
+        if isnothing(itemid_match)
+            continue
+        end
+        rec_itemid = only(itemid_match.captures)
+        for user_match in eachmatch(user_rec_regex, chunk)
+            username, raw_text = user_match.captures
+            final_text =
+                replace(raw_text, r"</p>\s*<p>" => "\n\n") |>
+                html_unescape |>
+                (s -> replace(s, r"<[^>]*>" => "")) |>
+                strip
+            push!(entries, Dict("itemid" => rec_itemid, "username" => username, "text" => final_text))
+        end
+    end
+    has_next_page = occursin(r"<li class='next'><a href=", text)
+    (entries, has_next_page)
+end
+
+function animeplanet_get_media_reviews(text::String, medium::String, itemid::String)
+    entries = []
+    review_chunks = split(
+        text,
+        r"""<section class="pure-g" id="\d+" itemprop="review" itemscope itemtype="https://schema.org/Review">""",
+    )
+    if length(review_chunks) < 2
+        return ([], false)
+    end
+    maybeint(x) = isnothing(x) ? 0 : parse(Int, x)
+    for chunk in review_chunks[2:end]
+        username = extract(chunk, """<span itemprop="name">""", "</span>", optional = true)
+        if isnothing(username)
+            continue
+        end
+        raw_text = extract(
+            chunk,
+            """<div class="pure-1 userContent readMore" itemprop="reviewBody">""",
+            "</div>",
+            optional = true,
+        )
+        if isnothing(raw_text)
+            continue
+        end
+        final_text =
+            replace(
+                raw_text,
+                r"<p>" => "",
+                r"</p>" => "\n\n",
+                r"<br\s*/?>" => "\n",
+                r"<em>" => "",
+                r"</em>" => "",
+                r"<strong>" => "",
+                r"</strong>" => "",
+            ) |>
+            html_unescape |>
+            (s -> replace(s, r"<[^>]*>" => "")) |>
+            strip
+
+        rating_str = extract(
+            chunk,
+            """<meta itemprop="ratingValue" content=\"""",
+            "\"",
+            optional = true,
+        )
+        rating = isnothing(rating_str) ? nothing : round(Int, parse(Float64, rating_str))
+        loves_str = extract(
+            chunk,
+            """>toggle_love\\('user_reviews', \\d+\\)">""",
+            "</a>",
+            optional = true,
+        )
+        funny_str = extract(chunk, """Funny  \\(""", "\\)", optional = true)
+        helpful_str = extract(chunk, """Helpful  \\(""", "\\)", optional = true)
+        upvotes = maybeint(loves_str) + maybeint(funny_str) + maybeint(helpful_str)
+        entry = Dict(
+            "username" => username,
+            "text" => final_text,
+            "rating" => rating,
+            "upvotes" => upvotes,
+        )
+        push!(entries, entry)
+    end
+    has_next_page = occursin(r"<li class='next'><a href=", text)
+    (entries, has_next_page)
 end
 
 function animeplanet_get_user(resource::Resource, sessionid::String, username::String)
