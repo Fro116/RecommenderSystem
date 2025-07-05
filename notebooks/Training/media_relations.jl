@@ -182,8 +182,10 @@ end
             histories[t] = project_earliest(user, medium)
         end
         for h in histories
-            for i in 2:length(h)
-                watch_order[h[i-1]+1, h[i]+1] += 1
+            for i in 1:length(h)
+                for j in i+1:length(h)
+                     watch_order[h[i]+1, h[j]+1] += 1
+                end
             end
         end
     end
@@ -261,7 +263,7 @@ function save_adaptations(medium)
     get_relations(medium, cross_medium, Set(["adaptation", "source", "alternative_version", "parent_story", "side_story"]))
 end
 
-function save_data(m::Int)
+function save_relations(m::Int)
     d = Dict()
     d["$m.dependencies"] = save_dependencies(m)
     d["$m.related"] = save_related(m)
@@ -279,4 +281,20 @@ function save_data(m::Int)
     run(`sh -c $cmd`)
 end
 
-save_data(parse(Int, ARGS[1]))
+function save_watch_order(m::Int)
+    d = Dict()
+    d["$m.watches"] = get_watch_order(m)
+    fn = "watches.$m.jld2"
+    JLD2.save("$datadir/$fn", d)
+    tag = read("$datadir/list_tag", String)
+    template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
+    cmd = replace(
+        template,
+        "{INPUT}" => "$datadir/$fn",
+        "{OUTPUT}" => fn,
+    )
+    run(`sh -c $cmd`)
+end
+
+save_relations(parse(Int, ARGS[1]))
+save_watch_order(parse(Int, ARGS[1]))

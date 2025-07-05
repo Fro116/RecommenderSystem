@@ -1,7 +1,9 @@
 import CSV
 import DataFrames
+import JLD2
 import JSON3
 import Random
+import Statistics
 const datadir = "../../../data/finetune/clip"
 
 function download_media(source::String)
@@ -33,11 +35,80 @@ end
 
 function get_counts(medium::Int)
     m = Dict(0 => "manga", 1 => "anime")[medium]
-    df = CSV.read("$datadir/../$m.csv", DataFrames.DataFrame, ntasks=1)
+    df = CSV.read("$datadir/../$m.csv", DataFrames.DataFrame, ntasks = 1)
     df = DataFrames.combine(DataFrames.groupby(df, [:source, :matchedid])) do subdf
         subdf[argmax(subdf.count), :]
     end
     DataFrames.combine(DataFrames.groupby(df, [:matchedid]), :count => sum => :count)
+end
+
+function make_symmetric(df)
+    records = Dict()
+    for x in eachrow(df)
+        k = (x.source, x.medium, x.username, sort([x.sourceid, x.targetid])...)
+        if k ∉ keys(records)
+            records[k] = x.count
+        else
+            records[k] = max(records[k], x.count)
+        end
+    end
+    rows = []
+    for (k, v) in records
+        source, medium, username, sourceid, targetid = k
+        push!(rows, (source, medium, username, sourceid, targetid, v))
+        push!(rows, (source, medium, username, targetid, sourceid, v))
+    end
+    DataFrames.DataFrame(
+        rows,
+        ["source", "medium", "username", "sourceid", "targetid", "count"],
+    )
+end
+
+function split_by_user(df, test_frac)
+    users = Set()
+    for x in eachrow(df)
+        push!(users, (x.source, x.username))
+    end
+    test_users = Set([(s, u) for (s, u) in users if rand() < test_frac])
+    test_mask = [(x.source, x.username) in test_users for x in eachrow(df)]
+    df[.!test_mask, :], df[test_mask, :]
+end
+
+function aggragate_by_matchedid(df, medium)
+    df = DataFrames.combine(
+        DataFrames.groupby(df, [:cliptype, :source, :medium, :sourceid, :targetid]),
+        :count => sum => :count,
+    )
+    m = Dict(0 => "manga", 1 => "anime")[medium]
+    group_df = CSV.read(
+        "$datadir/../$m.csv",
+        DataFrames.DataFrame,
+        types = Dict("itemid" => String),
+        ntasks = 1,
+    )
+    group_df = group_df[:, [:source, :itemid, :medium, :matchedid]]
+    df = DataFrames.innerjoin(df, group_df, on = [:source, :medium, :sourceid => :itemid])
+    df[:, :source_matchedid] = df.matchedid
+    df = DataFrames.select!(df, DataFrames.Not([:sourceid, :matchedid]))
+    df = DataFrames.innerjoin(df, group_df, on = [:source, :medium, :targetid => :itemid])
+    df[:, :target_matchedid] = df.matchedid
+    df = DataFrames.select!(df, DataFrames.Not([:targetid, :matchedid]))
+    df = DataFrames.combine(
+        DataFrames.groupby(df, [:source, :medium, :source_matchedid, :target_matchedid]),
+    ) do subdf
+        subdf[argmax(subdf.count), :]
+    end
+    df = DataFrames.combine(
+        DataFrames.groupby(df, [:cliptype, :source_matchedid, :target_matchedid]),
+        :count => sum => :count,
+    )
+    df = DataFrames.filter(
+        x -> x.source_matchedid != 0 && x.target_matchedid != 0 && x.source_matchedid != x.target_matchedid && x.count > 0,
+        df,
+    )
+    counts = get_counts(medium)
+    source_counts = DataFrames.rename(counts, :count => :source_popularity)
+    DataFrames.innerjoin(df, source_counts, on = :source_matchedid => :matchedid)
 end
 
 function get_similar_pairs(source::AbstractString, medium::Int)
@@ -45,7 +116,7 @@ function get_similar_pairs(source::AbstractString, medium::Int)
     mal_weight = 1
     anilist_weight = 1
     animeplanet_weight = 1
-    df = CSV.read("$datadir/$source/$(source)_media.csv", DataFrames.DataFrame, ntasks=1)
+    df = CSV.read("$datadir/$source/$(source)_media.csv", DataFrames.DataFrame, ntasks = 1)
     records = []
     for i = 1:DataFrames.nrow(df)
         if source == "mal"
@@ -60,6 +131,7 @@ function get_similar_pairs(source::AbstractString, medium::Int)
                     (
                         source,
                         medium,
+                        rec.username,
                         string(df.itemid[i]),
                         string(rec.itemid),
                         mal_weight,
@@ -67,6 +139,7 @@ function get_similar_pairs(source::AbstractString, medium::Int)
                 )
             end
         elseif source == "anilist"
+            counts = Dict()
             m = Dict(0 => "MANGA", 1 => "ANIME")[medium]
             if ismissing(df.recommendationspeek[i])
                 continue
@@ -77,16 +150,22 @@ function get_similar_pairs(source::AbstractString, medium::Int)
                     continue
                 end
                 @assert df.medium[i] == lowercase(rec["medium"])
-                push!(
-                    records,
-                    (
-                        source,
-                        medium,
-                        string(df.itemid[i]),
-                        string(rec.itemid),
-                        rec["rating"] * anilist_weight,
-                    ),
-                )
+                for _ = 1:rec["rating"]
+                    k = (string(df.itemid[i]), string(rec.itemid))
+                    counts[k] = get(counts, k, 0) + 1
+                    imputed_username = "@anilist.$(minimum(k)).$(maximum(k)).$(counts[k])"
+                    push!(
+                        records,
+                        (
+                            source,
+                            medium,
+                            imputed_username,
+                            string(df.itemid[i]),
+                            string(rec.itemid),
+                            anilist_weight,
+                        ),
+                    )
+                end
             end
         elseif source == "kitsu"
         elseif source == "animeplanet"
@@ -101,6 +180,7 @@ function get_similar_pairs(source::AbstractString, medium::Int)
                     (
                         source,
                         medium,
+                        rec.username,
                         string(df.itemid[i]),
                         string(rec.itemid),
                         animeplanet_weight,
@@ -114,54 +194,35 @@ function get_similar_pairs(source::AbstractString, medium::Int)
     if isempty(records)
         return DataFrames.DataFrame()
     end
-    ret =
-        DataFrames.DataFrame(records, ["source", "medium", "sourceid", "targetid", "count"])
-    ret = DataFrames.combine(DataFrames.groupby(ret, [:source, :medium, :sourceid, :targetid]), :count => sum => :count)
+    ret = DataFrames.DataFrame(
+        records,
+        ["source", "medium", "username", "sourceid", "targetid", "count"],
+    )
+    ret = make_symmetric(ret)
     ret[:, :cliptype] .= "medium$(medium)"
     ret
 end
 
-function get_similar_pairs(medium::Int)
+function get_similar_pairs(test_frac::Float64)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
-    df = reduce(vcat, [get_similar_pairs(s, medium) for s in sources])
-    m = Dict(0 => "manga", 1 => "anime")[medium]
-    group_df = CSV.read(
-        "$datadir/../$m.csv",
-        DataFrames.DataFrame,
-        types = Dict("itemid" => String),
-        ntasks=1,
-    )
-    group_df = group_df[:, [:source, :itemid, :medium, :matchedid]]
-    df = DataFrames.innerjoin(df, group_df, on = [:source, :medium, :sourceid => :itemid])
-    df[:, :source_matchedid] = df.matchedid
-    df = DataFrames.select!(df, DataFrames.Not(:matchedid))
-    df = DataFrames.innerjoin(df, group_df, on = [:source, :medium, :targetid => :itemid])
-    df[:, :target_matchedid] = df.matchedid
-    df = DataFrames.select!(df, DataFrames.Not(:matchedid))
-    df = DataFrames.select!(df, DataFrames.Not([:sourceid, :targetid]))
-    df = DataFrames.combine(
-        DataFrames.groupby(df, [:source, :medium, :source_matchedid, :target_matchedid]),
-    ) do subdf
-        subdf[argmax(subdf.count), :]
+    training_dfs = []
+    test_dfs = []
+    for medium in [0, 1]
+        sdf = reduce(vcat, [get_similar_pairs(s, medium) for s in sources])
+        training, test = aggragate_by_matchedid.(split_by_user(sdf, test_frac), medium)
+        push!(training_dfs, training)
+        push!(test_dfs, test)
     end
-    df = DataFrames.combine(
-        DataFrames.groupby(df, [:cliptype, :source_matchedid, :target_matchedid]),
-        :count => sum => :count,
-    )
-    df = DataFrames.filter(
-        x -> x.source_matchedid != 0 && x.target_matchedid != 0 && x.count != 0,
-        df,
-    )
-    counts = get_counts(medium)
-    source_counts = DataFrames.rename(counts, :count => :source_popularity)
-    df = DataFrames.innerjoin(df, source_counts, on= :source_matchedid => :matchedid)
-    df
+    reduce(vcat, training_dfs), reduce(vcat, test_dfs)
 end
 
 function get_adaptations(medium::Int)
     df = CSV.read("$datadir/../media_relations.csv", DataFrames.DataFrame)
     filter!(
-        x -> x.source_medium == medium && x.target_medium != medium && x.relation in ["adaptation", "source"],
+        x ->
+            x.source_medium == medium &&
+                x.target_medium != medium &&
+                x.relation in ["adaptation", "source"],
         df,
     )
     df = DataFrames.DataFrame(
@@ -178,28 +239,42 @@ function get_adaptations(medium::Int)
     df
 end
 
-function save_data()
-    download_media()
-    df = reduce(vcat, [get_similar_pairs.([0, 1])..., get_adaptations.([0, 1])...])
-    display(
-        DataFrames.combine(
-            DataFrames.groupby(df, :cliptype),
-            :source_matchedid => (x -> length(Set(x))) => "Items",
-            DataFrames.nrow => "Pairs",
-            :count => (c -> sum(abs.(c))) => "Votes",
-        )
-    )
-    Random.shuffle!(df)
-    test_frac = 0.1 # TODO decrease
+function get_adaptations(test_frac::Float64)
+    df = reduce(vcat, [get_adaptations.([0, 1])...])
+    function reflect(x)
+        cliptype, sourceid, targetid = x
+        reflect_type = Dict("adaptation0" => "adaptation1", "adaptation1" => "adaptation0")
+        (reflect_type[cliptype], targetid, sourceid)
+    end
     ids = Set()
-    for i in 1:DataFrames.nrow(df)
-        push!(ids, (df.cliptype[i], df.source_matchedid[i]))
-        push!(ids, (df.cliptype[i], df.target_matchedid[i]))
+    for i = 1:DataFrames.nrow(df)
+        k = (df.cliptype[i], df.source_matchedid[i], df.target_matchedid[i])
+        push!(ids, min(k, reflect(k)))
     end
     test_ids = Set(x for x in ids if rand() < test_frac)
-    mask = [(x.cliptype, x.source_matchedid) in test_ids || (x.cliptype, x.target_matchedid) in test_ids for x in eachrow(df)]
-    test_df = df[mask, :]
-    training_df = df[.!mask, :]
+    test_ids = union(test_ids, Set(reflect.(test_ids)))
+    test_mask = [
+        (x.cliptype, x.source_matchedid, x.target_matchedid) in test_ids for
+        x in eachrow(df)
+    ]
+    training_df = df[.!test_mask, :]
+    test_df = df[test_mask, :]
+    training_df, test_df
+end
+
+function save_data()
+    download_media()
+    test_frac = 0.1 # TODO
+    train_dfs = []
+    test_dfs = []
+    train, test = get_similar_pairs(test_frac)
+    push!(train_dfs, train)
+    push!(test_dfs, test)
+    train, test = get_adaptations(test_frac)
+    push!(train_dfs, train)
+    push!(test_dfs, test)
+    training_df = reduce(vcat, train_dfs)
+    test_df = reduce(vcat, test_dfs)
     CSV.write("$datadir/training.csv", training_df)
     CSV.write("$datadir/test.csv", test_df)
 end

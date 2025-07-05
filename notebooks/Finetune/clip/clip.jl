@@ -3,6 +3,7 @@ import DataFrames
 import JLD2
 import HDF5
 import LinearAlgebra
+import ProgressMeter: @showprogress, next!
 
 const datadir = "../../../data/finetune"
 
@@ -72,9 +73,10 @@ function ndcg_at_k(df::DataFrames.DataFrame, M::Matrix{<:Real}, k::Int)
     weighted_ndcgs = Vector{Float64}(undef, length(unique_sources))
     source_weights = Vector{Float64}(undef, length(unique_sources))
     num_items = size(M, 2)
-    Threads.@threads for i = 1:length(unique_sources)
+    dfs = Dict(g.source[1] => g for g in DataFrames.groupby(df, :source; sort=false))
+    @showprogress Threads.@threads for i = 1:length(unique_sources)
         source_id = unique_sources[i]
-        ground_truth_pairs = filter(row -> row.source == source_id, df)
+        ground_truth_pairs = dfs[source_id]
         weight = first(ground_truth_pairs.popularity)
         true_relevances =
             Dict(pair.target => pair.relevance for pair in eachrow(ground_truth_pairs))
@@ -98,9 +100,10 @@ function recall_at_k(df::DataFrames.DataFrame, M::Matrix{<:Real}, k::Int)
     weighted_recalls = Vector{Float64}(undef, length(unique_sources))
     source_weights = Vector{Float64}(undef, length(unique_sources))
     num_items = size(M, 2)
-    Threads.@threads for i = 1:length(unique_sources)
+    dfs = Dict(g.source[1] => g for g in DataFrames.groupby(df, :source; sort=false))
+    @showprogress Threads.@threads for i = 1:length(unique_sources)
         source_id = unique_sources[i]
-        source_rows = filter(row -> row.source == source_id, df)
+        source_rows = dfs[source_id]
         predictions = M[source_id, :]
         candidate_items = filter(item -> item != source_id, 1:num_items)
         ranked_item_indices = sortperm(predictions[candidate_items], rev = true)
@@ -121,18 +124,14 @@ function get_ranking_metrics()
     ret = Dict()
     for medium in [0, 1]
         d = JLD2.load("$datadir/clip.jld2")
-        train_df = CSV.read("$datadir/clip/training.csv", DataFrames.DataFrame)
-        train_ids = Set([(x.cliptype, x.source_matchedid) for x in eachrow(train_df)])
-        test_df = CSV.read("$datadir/clip/test.csv", DataFrames.DataFrame)
-        test_mask = [(x.cliptype, x.source_matchedid) ∉ train_ids for x in eachrow(test_df)]
-        df = test_df[test_mask, :]
-        df = filter(x -> x.cliptype == "medium$medium" && x.count > 0, df)
+        df = CSV.read("$datadir/clip/test.csv", DataFrames.DataFrame)
+        df = filter(x -> x.cliptype == "medium$medium", df)
         df = DataFrames.DataFrame(
             source = df.source_matchedid .+ 1,
             target = df.target_matchedid .+ 1,
             relevance = 1 .+ log10.(df.count),
             count = df.count,
-            popularity = 1,
+            popularity = sqrt.(df.source_popularity),
         )
         M = d["embeddings.$medium"]' * d["embeddings.$medium"]
         for k in [8, 128, 1024]

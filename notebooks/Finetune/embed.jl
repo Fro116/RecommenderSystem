@@ -1,59 +1,52 @@
 mutable struct RemoteModel
-    lock::ReentrantLock
-    pending::Vector
-    finished::Dict
-    reqid::Int
+    pending::Channel
 end
 
 const models = Dict(
-    (m, t) => RemoteModel(ReentrantLock(), [], Dict(), 0) for m in [0, 1] for
+    (m, t) => RemoteModel(Channel(Inf)) for m in [0, 1] for
     t in ["retrieval", "ranking"]
 )
 
 function run_model(medium::Integer, task::AbstractString)
     batch_size = 16
-    batch = []
     model = models[(medium, task)]
     while true
-        lock(model.lock) do
-            if isempty(model.pending)
-                return
-            end
-            for i = 1:length(model.pending)
-                reqid, user, m, t = model.pending[i]
-                if m == medium && t == task && length(batch) < batch_size
-                    push!(batch, model.pending[i])
-                    model.pending[i] = nothing
-                end
-            end
-            filter!(x -> !isnothing(x), model.pending)
-        end
-        if isempty(batch)
-            sleep(50 * 0.001)
+        batch = []
+        first_req = take!(model.pending)
+        if first_req[2] != medium || first_req[3] != task
+            put!(model.pending, first_req)
+            yield()
             continue
         end
+        push!(batch, first_req)
+        while length(batch) < batch_size && isready(model.pending)
+            req = take!(model.pending)
+            if req[2] == medium && req[3] == task
+                push!(batch, req)
+            else
+                put!(model.pending, req)
+                break
+            end
+        end
         try
-            users = [u for (_, u, _, _) in batch]
+            users = [u for (u, _, _, _) in batch]
             r_embed = HTTP.post(
                 "$MODEL_URL/embed?medium=$medium&task=$task",
                 encode(Dict("users" => users), :msgpack)...,
-                connect_timeout=1,
+                connect_timeout = 1,
             )
             d_embed = decode(r_embed)["embeds"]
-            lock(model.lock) do
-                for i = 1:length(batch)
-                    model.finished[batch[i][1]] = (d_embed[i], time())
-                end
+            for i = 1:length(batch)
+                _, _, _, result_channel = batch[i]
+                put!(result_channel, (d_embed[i], time()))
             end
         catch e
             logerror("model $medium $task failed with error $e")
-            lock(model.lock) do
-                for i = 1:length(batch)
-                    model.finished[batch[i][1]] = (nothing, time())
-                end
+            for i = 1:length(batch)
+                _, _, _, result_channel = batch[i]
+                put!(result_channel, (nothing, time()))
             end
         end
-        empty!(batch)
     end
 end
 
@@ -83,45 +76,31 @@ function query_model(
         retries == 0 ? nothing :
         query_model(user, medium, test_matchedids; timeout = timeout, retries = retries - 1)
     model = models[(medium, task)]
-    reqid = lock(model.lock) do
-        model.reqid += 1
-        reqid = model.reqid
-        push!(model.pending, (reqid, user, medium, task))
-        reqid
+    result_channel = Channel(1)
+    put!(model.pending, (user, medium, task, result_channel))
+    timed_out = false
+    ret = nothing
+    timer = Timer(timeout)
+    try
+        ret = fetch(Threads.@spawn take!(result_channel))
+    catch e
+        timed_out = true
+    finally
+        close(timer)
     end
-    t = time()
-    while time() - t < timeout
-        sleep(50 * 0.001)
-        ret = lock(model.lock) do
-            if reqid in keys(model.finished)
-                return pop!(model.finished, reqid)
-            else
-                return nothing
-            end
-        end
-        if !isnothing(ret)
-            data = Dict()
-            for (k, v) in ret[1]
-                if k == "version"
-                    data[k] = v
-                else
-                    data[k] = Float32.(v)
-                end
-            end
-            return data
-        end
+    if timed_out
+        return retry()
     end
-    lock(model.lock) do
-        ts = time()
-        for k in keys(model.finished)
-            v, vtime = model.finished[k]
-            if isnothing(v) && ts - vtime > 300
-                pop!(model.finished, k)
-            end
+    if !isnothing(ret) && !isnothing(ret[1])
+        data = Dict()
+        for (k, v) in ret[1]
+            data[k] = k == "version" ? v : Float32.(v)
         end
+        return data
     end
     retry()
 end
+
 
 @memoize function num_items(medium::Integer)
     m = Dict(0 => "manga", 1 => "anime")[medium]
