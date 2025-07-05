@@ -109,7 +109,7 @@ function get_title_records(medium::Int)
 end
 
 function get_counts(medium::Int)
-    df = df = get_media_groups(medium)
+    df = get_media_groups(medium)
     df = DataFrames.combine(DataFrames.groupby(df, [:source, :matchedid])) do subdf
         subdf[argmax(subdf.count), :]
     end

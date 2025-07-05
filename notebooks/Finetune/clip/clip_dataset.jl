@@ -31,21 +31,30 @@ function download_media()
     end
 end
 
+function get_counts(medium::Int)
+    m = Dict(0 => "manga", 1 => "anime")[medium]
+    df = CSV.read("$datadir/../$m.csv", DataFrames.DataFrame, ntasks=1)
+    df = DataFrames.combine(DataFrames.groupby(df, [:source, :matchedid])) do subdf
+        subdf[argmax(subdf.count), :]
+    end
+    DataFrames.combine(DataFrames.groupby(df, [:matchedid]), :count => sum => :count)
+end
+
 function get_similar_pairs(source::AbstractString, medium::Int)
+    # TODO weight sources
+    mal_weight = 1
+    anilist_weight = 1
+    animeplanet_weight = 1
     df = CSV.read("$datadir/$source/$(source)_media.csv", DataFrames.DataFrame, ntasks=1)
     records = []
     for i = 1:DataFrames.nrow(df)
         if source == "mal"
             m = Dict(0 => "manga", 1 => "anime")[medium]
-            if ismissing(df.recommendations[i])
+            if ismissing(df.userrec[i]) || df.medium[i] != m
                 continue
             end
-            r = JSON3.read(df.recommendations[i])
+            r = JSON3.read(df.userrec[i])
             for rec in r
-                if rec["medium"] != m
-                    continue
-                end
-                @assert df.medium[i] == rec["medium"]
                 push!(
                     records,
                     (
@@ -53,7 +62,7 @@ function get_similar_pairs(source::AbstractString, medium::Int)
                         medium,
                         string(df.itemid[i]),
                         string(rec.itemid),
-                        rec["count"],
+                        mal_weight,
                     ),
                 )
             end
@@ -75,12 +84,29 @@ function get_similar_pairs(source::AbstractString, medium::Int)
                         medium,
                         string(df.itemid[i]),
                         string(rec.itemid),
-                        rec["rating"],
+                        rec["rating"] * anilist_weight,
                     ),
                 )
             end
         elseif source == "kitsu"
         elseif source == "animeplanet"
+            m = Dict(0 => "manga", 1 => "anime")[medium]
+            if ismissing(df.recommendations[i]) || df.medium[i] != m
+                continue
+            end
+            r = JSON3.read(df.recommendations[i])
+            for rec in r
+                push!(
+                    records,
+                    (
+                        source,
+                        medium,
+                        string(df.itemid[i]),
+                        string(rec.itemid),
+                        animeplanet_weight,
+                    ),
+                )
+            end
         else
             @assert false
         end
@@ -90,6 +116,7 @@ function get_similar_pairs(source::AbstractString, medium::Int)
     end
     ret =
         DataFrames.DataFrame(records, ["source", "medium", "sourceid", "targetid", "count"])
+    ret = DataFrames.combine(DataFrames.groupby(ret, [:source, :medium, :sourceid, :targetid]), :count => sum => :count)
     ret[:, :cliptype] .= "medium$(medium)"
     ret
 end
@@ -125,6 +152,9 @@ function get_similar_pairs(medium::Int)
         x -> x.source_matchedid != 0 && x.target_matchedid != 0 && x.count != 0,
         df,
     )
+    counts = get_counts(medium)
+    source_counts = DataFrames.rename(counts, :count => :source_popularity)
+    df = DataFrames.innerjoin(df, source_counts, on= :source_matchedid => :matchedid)
     df
 end
 
@@ -138,6 +168,7 @@ function get_adaptations(medium::Int)
         cliptype = "adaptation$medium",
         source_matchedid = df.source_matchedid,
         target_matchedid = df.target_matchedid,
+        source_popularity = 1,
         count = 1,
     )
     df = DataFrames.filter(
