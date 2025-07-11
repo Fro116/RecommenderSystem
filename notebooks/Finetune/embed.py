@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import functools
+import gzip
 import logging
 import os
 import signal
@@ -107,9 +108,13 @@ def predict(users, task, medium):
     with gpu_lock:
         for k in d:
             d[k] = torch.tensor(d[k]).to(device)
+            torch._dynamo.mark_dynamic(d[k], 0)
+        start_time = time.time()
         with torch.no_grad():
             with torch.amp.autocast(device, dtype=torch.bfloat16):
                 ret = models[f"transformer.{modeltype}.{medium}"](d, task)
+        duration = time.time() - start_time
+        logger.info(f"batch of {len(users)} completed in {duration} seconds")
         if modeltype == "causal":
             e_ret, e_rnk = ret
             e["retrieval"] = e_ret.to("cpu")
@@ -173,7 +178,16 @@ def load_model(modeltype, medium):
     return model
 
 
-logging.warning("STARTUP BEGIN")
+logger = logging.getLogger(__name__)
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s %(name)s › %(message)s")
+)
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
+logger.info("STARTUP BEGIN")
 starttime = time.time()
 device = "cuda"
 datadir = "../../data/finetune"
@@ -183,7 +197,7 @@ gpu_lock = threading.Lock()
 models = {}
 for modeltype in ["causal", "masked"]:
     for medium in [0, 1]:
-        logging.warning(f"STARTUP LOADING {modeltype} {medium} MODEL")
+        logger.info(f"STARTUP LOADING {modeltype} {medium} MODEL")
         models[f"transformer.{modeltype}.{medium}"] = load_model(modeltype, medium)
     # deduplicate shared params from LoRA
     for k, _ in models[f"transformer.{modeltype}.0"].named_parameters():
@@ -199,16 +213,30 @@ for modeltype in ["causal", "masked"]:
     torch.cuda.empty_cache()
 for task in ["retrieval", "ranking"]:
     for medium in [0, 1]:
-        batch_size = 16
-        test_user = {
-            "user": {"source": "mal"},
-            "items": [],
-            "timestamp": time.time(),
-            "test_items": [make_masked_item(time.time())],
-        }
-        predict([test_user]*batch_size, task, medium)
-logging.warning(f"STARTUP END AFTER {time.time() - starttime}s")
+        for batch_size in range(1, 16+1):
+            test_user = {
+                "user": {"source": "mal"},
+                "items": [],
+                "timestamp": time.time(),
+                "test_items": [make_masked_item(time.time())],
+            }
+            predict([test_user]*batch_size, task, medium)
+logger.info(f"STARTUP END AFTER {time.time() - starttime}s")
 app = FastAPI()
+
+
+@app.middleware("http")
+async def log_request_duration(request: Request, call_next):
+    if request.url.path == "/ready":
+        return await call_next(request)
+    start_time = time.time()
+    response = await call_next(request)
+    duration = time.time() - start_time
+    path = request.url.path
+    if request.url.query:
+        path += f"?{request.url.query}"
+    logger.info(f"Request to {path} took {duration:.4f} seconds")
+    return response
 
 
 @app.get("/shutdown")
@@ -226,6 +254,7 @@ async def ready():
 async def embed(request: Request, medium: int, task: str):
     try:
         data = await request.body()
+        data = gzip.decompress(data)
         data = msgpack.unpackb(data, strict_map_key=False)
         result = predict(data["users"], task, medium)
         rdata = msgpack.packb({"embeds": result}, use_single_float=True)
@@ -235,5 +264,5 @@ async def embed(request: Request, medium: int, task: str):
         }
         return Response(status_code=200, headers=headers, content=rdata)
     except Exception as e:
-        logging.error(f"Error during request: {e}")
+        logger.error(f"Error during request: {e}")
         return Response(status_code=500)

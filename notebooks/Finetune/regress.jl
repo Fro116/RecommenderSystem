@@ -81,6 +81,7 @@ function save_users(medium, registry)
             medium,
             nothing,
         )
+        @assert !isnothing(r_retrieval)
         data = merge(data, r_retrieval)
         last_status = Dict()
         for x in data["items"]
@@ -113,6 +114,7 @@ function save_users(medium, registry)
             medium,
             idxs,
         )
+        @assert !isnothing(r_ranking)
         data = merge(data, r_ranking)
         data["ranking_matchedids"] = idxs
         users[i] = data
@@ -421,6 +423,7 @@ function save_weights()
     for medium in [0, 1]
         save_users(medium, registry)
     end
+    save_users(0, registry)
     stop_server(port)
     for medium in [0, 1]
         users = JLD2.load("$datadir/regress.$medium.jld2")["users"]

@@ -7,44 +7,45 @@ const models = Dict(
     t in ["retrieval", "ranking"]
 )
 
+function call_model_url(users, medium, task)
+    max_retries = 3
+    for retry in 1:max_retries
+        try
+            r_embed = HTTP.post(
+                "$MODEL_URL/embed?medium=$medium&task=$task",
+                encode(Dict("users" => users), :msgpack, :gzip)...,
+                connect_timeout = 1,
+            )
+            return decode(r_embed)["embeds"]
+        catch e
+            logerror("model $MODEL_URL/embed?medium=$medium&task=$task failed with error $e")
+            if retry < max_retries
+                sleep(1)
+            end
+        end
+    end
+    nothing
+end
+
 function run_model(medium::Integer, task::AbstractString)
     batch_size = 16
     model = models[(medium, task)]
     while true
         batch = []
         first_req = take!(model.pending)
-        if first_req[2] != medium || first_req[3] != task
-            put!(model.pending, first_req)
-            yield()
-            continue
-        end
         push!(batch, first_req)
         while length(batch) < batch_size && isready(model.pending)
             req = take!(model.pending)
-            if req[2] == medium && req[3] == task
-                push!(batch, req)
-            else
-                put!(model.pending, req)
-                break
-            end
+            push!(batch, req)
         end
-        try
-            users = [u for (u, _, _, _) in batch]
-            r_embed = HTTP.post(
-                "$MODEL_URL/embed?medium=$medium&task=$task",
-                encode(Dict("users" => users), :msgpack)...,
-                connect_timeout = 1,
-            )
-            d_embed = decode(r_embed)["embeds"]
-            for i = 1:length(batch)
-                _, _, _, result_channel = batch[i]
-                put!(result_channel, (d_embed[i], time()))
-            end
-        catch e
-            logerror("model $medium $task failed with error $e")
-            for i = 1:length(batch)
-                _, _, _, result_channel = batch[i]
-                put!(result_channel, (nothing, time()))
+        users = [u for (u, _, _, _) in batch]
+        d_embed = call_model_url(users, medium, task)
+        for i = 1:length(batch)
+            _, _, _, result_channel = batch[i]
+            if isnothing(d_embed)
+                put!(result_channel, nothing)
+            else
+                put!(result_channel, d_embed[i])
             end
         end
     end
@@ -54,8 +55,6 @@ function query_model(
     user,
     medium::Integer,
     test_matchedids::Union{Vector,Nothing};
-    timeout::Real = 10,
-    retries::Int = 1,
 )
     if isnothing(test_matchedids)
         task = "retrieval"
@@ -72,35 +71,19 @@ function query_model(
         user = copy(user)
         user["test_items"] = test_items
     end
-    retry() =
-        retries == 0 ? nothing :
-        query_model(user, medium, test_matchedids; timeout = timeout, retries = retries - 1)
     model = models[(medium, task)]
     result_channel = Channel(1)
     put!(model.pending, (user, medium, task, result_channel))
-    timed_out = false
-    ret = nothing
-    timer = Timer(timeout)
-    try
-        ret = fetch(Threads.@spawn take!(result_channel))
-    catch e
-        timed_out = true
-    finally
-        close(timer)
+    ret = take!(result_channel)
+    if isnothing(ret)
+        return nothing
     end
-    if timed_out
-        return retry()
+    data = Dict()
+    for (k, v) in ret
+        data[k] = k == "version" ? v : Float32.(v)
     end
-    if !isnothing(ret) && !isnothing(ret[1])
-        data = Dict()
-        for (k, v) in ret[1]
-            data[k] = k == "version" ? v : Float32.(v)
-        end
-        return data
-    end
-    retry()
+    data
 end
-
 
 @memoize function num_items(medium::Integer)
     m = Dict(0 => "manga", 1 => "anime")[medium]
