@@ -38,7 +38,6 @@ function project!(user)
     items = []
     for x in user["items"]
         if x["history_status"] == x["status"] && x["history_rating"] == x["rating"]
-            # TODO try not skipping
             continue
         end
         push!(items, x)

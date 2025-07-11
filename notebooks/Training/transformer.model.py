@@ -18,14 +18,14 @@ class ActionEmbedding(nn.Module):
     def __init__(self, config):
         super(ActionEmbedding, self).__init__()
         self.config = config
-        self.periodic_time_cos = nn.Parameter(torch.zeros(4))
-        self.periodic_time_sin = nn.Parameter(torch.zeros(4))
+        self.periodic_time_cos = nn.Parameter(torch.zeros(2))
+        self.periodic_time_sin = nn.Parameter(torch.zeros(2))
         self.status_embedding = MaskedEmbedding(config["vocab_sizes"]["status"], 16)
         N = sum(
             [
                 1,  # time
-                4,  # periodic time cos
-                4,  # periodic time sin
+                2,  # periodic time cos
+                2,  # periodic time sin
                 1,  # has_rating
                 1,  # rating
                 16, # status
@@ -43,10 +43,7 @@ class ActionEmbedding(nn.Module):
         periodic_ts = ts.reshape(*ts.shape, 1)
         secs_in_day = 86400
         secs_in_week = secs_in_day * 7
-        secs_in_year = secs_in_day * 365.25
-        secs_in_season = secs_in_year / 4
-        periods = [secs_in_day, secs_in_week, secs_in_season, secs_in_year]
-        # TODO only keep the weekly mode
+        periods = [secs_in_day, secs_in_week]
         periodic_ts = torch.cat([2 * np.pi * periodic_ts / p for p in periods], dim=-1)
         periodic_ts = periodic_ts.to(torch.float32)
         # embed

@@ -23,7 +23,7 @@ function import_lists()
 end
 
 function import_dbs()
-    for x in ["autocomplete", "images", "media"]
+    for x in ["media", "images", "autocomplete", "autocomplete_items"]
         runcmd("cd Import/$x && julia save_$(x).jl")
     end
 end
@@ -35,7 +35,7 @@ function cron()
         import_dbs()
     end
     # for now, manually oversee training runs
-    # if Dates.day(today) in [1, 15]
+    # if Dates.day(today) in [15]
     #     runcmd("cd Training && julia run.jl")
     # end
     datetag = Dates.format(today, "yyyymmdd")

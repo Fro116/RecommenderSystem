@@ -173,6 +173,7 @@ end
 
 @memoize function get_watch_order(medium)
     watch_order = zeros(Int32, num_items(medium), num_items(medium))
+    num_users = 0
     outdirs = Glob.glob("$datadir/users/training/*/")
     @showprogress for outdir in outdirs
         users = Glob.glob("$outdir/*.msgpack")
@@ -182,6 +183,9 @@ end
             histories[t] = project_earliest(user, medium)
         end
         for h in histories
+            if length(h) > 0
+                num_users += 1
+            end
             for i in 1:length(h)
                 for j in i+1:length(h)
                      watch_order[h[i]+1, h[j]+1] += 1
@@ -189,11 +193,11 @@ end
             end
         end
     end
-    watch_order
+    watch_order, num_users
 end
 
 function is_watched_before(medium, cutoff, a1, a2)
-    M = get_watch_order(medium)
+    M, _ = get_watch_order(medium)
     M[a1+1, a2+1] > cutoff * (M[a1+1, a2+1] + M[a2+1, a1+1])
 end
 
@@ -283,7 +287,9 @@ end
 
 function save_watch_order(m::Int)
     d = Dict()
-    d["$m.watches"] = get_watch_order(m)
+    M, num_users = get_watch_order(m)
+    d["$m.watches"] = M
+    d["$m.users"] = num_users
     fn = "watches.$m.jld2"
     JLD2.save("$datadir/$fn", d)
     tag = read("$datadir/list_tag", String)

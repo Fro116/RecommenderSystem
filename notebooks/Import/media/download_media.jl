@@ -1,6 +1,8 @@
 import CSV
 import DataFrames
+import Glob
 import JSON3
+import StatsBase
 include("../../julia_utils/stdout.jl")
 include("common.jl")
 
@@ -712,6 +714,80 @@ function import_animeplanet(medium)
     CSV.write("$datadir/$(source)_$(medium).csv", ret)
 end
 
+function download_items(source::String)
+    outdir = "$datadir/users/$source"
+    rm(outdir, recursive = true, force = true)
+    mkpath(outdir)
+    retrieval = "rclone --retries=10 copyto r2:rsys/database/collect"
+    cmd = "$retrieval/latest $outdir/latest"
+    run(`sh -c $cmd`)
+    tag = read("$outdir/latest", String)
+    for t in ["user_items"]
+        cmd = "$retrieval/$tag/$(source)_$(t).zstd $outdir/$(source)_$(t).csv.zstd"
+        run(`sh -c $cmd`)
+        run(`unzstd -f $outdir/$(source)_$(t).csv.zstd`)
+        rm("$outdir/$(source)_$(t).csv.zstd")
+    end
+    usercol = Dict(
+        "mal" => "username",
+        "anilist" => "userid",
+        "kitsu" => "userid",
+        "animeplanet" => "username",
+    )[source]
+    cmd = "mlr --csv cut -f $usercol,medium,itemid $outdir/$(source)_user_items.csv > $outdir/items.csv"
+    run(`sh -c $cmd`)
+    rm("$outdir/$(source)_user_items.csv")
+    cmd = ("mlr --csv split -n 10000000 --prefix $outdir/items_split $outdir/items.csv ")
+    run(`sh -c $cmd`)
+    rm("$outdir/items.csv")
+    fns = Glob.glob("$outdir/items_split*.csv")
+    invalid_users = Set()
+    for medium in ["manga", "anime"]
+        items = Set()
+        for fn in fns
+            df = CSV.read(fn, DataFrames.DataFrame)
+            mask = df.medium .== medium
+            items = union(items, Set(df.itemid[mask]))
+        end
+        num_items = length(items)
+        min_items = 5
+        max_items = num_items * 0.8
+        for fn in fns
+            df = CSV.read(fn, DataFrames.DataFrame)
+            mask = df.medium .== medium
+            total_user_counts = StatsBase.countmap(df[:, usercol])
+            media_user_counts = StatsBase.countmap(df[:, usercol][mask])
+            for k in keys(total_user_counts)
+                if total_user_counts[k] < min_items ||
+                   get(media_user_counts, k, 0) >= max_items
+                    push!(invalid_users, k)
+                end
+            end
+        end
+    end
+    for medium in ["manga", "anime"]
+        for (i, fn) in Iterators.enumerate(fns)
+            df = CSV.read(fn, DataFrames.DataFrame)
+            filter!(x -> x[usercol] ∉ invalid_users, df)
+            mask = df.medium .== medium
+            counts = StatsBase.countmap(df.itemid[mask])
+            mdf = DataFrames.DataFrame(
+                Dict("itemid" => collect(keys(counts)), "count" => collect(values(counts))),
+            )
+            mdf[!, "medium"] .= medium
+            CSV.write("$outdir/$medium.$i.csv", mdf)
+
+        end
+        cmd = "cd $outdir && mlr --csv cat $medium.*.csv > $medium.csv && rm $medium.*.csv"
+        run(`sh -c $cmd`)
+        df = CSV.read("$outdir/$medium.csv", DataFrames.DataFrame)
+        df = DataFrames.combine(DataFrames.groupby(df, [:itemid, :medium]), :count => sum => :count)
+        CSV.write("$outdir/$medium.csv", df)
+    end
+    cmd = "rm $outdir/items_split*.csv"
+    run(`sh -c $cmd`)
+end
+
 function save_media()
     rm(datadir, force = true, recursive = true)
     mkpath(datadir)
@@ -724,6 +800,9 @@ function save_media()
         import_anilist(m)
         import_kitsu(m)
         import_animeplanet(m)
+    end
+    for source in ["mal", "anilist", "kitsu", "animeplanet"]
+        download_items(source)
     end
 end
 

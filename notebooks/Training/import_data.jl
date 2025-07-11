@@ -80,7 +80,7 @@ function get_media_groups(medium::AbstractString)
     sort!(df, :count, rev = true)
     df[!, :distinctid] .= 0
     df[!, :matchedid] .= 0
-    min_count = 100 # todo account for fake watches
+    min_count = 100
     distinctid = 0
     groupmap = Dict()
     for i = 1:DataFrames.nrow(df)
@@ -161,10 +161,8 @@ function num_items(m::AbstractString, source::AbstractString)
 end
 
 function gen_splits()
-    # TODO study min/max thresholds
     min_items = 5
     max_items = Dict(s => num_items.(MEDIUMS, s) for s in SOURCES)
-    # TODO keep users that pass max_items because of plantowatch/drop status
     test_perc = 0.01
     @showprogress for (idx, f) in
                       Iterators.enumerate(Glob.glob("$datadir/histories_*.csv"))

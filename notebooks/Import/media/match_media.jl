@@ -8,37 +8,7 @@ include("common.jl")
 const itemtype = Tuple{String,Union{AbstractString,Int}}
 const edgetype = Tuple{itemtype,itemtype}
 
-@memoize function download_items(source::String)
-    outdir = "$datadir/users/$source"
-    rm(outdir, recursive = true, force = true)
-    mkpath(outdir)
-    retrieval = "rclone --retries=10 copyto r2:rsys/database/collect"
-    cmd = "$retrieval/latest $outdir/latest"
-    run(`sh -c $cmd`)
-    tag = read("$outdir/latest", String)
-    for t in ["user_items"]
-        cmd = "$retrieval/$tag/$(source)_$(t).zstd $outdir/$(source)_$(t).csv.zstd"
-        run(`sh -c $cmd`)
-        run(`unzstd -f $outdir/$(source)_$(t).csv.zstd`)
-        rm("$outdir/$(source)_$(t).csv.zstd")
-    end
-    cmd = "mlr --csv cut -f medium,itemid $outdir/$(source)_user_items.csv > $outdir/items.csv"
-    run(`sh -c $cmd`)
-    rm("$outdir/$(source)_user_items.csv")
-    df = CSV.read("$datadir/users/$source/items.csv", DataFrames.DataFrame)
-    for m in ["manga", "anime"]
-        counts = StatsBase.countmap(filter(x -> x.medium == m, df).itemid)
-        mdf = DataFrames.DataFrame(
-            Dict("itemid" => collect(keys(counts)), "count" => collect(values(counts))),
-        )
-        mdf[!, "medium"] .= m
-        CSV.write("$outdir/$m.csv", mdf)
-    end
-    rm("$outdir/items.csv")
-end
-
 @memoize function get_items(medium::String, source::String)
-    download_items(source)
     df = CSV.read("$datadir/users/$source/$medium.csv", DataFrames.DataFrame)
     Dict(df.itemid .=> df.count)
 end
@@ -161,9 +131,6 @@ end
 function match_media()
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     edgetypes = ["valid", "manami", "ids", "metadata"]
-    for s in sources
-        download_items(s)
-    end
     for m in ["manga", "anime"]
         logtag("MATCH_MEDIA", "matching $m")
         vs = get_graph(sources, edgetypes, m)
