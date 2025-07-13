@@ -82,11 +82,10 @@ class PretrainDataset(IterableDataset):
         fns = [x for i, x in enumerate(self.fns) if i % num_workers == worker_id]
         np.random.shuffle(fns)
         for fn in fns:
-            with h5py.File(fn, "r") as f:
+            with h5py.File(fn) as f:
                 d = {}
-                with h5py.File(fn) as f:
-                    for k in f:
-                        d[k] = f[k][:]
+                for k in f:
+                    d[k] = f[k][:]
                 self.block_shuffle(d)
             assert len(d["userid"]) % self.batch_size == 0
             idxs = list(range(len(d["userid"])))
@@ -453,7 +452,9 @@ def upload(global_rank, logger, debug_mode):
     logger.info("uploading model")
     with open(os.path.join(args.datadir, "list_tag"), "r") as f:
         list_tag = f.read()
-    for suffix in ["pt", "csv"]:
+    with open(f"{args.datadir}/transformer.{args.modeltype}.finished", "w") as f:
+        pass
+    for suffix in ["pt", "csv", "finished"]:
         cmd = f"rclone --retries=10 copyto {args.datadir}/transformer.{args.modeltype}.{suffix} r2:rsys/database/training/{list_tag}/transformer.{args.modeltype}.{suffix}"
         os.system(cmd)
 
