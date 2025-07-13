@@ -17,13 +17,13 @@ class LTRDataset(Dataset):
     def __init__(self, datasplit, config, logger):
         super().__init__()
         logger.info(f"loading {datasplit} dataset")
-        self.num_items_per_query = config[f"{datasplit}_items"]
+        self.num_items_per_query = config["items_per_query"]
         self.shuffle = datasplit == "training"
         self.datasplit = datasplit
         # load queries
-        df = pd.read_csv(f"{args.datadir}/{datasplit}.csv")
+        df = pd.read_csv(f"{args.datadir}/{datasplit}.similarpairs.csv")
         df = df.query(f"cliptype == 'medium{args.medium}'").copy()
-        df["target_tuple"] = list(zip(df["target_matchedid"], df["count"]))
+        df["target_tuple"] = list(zip(df["target_matchedid"], df["score"]))
         grouped = df.groupby(["cliptype", "source_matchedid", "source_popularity"])[
             "target_tuple"
         ].apply(list)
@@ -36,7 +36,7 @@ class LTRDataset(Dataset):
                 "sourceid": sourceid,
                 "popularity": np.sqrt(popularity),
                 "targets": sorted(
-                    [(targetid, 1 + np.log10(count)) for (targetid, count) in targets],
+                    [(targetid, score) for (targetid, score) in targets],
                     key=lambda x: x[1],
                     reverse=True,
                 ),
@@ -44,6 +44,19 @@ class LTRDataset(Dataset):
             }
             queries.append(r)
         self.queries = queries
+        if datasplit == "training":
+            # keep implicit negatives disjoint between training and test
+            other_split = "test"
+            other_df = pd.read_csv(f"{args.datadir}/{other_split}.similarpairs.csv")
+            other_df = other_df.query(f"cliptype == 'medium{args.medium}'").copy()
+            other_queries = {}
+            for (s, t) in zip(other_df["source_matchedid"], other_df["target_matchedid"]):
+                if s not in other_queries:
+                    other_queries[s] = set()
+                other_queries[s].add(t)
+            self.exclude_pairs = other_queries
+        else:
+            self.exclude_pairs = {}
         # load hard negatives
         m = config["vocab_sizes"][args.medium]
         n = config["embed_dim"]
@@ -82,24 +95,24 @@ class LTRDataset(Dataset):
         max_id = query_data["maxid"]
         medium_idx = query_data["medium"]
         popularity = query_data["popularity"]
-        max_num_positives = int(round(self.num_items_per_query) * 0.9)
+        if self.shuffle:
+            max_num_positives = int(round(self.num_items_per_query) * 0.9)
+        else:
+            max_num_positives = self.num_items_per_query
         positive_items = query_data["targets"][:max_num_positives]
         positive_y = [item[0] for item in positive_items]
         positive_r = [item[1] for item in positive_items]
         num_positives = len(positive_y)
         num_negatives_to_sample = self.num_items_per_query - num_positives
         negative_y = []
-        if self.shuffle:
-            rng = np.random
-        else:
-            rng = np.random.RandomState(idx)
         if num_negatives_to_sample > 0:
+            assert self.datasplit != "test"
             p = self.sample_probs[source_id, :]
-            existing_ids = set(positive_y)
+            existing_ids = set(positive_y) | self.exclude_pairs.get(source_id, set())
             existing_ids.add(source_id)
             while len(negative_y) < num_negatives_to_sample:
                 sample_size = (num_negatives_to_sample - len(negative_y)) * 2
-                candidates = list(rng.choice(self.choices, size=sample_size, p=p))
+                candidates = list(np.random.choice(self.choices, size=sample_size, p=p))
                 for cid in candidates:
                     if len(negative_y) == num_negatives_to_sample:
                         break
@@ -219,7 +232,7 @@ class LTRModel(nn.Module):
 
     def lambdarank_loss(self, x, y, w):
         order = torch.argsort(torch.argsort(x, descending=True)) + 1
-        deltag = self.pairwise_diff(torch.pow(2, y) - 1)
+        deltag = self.pairwise_diff(y)
         deltad = self.pairwise_diff(1 / torch.log2(1 + order))
         deltandcg = deltad * deltag
         loss = -F.logsigmoid(self.pairwise_diff(x)) * (self.pairwise_diff(y) > 0)
@@ -235,14 +248,14 @@ class LTRModel(nn.Module):
         true_relevance = batch["relevance"]
         ranking_indices = torch.argsort(pred_scores, dim=-1, descending=True)
         ranked_relevance = torch.gather(true_relevance, -1, ranking_indices)
-        gains = torch.pow(2.0, ranked_relevance) - 1
+        gains = ranked_relevance
         list_size = pred_scores.shape[-1]
         discounts = torch.log2(
             torch.arange(2.0, list_size + 2.0, device=pred_scores.device)
         )
         dcg = (gains / discounts).sum(dim=-1)
         ideal_relevance, _ = torch.sort(true_relevance, dim=-1, descending=True)
-        ideal_gains = torch.pow(2.0, ideal_relevance) - 1
+        ideal_gains = ideal_relevance
         idcg = (ideal_gains / discounts).sum(dim=-1)
         ndcg = dcg / idcg
         w = batch["weight"]
@@ -370,13 +383,14 @@ def get_logger(name):
     return logger
 
 
-def checkpoint_model(model, epoch, training_loss, test_loss, save):
+def checkpoint_model(model, epoch, training_loss, test_loss, oos_loss, save):
     if save:
         checkpoint = {
             "model": model._orig_mod.state_dict(),
             "epoch": epoch,
             "training_loss": training_loss,
             "test_loss": test_loss,
+            "oos_loss": oos_loss,
         }
         torch.save(
             checkpoint,
@@ -386,12 +400,13 @@ def checkpoint_model(model, epoch, training_loss, test_loss, save):
     create_csv = epoch < 0
     if create_csv:
         with open(csv_fn, "w") as f:
-            f.write(",".join(["epoch", "training_loss", "test_loss", "saved"]) + "\n")
+            f.write(",".join(["epoch", "training_loss", "test_loss", "oos_loss", "saved"]) + "\n")
     with open(csv_fn, "a") as f:
         vals = [
             epoch,
             training_loss,
             test_loss,
+            oos_loss,
             1 if save else 0,
         ]
         f.write(",".join([str(x) for x in vals]) + "\n")
@@ -406,10 +421,8 @@ def training_config():
         "vocab_sizes": vocab_sizes,
         "embed_dim": 128,
         "learning_rate": 3e-4,
-        "training_batch_size": 32,
-        "training_items": 2048,
-        "test_batch_size": 32,
-        "test_items": 2048,
+        "batch_size": 32,
+        "items_per_query": 2048,
     }
     return config
 
@@ -432,13 +445,13 @@ def train():
     dataloaders = {
         x: DataLoader(
             LTRDataset(datasplit=x, config=config, logger=logger),
-            batch_size=config[f"{x}_batch_size"],
+            batch_size=config["batch_size"],
             shuffle=x == "training",
             drop_last=False,
             num_workers=8,
             worker_init_fn=worker_init_fn,
         )
-        for x in ["training", "test"]
+        for x in ["training", "validation", "test"]
     }
     optimizer = create_optimizer(model, config)
     scheduler = create_learning_rate_schedule(
@@ -448,30 +461,32 @@ def train():
     )
     scaler = torch.amp.GradScaler(args.device)
     stopper = EarlyStopper(patience=5, rtol=0.001)
-    get_loss = lambda x: evaluate_metrics(x, dataloaders["test"])
-    initial_loss = get_loss(model)
+    get_loss = lambda x, y: evaluate_metrics(x, dataloaders[y])
+    initial_loss = get_loss(model, "training")
     logger.info(f"Initial Loss: {initial_loss}")
     stopper(initial_loss)
-    checkpoint_model(model, -1, np.nan, initial_loss, True)
+    checkpoint_model(model, -1, np.nan, initial_loss, np.nan, True)
     for epoch in range(num_epochs):
         training_loss = train_epoch(
             model, dataloaders["training"], optimizer, scheduler, scaler
         )
         logger.info(f"Epoch: {epoch}, Training Loss: {training_loss}")
-        for x in ["training", "test"]:
-            generate_embeddings(model)
+        generate_embeddings(model)
+        for x in ["training", "validation"]:
             dataloaders[x] = DataLoader(
                 LTRDataset(datasplit=x, config=config, logger=logger),
-                batch_size=config[f"{x}_batch_size"],
+                batch_size=config["batch_size"],
                 shuffle=x == "training",
                 drop_last=False,
                 num_workers=8,
                 worker_init_fn=worker_init_fn,
             )
-        test_loss = get_loss(model)
+        test_loss = get_loss(model, "validation")
         logger.info(f"Epoch: {epoch}, Test Loss: {test_loss}")
+        oos_loss = get_loss(model, "test")
+        logger.info(f"Epoch: {epoch}, OOS Loss: {oos_loss}")
         stopper(test_loss)
-        checkpoint_model(model, epoch, training_loss, test_loss, stopper.save_model)
+        checkpoint_model(model, epoch, training_loss, test_loss, oos_loss, stopper.save_model)
         if stopper.early_stop:
             break
     logger.info(f"Best loss: {stopper.saved_score}")
@@ -496,7 +511,7 @@ def generate_embeddings(model):
     device = args.device
     temperature = model.get_temperature()
     num_items = config["vocab_sizes"][args.medium]
-    batch_size = config["test_batch_size"]
+    batch_size = config["batch_size"]
     final_embeddings = np.zeros((num_items, config["embed_dim"]), dtype=np.float32)
     all_item_ids = torch.arange(num_items, device=device).unsqueeze(-1)
     all_medium_ids = torch.full((num_items, 1), args.medium, device=device)

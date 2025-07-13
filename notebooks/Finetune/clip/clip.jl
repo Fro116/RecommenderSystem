@@ -28,7 +28,7 @@ function get_embedding_matrix(medium)
 end
 
 function get_adaptations(split, medium)
-    df = CSV.read("$datadir/clip/$split.csv", DataFrames.DataFrame)
+    df = CSV.read("$datadir/clip/$split.adaptations.csv", DataFrames.DataFrame)
     DataFrames.filter!(x -> x.cliptype == "adaptation$medium", df)
     source_ids = Int[]
     target_ids = Int[]
@@ -77,7 +77,7 @@ function ndcg_at_k(df::DataFrames.DataFrame, M::Matrix{<:Real}, k::Int)
     @showprogress Threads.@threads for i = 1:length(unique_sources)
         source_id = unique_sources[i]
         ground_truth_pairs = dfs[source_id]
-        weight = first(ground_truth_pairs.popularity)
+        weight = first(ground_truth_pairs.weight)
         true_relevances =
             Dict(pair.target => pair.relevance for pair in eachrow(ground_truth_pairs))
         predictions = M[source_id, :]
@@ -109,11 +109,11 @@ function recall_at_k(df::DataFrames.DataFrame, M::Matrix{<:Real}, k::Int)
         ranked_item_indices = sortperm(predictions[candidate_items], rev = true)
         top_k_range = 1:min(k, length(ranked_item_indices))
         top_k_items = candidate_items[ranked_item_indices[top_k_range]]
-        ground_truth_counts = Dict(row.target => row.count for row in eachrow(source_rows))
+        ground_truth_counts = Dict(row.target => row.relevance for row in eachrow(source_rows))
         count_in_top_k =
             sum(get(ground_truth_counts, item_id, 0) for item_id in top_k_items)
-        recall = count_in_top_k / sum(source_rows.count)
-        weight = first(source_rows.popularity)
+        recall = count_in_top_k / sum(source_rows.relevance)
+        weight = first(source_rows.weight)
         weighted_recalls[i] = recall * weight
         source_weights[i] = weight
     end
@@ -124,14 +124,13 @@ function get_ranking_metrics()
     ret = Dict()
     for medium in [0, 1]
         d = JLD2.load("$datadir/clip.jld2")
-        df = CSV.read("$datadir/clip/test.csv", DataFrames.DataFrame)
-        df = filter(x -> x.cliptype == "medium$medium", df)
+        df = reduce(vcat, [CSV.read("$datadir/clip/$x.similarpairs.csv", DataFrames.DataFrame) for x in ["training", "test"]])
+        df = filter(x -> x.cliptype == "medium$medium" && x.score != 0, df)
         df = DataFrames.DataFrame(
             source = df.source_matchedid .+ 1,
             target = df.target_matchedid .+ 1,
-            relevance = 1 .+ log10.(df.count),
-            count = df.count,
-            popularity = sqrt.(df.source_popularity),
+            relevance = df.score,
+            weight = sqrt.(df.source_popularity),
         )
         M = d["embeddings.$medium"]' * d["embeddings.$medium"]
         for k in [8, 128, 1024]

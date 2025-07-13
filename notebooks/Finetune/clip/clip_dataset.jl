@@ -1,8 +1,11 @@
 import CSV
 import DataFrames
+import HypothesisTests: BinomialTest, confint
 import JLD2
 import JSON3
 import Random
+import Memoize: @memoize
+import ProgressMeter: @showprogress
 import Statistics
 const datadir = "../../../data/finetune/clip"
 
@@ -31,6 +34,11 @@ function download_media()
     for s in sources
         download_media(s)
     end
+end
+
+@memoize function num_items(medium::Int)
+    m = Dict(0 => "manga", 1 => "anime")[medium]
+    maximum(CSV.read("$datadir/../$m.csv", DataFrames.DataFrame, ntasks = 1).matchedid) + 1
 end
 
 function get_counts(medium::Int)
@@ -64,14 +72,11 @@ function make_symmetric(df)
     )
 end
 
-function split_by_user(df, test_frac)
-    users = Set()
-    for x in eachrow(df)
-        push!(users, (x.source, x.username))
-    end
-    test_users = Set([(s, u) for (s, u) in users if rand() < test_frac])
-    test_mask = [(x.source, x.username) in test_users for x in eachrow(df)]
-    df[.!test_mask, :], df[test_mask, :]
+function smoothed_wilson_score(k, n, w)
+    n = Int(round(max(k, n) + w * 0.01))
+    interval = confint(BinomialTest(k, n), level = 1 - 0.05, method = :wald, tail = :both)
+    lower_bound = interval[1]
+    max(lower_bound, eps(Float32))
 end
 
 function aggragate_by_matchedid(df, medium)
@@ -103,12 +108,24 @@ function aggragate_by_matchedid(df, medium)
         :count => sum => :count,
     )
     df = DataFrames.filter(
-        x -> x.source_matchedid != 0 && x.target_matchedid != 0 && x.source_matchedid != x.target_matchedid && x.count > 0,
+        x ->
+            x.source_matchedid != 0 &&
+                x.target_matchedid != 0 &&
+                x.source_matchedid != x.target_matchedid &&
+                x.count > 0,
         df,
     )
     counts = get_counts(medium)
     source_counts = DataFrames.rename(counts, :count => :source_popularity)
-    DataFrames.innerjoin(df, source_counts, on = :source_matchedid => :matchedid)
+    df = DataFrames.innerjoin(df, source_counts, on = :source_matchedid => :matchedid)
+    W = JLD2.load("$datadir/../watches.$medium.jld2")["$medium.watches"]
+    W += W'
+    df[:, :watches] .= 0
+    for i = 1:DataFrames.nrow(df)
+        df.watches[i] = W[df.source_matchedid[i]+1, df.target_matchedid[i]+1]
+    end
+    df[:, :score] = smoothed_wilson_score.(df.count, df.watches, df.source_popularity)
+    df
 end
 
 function get_similar_pairs(source::AbstractString, medium::Int)
@@ -203,17 +220,95 @@ function get_similar_pairs(source::AbstractString, medium::Int)
     ret
 end
 
-function get_similar_pairs(test_frac::Float64)
+function random_sample_excluded(n::Int, k::Int, exclude::Set{Int})
+    @assert k <= n - length(exclude)
+    result_set = Set{Int}()
+    while length(result_set) < k
+        candidate = rand(0:n-1)
+        if candidate ∉ exclude && candidate ∉ result_set
+            push!(result_set, candidate)
+        end
+    end
+    collect(result_set)
+end
+
+function get_datasplits(df, test_frac::Float64, medium::Int, batch_size::Int)
+    pairs = Set()
+    for x in eachrow(df)
+        k1 = min(x.source_matchedid, x.target_matchedid)
+        k2 = max(x.source_matchedid, x.target_matchedid)
+        push!(pairs, (k1, k2))
+    end
+    test_pairs = Set([x for x in pairs if rand() < test_frac])
+    test_pairs = union(test_pairs, Set([(k2, k1) for (k1, k2) in test_pairs]))
+    test_mask =
+        [(x.source_matchedid, x.target_matchedid) in test_pairs for x in eachrow(df)]
+    test = df[test_mask, :]
+    training = df[.!test_mask, :]
+    validation = df
+    positives = Dict()
+    popularity = Dict()
+    for x in eachrow(test)
+        if x.source_matchedid ∉ keys(positives)
+            positives[x.source_matchedid] = Set([x.source_matchedid])
+            popularity[x.source_matchedid] = x.source_popularity
+        end
+        push!(positives[x.source_matchedid], x.target_matchedid)
+    end
+    test_counts = Dict(k => length(v)-1 for (k, v) in positives)
+    for x in eachrow(training)
+        if x.source_matchedid ∉ keys(positives)
+            continue
+        end
+        push!(positives[x.source_matchedid], x.target_matchedid)
+    end
+    records = []
+    @showprogress for (k, v) in positives
+        bs = batch_size - test_counts[k]
+        if num_items(medium) - length(v) < bs
+            @info "item $k medium $medium has too few implicit negatives"
+            v = Set([x.source_matchedid])
+        end
+        negatives = random_sample_excluded(num_items(medium), bs, v)
+        for n in negatives
+            push!(records, ("medium$medium", k, n, 0, popularity[k], 0, 0))
+        end
+    end
+    negative_df = DataFrames.DataFrame(
+        records,
+        [
+            :cliptype,
+            :source_matchedid,
+            :target_matchedid,
+            :count,
+            :source_popularity,
+            :watches,
+            :score,
+        ],
+    )
+    test = vcat(test, negative_df)
+    training, validation, test
+end
+
+function save_similar_pairs(test_frac::Float64, batch_size::Int)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     training_dfs = []
+    validation_dfs = []
     test_dfs = []
     for medium in [0, 1]
         sdf = reduce(vcat, [get_similar_pairs(s, medium) for s in sources])
-        training, test = aggragate_by_matchedid.(split_by_user(sdf, test_frac), medium)
+        training, validation, test =
+            get_datasplits(aggragate_by_matchedid(sdf, medium), test_frac, medium, batch_size)
         push!(training_dfs, training)
+        push!(validation_dfs, validation)
         push!(test_dfs, test)
     end
-    reduce(vcat, training_dfs), reduce(vcat, test_dfs)
+    training_df = reduce(vcat, training_dfs)
+    validation_df = reduce(vcat, validation_dfs)
+    test_df = reduce(vcat, test_dfs)
+    CSV.write("$datadir/training.similarpairs.csv", training_df)
+    CSV.write("$datadir/validation.similarpairs.csv", validation_df)
+    CSV.write("$datadir/test.similarpairs.csv", test_df)
 end
 
 function get_adaptations(medium::Int)
@@ -229,17 +324,12 @@ function get_adaptations(medium::Int)
         cliptype = "adaptation$medium",
         source_matchedid = df.source_matchedid,
         target_matchedid = df.target_matchedid,
-        source_popularity = 1,
-        count = 1,
     )
-    df = DataFrames.filter(
-        x -> x.source_matchedid != 0 && x.target_matchedid != 0 && x.count != 0,
-        df,
-    )
+    df = DataFrames.filter(x -> x.source_matchedid != 0 && x.target_matchedid != 0, df)
     df
 end
 
-function get_adaptations(test_frac::Float64)
+function save_adaptations(test_frac::Float64)
     df = reduce(vcat, [get_adaptations.([0, 1])...])
     function reflect(x)
         cliptype, sourceid, targetid = x
@@ -259,24 +349,10 @@ function get_adaptations(test_frac::Float64)
     ]
     training_df = df[.!test_mask, :]
     test_df = df[test_mask, :]
-    training_df, test_df
+    CSV.write("$datadir/training.adaptations.csv", training_df)
+    CSV.write("$datadir/test.adaptations.csv", test_df)
 end
 
-function save_data()
-    download_media()
-    test_frac = 0.1 # TODO
-    train_dfs = []
-    test_dfs = []
-    train, test = get_similar_pairs(test_frac)
-    push!(train_dfs, train)
-    push!(test_dfs, test)
-    train, test = get_adaptations(test_frac)
-    push!(train_dfs, train)
-    push!(test_dfs, test)
-    training_df = reduce(vcat, train_dfs)
-    test_df = reduce(vcat, test_dfs)
-    CSV.write("$datadir/training.csv", training_df)
-    CSV.write("$datadir/test.csv", test_df)
-end
-
-save_data()
+download_media()
+save_similar_pairs(0.01, 2048)
+save_adaptations(0.01)
