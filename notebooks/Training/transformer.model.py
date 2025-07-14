@@ -247,7 +247,7 @@ class TransformerModel(nn.Module):
                 item_tokens[k] = v
                 action_tokens[k] = v
             elif (
-                k in ["input_pos", "time"]
+                k in ["time"]
                 or k.startswith("0.watch")
                 or k.startswith("1.watch")
             ):

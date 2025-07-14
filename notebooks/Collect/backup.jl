@@ -5,13 +5,18 @@ include("../julia_utils/scheduling.jl")
 include("../julia_utils/stdout.jl")
 
 function archive(date)
+    dateobj = Dates.Date(date, Dates.dateformat"yyyymmdd")
+    if Dates.dayofweek(dateobj) != 1
+        return
+    end
     logtag("BACKUP", "archive $date")
     datadir = "../../data/collect/archive"
     rm(datadir, recursive=true, force=true)
     mkpath(datadir)
     bucket = read("../../secrets/gcp.bucket.backup.txt", String)
     download_cmd = "rclone --retries=10 copyto r2:rsys/database/collect/$date $datadir/$date"
-    if !endswith(date, "01")
+    if Dates.Day(dateobj) > 7
+        # archive images once a month and everything else once a week
         download_cmd *= " --exclude images.tar"
     end
     cmds = [

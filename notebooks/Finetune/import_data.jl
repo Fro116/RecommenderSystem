@@ -74,8 +74,8 @@ function gen_splits()
     min_items = 5
     max_items = Dict(s => num_items.(mediums, s) for s in SOURCES)
     test_perc = 0.1
-    training_recent_days = 7
-    test_recent_days = 7
+    training_recent_days = 4
+    test_recent_days = 4
     training_tag = read("$datadir/training_tag", String)
     max_ts = -Inf
     @showprogress for f in Glob.glob("$datadir/histories_*.csv")

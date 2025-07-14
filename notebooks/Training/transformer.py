@@ -519,7 +519,7 @@ def train():
     config = training_config()
     debug_mode = False
     if config["finetune"]:
-        num_epochs = 4
+        num_epochs = 8
         local_batch_size = 32 if config["causal"] else 64
         grad_accum_steps = 1
         if world_size == 1:

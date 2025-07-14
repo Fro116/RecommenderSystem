@@ -10,6 +10,7 @@ dependencies = [
     ("H5Zblosc", "0.1.2"),
     ("HDF5", "0.17.2"),
     ("HTTP", "1.10.16"),
+    ("HypothesisTests", "v0.11.5"),
     ("IJulia", "1.27.0"),
     ("Images", "0.26.2"),
     ("JLD2", "0.5.13"),

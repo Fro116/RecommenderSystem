@@ -28,18 +28,21 @@ function import_dbs()
     end
 end
 
-function cron()
+function train_models()
     today = Dates.today()
-    import_lists()
-    if Dates.dayofweek(today) == 1
+    if Dates.dayofweek(today) == 3
         import_dbs()
     end
-    # for now, manually oversee training runs
-    # if Dates.day(today) in [15]
-    #     runcmd("cd Training && julia run.jl")
-    # end
+    if Dates.day(today) in [15]
+        runcmd("cd Training && julia run.jl")
+    end
     datetag = Dates.format(today, "yyyymmdd")
-    runcmd("cd Finetune && julia run.jl $datetag")
+    latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
+    if datetag != latest
+        logerror("TRAIN_MODELS", "list $datetag is not ready, using $latest")
+    end
+    runcmd("cd Finetune && julia run.jl $latest")
 end
 
-@scheduled "CRON" "2:30" @handle_errors cron()
+@scheduled "IMPORT_LISTS" "2:30" @handle_errors import_lists()
+@scheduled "TRAIN_MODELS" "9:00" @handle_errors train_models()

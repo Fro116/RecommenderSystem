@@ -136,6 +136,7 @@ function pretrain()
     end
     wait_sfcompute()
     stop_sfcompute()
+    run(`rclone --retries=10 copyto ../../data/training/list_tag r2:rsys/database/training/latest`)
 end
 
 pretrain()
