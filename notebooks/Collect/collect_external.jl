@@ -47,6 +47,7 @@ function save()
         ),
     )
     save_external("media_match_manual", "media_match_manual.csv")
+    save_external("item_similarity_manual", "item_similarity_manual.csv")
 end
 
 @scheduled "EXTERNAL" "00:30" @handle_errors save()

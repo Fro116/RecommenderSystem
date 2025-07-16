@@ -14,5 +14,5 @@ export JULIA_PROJECT="$workdir/juliaenv"
 export JULIA_NUM_THREADS="16"
 logjl="$workdir/RecommenderSystem/notebooks/Collect/logrotate.jl"
 cd $workdir/RecommenderSystem/notebooks
-(julia cron.jl |& julia -t 1 $logjl $logs/cron.log) &
+(julia cron.jl |& julia -t 1 $logjl $logs/cron.log 1000000) &
 tail -F $logs/cron.log

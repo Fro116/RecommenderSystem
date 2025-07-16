@@ -8,6 +8,10 @@ function runcmd(x)
     run(`sh -c $x`)
 end
 
+function teecmd(x, filename)
+    "($x) 2>&1 | tee $filename"
+end
+
 function get_directories(db)
     str = read(`rclone lsf r2:rsys/database/$db`, String)
     dirs = [chop(x) for x in split(str) if endswith(x, "/")]
@@ -23,8 +27,10 @@ function import_lists()
 end
 
 function import_dbs()
+    logdir = "../logs/import"
+    mkpath(logdir)
     for x in ["media", "images", "autocomplete", "autocomplete_items"]
-        runcmd("cd Import/$x && julia save_$(x).jl")
+        runcmd(teecmd("cd Import/$x && julia save_$(x).jl", "$logdir/$x.log"))
     end
 end
 

@@ -198,7 +198,8 @@ end
 
 function upload_images(to_add, to_delete)
     if !isempty(to_add) && !isempty(readdir("$datadir/srimages"))
-        run(`rclone -Pv --retries=10 copyto $datadir/srimages r2:cdn/images/cards`)
+        logtag("IMAGES", "uploading images")
+        run(`rclone --retries=10 copyto $datadir/srimages r2:cdn/images/cards`)
     end
     if !isempty(to_delete)
         open("$datadir/todelete", "w") do f
@@ -206,7 +207,8 @@ function upload_images(to_add, to_delete)
                 write(f, "$fn\n")
             end
         end
-        run(`rclone -Pv --retries=10 delete r2:cdn/images/cards --files-from=$datadir/todelete --no-traverse`)
+        logtag("IMAGES", "deleting stale images")
+        run(`rclone --retries=10 delete r2:cdn/images/cards --files-from=$datadir/todelete --no-traverse`)
     end
     qrun(
         `rclone --retries=10 copyto $datadir/srimages.csv r2:rsys/database/import/images.csv`,

@@ -4,19 +4,15 @@ include("../../julia_utils/stdout.jl")
 include("common.jl")
 
 function backup()
-    logdir = "../../../logs/import"
-    mkpath(logdir)
-    open("$logdir/match_media.log", "w") do f
-        for fn in [
-            "download_media.jl",
-            "match_ids.jl",
-            "match_manami.jl",
-            "match_manual.jl",
-            "match_metadata.jl",
-            "match_media.jl",
-        ]
-            run(pipeline(`julia $fn`, stdout=f, stderr=f))
-        end
+    for fn in [
+        "download_media.jl",
+        "match_ids.jl",
+        "match_manami.jl",
+        "match_manual.jl",
+        "match_metadata.jl",
+        "match_media.jl",
+    ]
+        run(`julia $fn`)
     end
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/import/{OUTPUT}"
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
