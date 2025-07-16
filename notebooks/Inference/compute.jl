@@ -5,16 +5,16 @@ import Oxygen
 import UUIDs
 import Random
 include("../Training/import_list.jl")
+include("../julia_utils/database.jl")
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
 include("../Finetune/embed.jl")
 
-const PORT = parse(Int, ARGS[1])
-const DATABASE_READ_URL = ARGS[2]
-const DATABASE_WRITE_URL = ARGS[3]
-const datadir = "../../data/finetune"
 const secretdir = "../../secrets"
+const PORT = parse(Int, ARGS[1])
+const DATABASE_WRITE_URL = length(ARGS) >= 2 ? ARGS[2] : read("$secretdir/url.database.txt", String)
+const datadir = "../../data/finetune"
 const bluegreen = read("$datadir/bluegreen", String)
 const MODEL_URLS = (length(ARGS) >= 4) ? [ARGS[4]] : readlines("$secretdir/url.embed.$bluegreen.txt")
 MODEL_URL = first(MODEL_URLS)
@@ -75,6 +75,47 @@ Oxygen.@post "/autocomplete" function autocomplete(r::HTTP.Request)::HTTP.Respon
     end
 end
 
+function read_autocomplete(data::Dict)::HTTP.Response
+    if data["type"] == "user"
+        return read_autocomplete_user(data)
+    elseif data["type"] == "item"
+        return read_autocomplete_item(data)
+    end
+    HTTP.Response(400, [])
+end
+
+function read_autocomplete_user(data::Dict)::HTTP.Response
+    source = data["source"]
+    prefix = data["prefix"]
+    table = "autocomplete_users"
+    df = with_db(:inference_read, 3) do db
+        query = "SELECT * FROM $table WHERE (source, prefix) = (\$1, \$2)"
+        stmt = db_prepare(db, query)
+        DataFrames.DataFrame(LibPQ.execute(stmt, (source, prefix)))
+    end
+    if df isa Symbol || DataFrames.nrow(df) == 0
+        return HTTP.Response(404, [])
+    end
+    d = Dict(k => only(df[:, k]) for k in DataFrames.names(df))
+    HTTP.Response(200, encode(d, :msgpack)...)
+end
+
+function read_autocomplete_item(data::Dict)::HTTP.Response
+    medium = data["medium"]
+    prefix = data["prefix"]
+    table = "autocomplete_items"
+    df = with_db(:inference_read, 3) do db
+        query = "SELECT * FROM $table WHERE (medium, prefix) = (\$1, \$2)"
+        stmt = db_prepare(db, query)
+        DataFrames.DataFrame(LibPQ.execute(stmt, (medium, prefix)))
+    end
+    if df isa Symbol || DataFrames.nrow(df) == 0
+        return HTTP.Response(404, [])
+    end
+    d = Dict(k => only(df[:, k]) for k in DataFrames.names(df))
+    HTTP.Response(200, encode(d, :msgpack)...)
+end
+
 function autocomplete_user(d::Dict, encoding)::HTTP.Response
     speedscope = [time()]
     prefix = lowercase(sanitize(d["prefix"]))
@@ -83,11 +124,7 @@ function autocomplete_user(d::Dict, encoding)::HTTP.Response
         "prefix" => prefix,
         "type" => d["type"],
     )
-    r_ac = HTTP.post(
-        "$DATABASE_READ_URL/read_autocomplete",
-        encode(d, :msgpack)...,
-        status_exception = false,
-    )
+    r_ac = read_autocomplete(d)
     push!(speedscope, time())
     if HTTP.iserror(r_ac)
         ret = []
@@ -202,11 +239,7 @@ function autocomplete_item(d::Dict, encoding)::HTTP.Response
         "prefix" => prefix,
         "type" => d["type"],
     )
-    r_ac = HTTP.post(
-        "$DATABASE_READ_URL/read_autocomplete",
-        encode(args, :msgpack)...,
-        status_exception = false,
-    )
+    r_ac = read_autocomplete(args)
     push!(speedscope, time())
     if HTTP.iserror(r_ac)
         ret = []
@@ -278,12 +311,41 @@ function get_user_url(source, username, userid)
     end
 end
 
+function read_user_history(data::Dict)::HTTP.Response
+    source = data["source"]
+    username = data["username"]
+    tables = get(data, "tables", ["user_histories", "online_user_histories"])
+    allow_online = get(data, "online_history", false)
+    tasks = []
+    for table in tables
+        task = Threads.@spawn begin
+            df = with_db(:inference_read, 3) do db
+                query = "SELECT * FROM $table WHERE (source, lower(username)) = (\$1, lower(\$2))"
+                stmt = db_prepare(db, query)
+                DataFrames.DataFrame(LibPQ.execute(stmt, (source, username)))
+            end
+        end
+        push!(tasks, task)
+    end
+    dfs = []
+    for task in tasks
+        df = fetch(task)
+        if df isa Symbol || DataFrames.nrow(df) == 0
+            continue
+        end
+        push!(dfs, df)
+    end
+    if isempty(dfs)
+        return HTTP.Response(404, [])
+    end
+    df = reduce(vcat, dfs)
+    sort!(df, :db_refreshed_at, rev=true)
+    d = Dict(k => df[1, k] for k in DataFrames.names(df))
+    HTTP.Response(200, encode(d, :msgpack)...)
+end
+
 function add_user(d::Dict, medium::Integer)::HTTP.Response
-    r_read = HTTP.post(
-        "$DATABASE_READ_URL/read_user_history",
-        encode(Dict("source" => d["source"], "username" => d["username"]), :msgpack)...,
-        status_exception = false,
-    )
+    r_read = read_user_history(Dict("source" => d["source"], "username" => d["username"]))
     if HTTP.iserror(r_read)
         return HTTP.Response(r_read.status, [])
     end
@@ -552,6 +614,12 @@ function compile(port::Integer)
     if HTTP.iserror(r)
         logerror("bluegreen error $(r.status)")
     end
+    logtag("STARTUP", "loading memoize caches")
+    get_autocomplete_items_map.([0, 1])
+    get_matchedid_map.([0, 1])
+    get_images()
+    get_missing_images()
+    get_media_info.([0, 1])
     Threads.@threads for source in ["mal", "anilist", "kitsu", "animeplanet"]
         compile_source(port, source)
     end

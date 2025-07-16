@@ -3,17 +3,6 @@ function copy(file::String, dst::String)
     cp(file, joinpath(dst, file))
 end
 
-function database(basedir::String)
-    app = "$basedir/database"
-    if ispath(app)
-        rm(app; recursive = true)
-    end
-    copy("notebooks/Inference/database.jl", app)
-    copy("notebooks/Import/lists/import_history.jl", app)
-    copy("notebooks/julia_utils", app)
-    copy("secrets", app)
-end
-
 function compute(basedir::String)
     app = "$basedir/compute"
     if ispath(app)
@@ -77,7 +66,6 @@ if ispath(basedir)
 end
 mkpath(basedir)
 cp("notebooks/Package/Compute/app", basedir, force = true)
-database(basedir)
 compute(basedir)
 const tag = read("data/finetune/finetune_tag", String)
-build(basedir, "compute", tag, "--set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --cpu=4 --memory=12Gi")
+build(basedir, "compute", tag, "--set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --cpu=2 --memory=8Gi")

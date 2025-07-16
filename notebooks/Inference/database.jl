@@ -74,48 +74,6 @@ function write_user_history(data::Dict)::HTTP.Response
     HTTP.Response(200, [])
 end
 
-Oxygen.@post "/read_autocomplete" function read_autocomplete(r::HTTP.Request)::HTTP.Response
-    data = decode(r)
-    if data["type"] == "user"
-        return read_autocomplete_user(decode(r))
-    elseif data["type"] == "item"
-        return read_autocomplete_item(decode(r))
-    end
-    HTTP.Response(400, [])
-end
-
-function read_autocomplete_user(data::Dict)::HTTP.Response
-    source = data["source"]
-    prefix = data["prefix"]
-    table = "autocomplete_users"
-    df = with_db(:inference_read, 3) do db
-        query = "SELECT * FROM $table WHERE (source, prefix) = (\$1, \$2)"
-        stmt = db_prepare(db, query)
-        DataFrames.DataFrame(LibPQ.execute(stmt, (source, prefix)))
-    end
-    if df isa Symbol || DataFrames.nrow(df) == 0
-        return HTTP.Response(404, [])
-    end
-    d = Dict(k => only(df[:, k]) for k in DataFrames.names(df))
-    HTTP.Response(200, encode(d, :msgpack)...)
-end
-
-function read_autocomplete_item(data::Dict)::HTTP.Response
-    medium = data["medium"]
-    prefix = data["prefix"]
-    table = "autocomplete_items"
-    df = with_db(:inference_read, 3) do db
-        query = "SELECT * FROM $table WHERE (medium, prefix) = (\$1, \$2)"
-        stmt = db_prepare(db, query)
-        DataFrames.DataFrame(LibPQ.execute(stmt, (medium, prefix)))
-    end
-    if df isa Symbol || DataFrames.nrow(df) == 0
-        return HTTP.Response(404, [])
-    end
-    d = Dict(k => only(df[:, k]) for k in DataFrames.names(df))
-    HTTP.Response(200, encode(d, :msgpack)...)
-end
-
 function fingerprints_match(source::String, user, fingerprint)
     if source == "mal"
         cols = ["version", "medium", "itemid", "updated_at"]
@@ -294,23 +252,6 @@ function compile(port::Integer)
     profiles = CSV.read("../../secrets/test.users.csv", DataFrames.DataFrame, stringtype = String)
     @sync for (source, username, userid) in zip(profiles.source, profiles.username, profiles.userid)
         Threads.@spawn begin
-            logtag("STARTUP", "/read_autocomplete")
-            HTTP.post(
-                "http://localhost:$PORT/read_autocomplete",
-                encode(Dict("source" => source, "prefix" => lowercase(username), "type" => "user"), :msgpack)...,
-                status_exception = false,
-            )
-            HTTP.post(
-                "http://localhost:$PORT/read_autocomplete",
-                encode(Dict("source" => source, "prefix" => lowercase(username)[1:1], "type" => "user"), :msgpack)...,
-                status_exception = false,
-            )
-            logtag("STARTUP", "/read_user_history")
-            HTTP.post(
-                "http://localhost:$PORT/read_user_history",
-                encode(Dict("source" => source, "username" => username), :msgpack)...,
-                status_exception = false,
-            )
             logtag("STARTUP", "/refresh_user_history")
             HTTP.post(
                 "http://localhost:$PORT/refresh_user_history",

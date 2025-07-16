@@ -44,5 +44,8 @@ function train_models()
     runcmd("cd Finetune && julia run.jl $latest")
 end
 
-@scheduled "IMPORT_LISTS" "2:30" @handle_errors import_lists()
-@scheduled "TRAIN_MODELS" "9:00" @handle_errors train_models()
+Threads.@spawn @scheduled "IMPORT_LISTS" "2:30" @handle_errors import_lists()
+Threads.@spawn @scheduled "TRAIN_MODELS" "9:00" @handle_errors train_models()
+while true
+    sleep(86400)
+end
