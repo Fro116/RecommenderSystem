@@ -39,6 +39,7 @@ function download_data(finetune_tag::AbstractString)
         ["watches.$m.jld2" for m in [0, 1]],
         ["transformer.$modeltype.$stem" for modeltype in ["causal", "masked"] for stem in ["csv", "pt"]],
         ["images.csv", "media_relations.csv"],
+        ["item_text_embeddings.$m.json" for m in [0, 1]],
     )
     for fn in files
         cmd = "$download/training/$tag/$fn $datadir/$fn"

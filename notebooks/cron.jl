@@ -29,7 +29,7 @@ end
 function import_dbs()
     logdir = "../logs/import"
     mkpath(logdir)
-    for x in ["media", "images", "autocomplete", "autocomplete_items"]
+    for x in ["media", "images", "autocomplete", "autocomplete_items", "embeddings"]
         runcmd(teecmd("cd Import/$x && julia save_$(x).jl", "$logdir/$x.log"))
     end
 end
@@ -45,13 +45,13 @@ function train_models()
     datetag = Dates.format(today, "yyyymmdd")
     latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
     if datetag != latest
-        logerror("TRAIN_MODELS", "list $datetag is not ready, using $latest")
+        logtag("TRAIN_MODELS", "list $datetag is not ready, using $latest")
     end
     runcmd("cd Finetune && julia run.jl $latest")
 end
 
 Threads.@spawn @scheduled "IMPORT_LISTS" "2:30" @handle_errors import_lists()
-Threads.@spawn @scheduled "TRAIN_MODELS" "9:00" @handle_errors train_models()
+Threads.@spawn @scheduled "TRAIN_MODELS" "10:00" @handle_errors train_models()
 while true
     sleep(86400)
 end

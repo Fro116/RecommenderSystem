@@ -114,7 +114,7 @@ def predict(users, task, medium):
             with torch.amp.autocast(device, dtype=torch.bfloat16):
                 ret = models[f"transformer.{modeltype}.{medium}"](d, task)
         duration = time.time() - start_time
-        logger.info(f"batch of {len(users)} completed in {duration} seconds")
+        logger.debug(f"batch of {len(users)} completed in {duration} seconds")
         if modeltype == "causal":
             e_ret, e_rnk = ret
             e["retrieval"] = e_ret.to("cpu")
@@ -235,7 +235,7 @@ async def log_request_duration(request: Request, call_next):
     path = request.url.path
     if request.url.query:
         path += f"?{request.url.query}"
-    logger.info(f"Request to {path} took {duration:.4f} seconds")
+    logger.debug(f"Request to {path} took {duration:.4f} seconds")
     return response
 
 

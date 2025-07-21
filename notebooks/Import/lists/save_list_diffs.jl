@@ -16,7 +16,7 @@ end
 function import_list(datetag::AbstractString, name::AbstractString)
     cmds = [
         "cd $datadir",
-        "rclone -Pv --retries=10 copyto r2:rsys/database/lists/$datetag/lists.csv.zstd $name.zstd",
+        "rclone --retries=10 copyto r2:rsys/database/lists/$datetag/lists.csv.zstd $name.zstd",
         "unzstd $name.zstd",
         "rm $name.zstd",
     ]
@@ -119,7 +119,7 @@ function upload_diffs(datetag::AbstractString)
     for name in ["add.csv", "delete.csv"]
         cmds = [
             "zstd $datadir/$name -o $datadir/$name.zstd",
-            "rclone -Pv --retries=10 copyto $datadir/$name.zstd r2:rsys/database/lists/$datetag/$name.zstd",
+            "rclone --retries=10 copyto $datadir/$name.zstd r2:rsys/database/lists/$datetag/$name.zstd",
         ]
         cmd = join(cmds, " && ")
         run(`sh -c $cmd`)
@@ -127,7 +127,7 @@ function upload_diffs(datetag::AbstractString)
 end
 
 function archive_lists(datetag::AbstractString)
-    logtag("DIFFS", "saving $datetag")
+    logtag("SAVE_LIST_DIFFS", "saving $datetag")
     rm(datadir, recursive = true, force = true)
     mkpath(datadir)
     import_lists(datetag)

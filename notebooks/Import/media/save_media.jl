@@ -12,8 +12,10 @@ function backup()
         "match_metadata.jl",
         "match_media.jl",
     ]
+        logtag("SAVE_MEDIA", "running $fn")
         run(`julia $fn`)
     end
+    logtag("SAVE_MEDIA", "uploading data")
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/import/{OUTPUT}"
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     mediums = ["manga", "anime"]

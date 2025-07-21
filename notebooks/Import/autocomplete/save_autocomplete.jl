@@ -5,7 +5,6 @@ import Glob
 import MsgPack
 import ProgressMeter: @showprogress
 
-
 include("../../julia_utils/stdout.jl")
 include("../../Training/import_list.jl")
 
@@ -14,6 +13,7 @@ const datadir = "../../../data/import/autocomplete"
 qrun(x) = run(pipeline(x, stdout = devnull, stderr = devnull))
 
 function import_data()
+    logtag("SAVE_AUTOCOMPLETE", "importing data")
     rm(datadir, recursive=true, force=true)
     mkpath(datadir)
     qrun(`rclone --retries=10 copyto r2:rsys/database/lists/latest $datadir/latest`)
@@ -29,6 +29,7 @@ function import_data()
 end
 
 function save_profiles()
+    logtag("SAVE_AUTOCOMPLETE", "saving profiles")
     @showprogress for (idx, f) in Iterators.enumerate(Glob.glob("$datadir/lists_*.csv"))
         df = read_csv(f)
         records = Vector{Any}(undef, DataFrames.nrow(df))
@@ -133,6 +134,7 @@ function text_encode(data)
 end
 
 function save_user_autcompletes()
+    logtag("SAVE_AUTOCOMPLETE", "saving user autocompletes")
     source_map = Dict("mal" => 0, "anilist" => 1, "kitsu" => 2, "animeplanet" => 3)
     inv_source_map = Dict(v => k for (k, v) in source_map)
     df = CSV.read("$datadir/profiles.csv", DataFrames.DataFrame)
@@ -185,6 +187,7 @@ function save_user_autcompletes()
 end
 
 function upload_autocompletes()
+    logtag("SAVE_AUTOCOMPLETE", "uploading autocompletes")
     qrun(`./save_autocomplete.sh`)
 end
 

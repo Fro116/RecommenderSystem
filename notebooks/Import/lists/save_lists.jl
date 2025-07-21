@@ -201,6 +201,7 @@ function gather(source)
 end
 
 function save_lists(datetag)
+    logtag("SAVE_LISTS", "saving $datetag")
     rm(datadir, recursive = true, force = true)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     mkpath(datadir)

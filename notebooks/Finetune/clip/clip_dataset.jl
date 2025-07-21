@@ -9,6 +9,8 @@ import ProgressMeter: @showprogress
 import Statistics
 const datadir = "../../../data/finetune/clip"
 
+include("../../julia_utils/stdout.jl")
+
 function download_media(source::String)
     mkpath("$datadir/$source")
     retrieval = "rclone --retries=10 copyto r2:rsys/database/collect"
@@ -232,82 +234,34 @@ function random_sample_excluded(n::Int, k::Int, exclude::Set{Int})
     collect(result_set)
 end
 
-function get_datasplits(df, test_frac::Float64, medium::Int, batch_size::Int)
-    pairs = Set()
+function get_datasplits(df, test_frac::Float64)
+    ids = Set()
     for x in eachrow(df)
-        k1 = min(x.source_matchedid, x.target_matchedid)
-        k2 = max(x.source_matchedid, x.target_matchedid)
-        push!(pairs, (k1, k2))
+        push!(ids, x.source_matchedid)
+        push!(ids, x.target_matchedid)
     end
-    test_pairs = Set([x for x in pairs if rand() < test_frac])
-    test_pairs = union(test_pairs, Set([(k2, k1) for (k1, k2) in test_pairs]))
+    test_ids = Set([x for x in ids if rand() < test_frac])
     test_mask =
-        [(x.source_matchedid, x.target_matchedid) in test_pairs for x in eachrow(df)]
+        [x.source_matchedid in test_ids || x.target_matchedid in test_ids for x in eachrow(df)]
     test = df[test_mask, :]
     training = df[.!test_mask, :]
-    validation = df
-    positives = Dict()
-    popularity = Dict()
-    for x in eachrow(test)
-        if x.source_matchedid ∉ keys(positives)
-            positives[x.source_matchedid] = Set([x.source_matchedid])
-            popularity[x.source_matchedid] = x.source_popularity
-        end
-        push!(positives[x.source_matchedid], x.target_matchedid)
-    end
-    test_counts = Dict(k => length(v)-1 for (k, v) in positives)
-    for x in eachrow(training)
-        if x.source_matchedid ∉ keys(positives)
-            continue
-        end
-        push!(positives[x.source_matchedid], x.target_matchedid)
-    end
-    records = []
-    @showprogress for (k, v) in positives
-        bs = batch_size - test_counts[k]
-        if num_items(medium) - length(v) < bs
-            @info "item $k medium $medium has too few implicit negatives"
-            v = Set([x.source_matchedid])
-        end
-        negatives = random_sample_excluded(num_items(medium), bs, v)
-        for n in negatives
-            push!(records, ("medium$medium", k, n, 0, popularity[k], 0, 0))
-        end
-    end
-    negative_df = DataFrames.DataFrame(
-        records,
-        [
-            :cliptype,
-            :source_matchedid,
-            :target_matchedid,
-            :count,
-            :source_popularity,
-            :watches,
-            :score,
-        ],
-    )
-    test = vcat(test, negative_df)
-    training, validation, test
+    training, test
 end
 
-function save_similar_pairs(test_frac::Float64, batch_size::Int)
+function save_similar_pairs(test_frac::Float64)
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     training_dfs = []
-    validation_dfs = []
     test_dfs = []
     for medium in [0, 1]
         sdf = reduce(vcat, [get_similar_pairs(s, medium) for s in sources])
-        training, validation, test =
-            get_datasplits(aggragate_by_matchedid(sdf, medium), test_frac, medium, batch_size)
+        training, test =
+            get_datasplits(aggragate_by_matchedid(sdf, medium), test_frac)
         push!(training_dfs, training)
-        push!(validation_dfs, validation)
         push!(test_dfs, test)
     end
     training_df = reduce(vcat, training_dfs)
-    validation_df = reduce(vcat, validation_dfs)
     test_df = reduce(vcat, test_dfs)
     CSV.write("$datadir/training.similarpairs.csv", training_df)
-    CSV.write("$datadir/validation.similarpairs.csv", validation_df)
     CSV.write("$datadir/test.similarpairs.csv", test_df)
 end
 
@@ -353,6 +307,7 @@ function save_adaptations(test_frac::Float64)
     CSV.write("$datadir/test.adaptations.csv", test_df)
 end
 
+logtag("ITEM_SIMILARITY", "downloading datasets")
 download_media()
-save_similar_pairs(0.01, 2048)
+save_similar_pairs(0.01)
 save_adaptations(0.01)

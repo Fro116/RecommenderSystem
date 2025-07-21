@@ -5,11 +5,16 @@ import JSON3
 import MsgPack
 import ProgressMeter: @showprogress
 
+include("../../julia_utils/stdout.jl")
+
 const datadir = "../../../data/import/autocomplete_items"
 const mediums = ["manga", "anime"]
 const sources = ["mal", "anilist", "kitsu", "animeplanet"]
 
+qrun(x) = run(pipeline(x, stdout = devnull, stderr = devnull))
+
 function download_data()
+    logtag("SAVE_AUTOCOMPLETE_ITEMS", "downloading data")
     rm(datadir, force = true, recursive = true)
     mkpath(datadir)
     retrieval = "rclone --retries=10 copyto r2:rsys/database/import"
@@ -19,7 +24,7 @@ function download_data()
     )
     for fn in files
         cmd = "$retrieval/$fn $datadir/$fn"
-        run(`sh -c $cmd`)
+        qrun(`sh -c $cmd`)
     end
 end
 
@@ -231,6 +236,7 @@ function get_autcompletes(medium::Int)
 end
 
 function save_autcompletes()
+    logtag("SAVE_AUTOCOMPLETE_ITEMS", "saving autocompletes")
     dfs = []
     for m in [0, 1]
         df = get_autcompletes(m)
@@ -243,9 +249,14 @@ function save_autcompletes()
 end
 
 function upload_autocompletes()
+    logtag("SAVE_AUTOCOMPLETE_ITEMS", "uploading autocompletes")
+    qrun(`./save_autocomplete.sh`)
+end
+
+function upload_autocompletes()
     download_data()
     save_autcompletes()
-    run(`./autocomplete.sh`)
+    upload_autocompletes()
 end
 
 upload_autocompletes()

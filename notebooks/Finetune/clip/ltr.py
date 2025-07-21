@@ -17,11 +17,20 @@ class LTRDataset(Dataset):
     def __init__(self, datasplit, config, logger):
         super().__init__()
         logger.info(f"loading {datasplit} dataset")
-        self.num_items_per_query = config["items_per_query"]
-        self.shuffle = datasplit == "training"
         self.datasplit = datasplit
-        # load queries
-        df = pd.read_csv(f"{args.datadir}/{datasplit}.similarpairs.csv")
+        self.config = config
+        self.num_items_per_query = self.config["items_per_query"]
+        if self.datasplit == "training":
+            self.shuffle = True
+            self.max_num_positives = int(round(self.num_items_per_query) * 0.9)
+        else:
+            self.shuffle = False
+            self.max_num_positives = self.num_items_per_query
+        self.load_queries()
+        self.load_hard_negatives()
+
+    def load_queries(self):
+        df = pd.read_csv(f"{args.datadir}/{self.datasplit}.similarpairs.csv")
         df = df.query(f"cliptype == 'medium{args.medium}'").copy()
         df["target_tuple"] = list(zip(df["target_matchedid"], df["score"]))
         grouped = df.groupby(["cliptype", "source_matchedid", "source_popularity"])[
@@ -40,24 +49,22 @@ class LTRDataset(Dataset):
                     key=lambda x: x[1],
                     reverse=True,
                 ),
-                "maxid": config["vocab_sizes"][medium_idx],
+                "maxid": self.config["vocab_sizes"][medium_idx],
             }
             queries.append(r)
         self.queries = queries
-        if datasplit == "training":
-            # keep implicit negatives disjoint between training and test
-            other_split = "test"
-            other_df = pd.read_csv(f"{args.datadir}/{other_split}.similarpairs.csv")
-            other_df = other_df.query(f"cliptype == 'medium{args.medium}'").copy()
-            other_queries = {}
-            for (s, t) in zip(other_df["source_matchedid"], other_df["target_matchedid"]):
-                if s not in other_queries:
-                    other_queries[s] = set()
-                other_queries[s].add(t)
-            self.exclude_pairs = other_queries
-        else:
-            self.exclude_pairs = {}
-        # load hard negatives
+        other_split = {"training": "test", "test": "training"}[self.datasplit]
+        other_df = pd.read_csv(f"{args.datadir}/{other_split}.similarpairs.csv")
+        other_df = other_df.query(f"cliptype == 'medium{args.medium}'").copy()
+        other_queries = {}
+        for s, t in zip(other_df["source_matchedid"], other_df["target_matchedid"]):
+            if s not in other_queries:
+                other_queries[s] = set()
+            other_queries[s].add(t)
+        self.exclude_pairs = other_queries
+
+    def load_hard_negatives(self):
+        config = self.config
         m = config["vocab_sizes"][args.medium]
         n = config["embed_dim"]
         output_path = f"{args.datadir}/output.embeddings.{args.medium}.h5"
@@ -65,10 +72,10 @@ class LTRDataset(Dataset):
         with h5py.File(output_path) as hf:
             for i in range(m):
                 M[i, :] = hf[f"{args.medium}.{i}"][:]
-            temperature = float(hf["temperature"][:][0])
+            temperature_exp = float(np.exp(hf["temperature"][:][0]))
         M = torch.tensor(M).to(args.device)
         self.sample_probs = np.zeros((m, m), np.float32)
-        idxs = [x["sourceid"] for x in queries]
+        idxs = [x["sourceid"] for x in self.queries]
         chunk_size = 4096
         for batch in [
             idxs[i : i + chunk_size] for i in range(0, len(idxs), chunk_size)
@@ -76,11 +83,24 @@ class LTRDataset(Dataset):
             with torch.no_grad():
                 with torch.amp.autocast(f"cuda:{args.device}", dtype=torch.bfloat16):
                     self.sample_probs[batch, :] = (
-                        torch.exp((M[batch, :] @ M.T) * temperature).cpu().numpy()
+                        torch.exp((M[batch, :] @ M.T) * temperature_exp).cpu().numpy()
                     )
         del M
         for i in range(m):
             self.sample_probs[i, i] = 0
+        for k, vs in self.exclude_pairs.items():
+            for v in vs:
+                self.sample_probs[k, v] = 0
+        for x in self.queries:
+            k = x["sourceid"]
+            for v, _ in x["targets"][: self.max_num_positives]:
+                self.sample_probs[k, v] = 0
+        if self.datasplit == "training":
+            self.sample_probs *= training_implicit_negatives
+        elif self.datasplit == "test":
+            self.sample_probs *= ~training_implicit_negatives
+        else:
+            assert False
         row_sums = self.sample_probs.sum(axis=1, keepdims=True)
         row_sums[row_sums == 0] = 1
         self.sample_probs /= row_sums
@@ -93,38 +113,29 @@ class LTRDataset(Dataset):
         query_data = self.queries[idx]
         source_id = query_data["sourceid"]
         max_id = query_data["maxid"]
-        medium_idx = query_data["medium"]
         popularity = query_data["popularity"]
-        if self.shuffle:
-            max_num_positives = int(round(self.num_items_per_query) * 0.9)
-        else:
-            max_num_positives = self.num_items_per_query
-        positive_items = query_data["targets"][:max_num_positives]
+        positive_items = query_data["targets"][: self.max_num_positives]
         positive_y = [item[0] for item in positive_items]
         positive_r = [item[1] for item in positive_items]
         num_positives = len(positive_y)
         num_negatives_to_sample = self.num_items_per_query - num_positives
-        negative_y = []
         if num_negatives_to_sample > 0:
-            assert self.datasplit != "test"
             p = self.sample_probs[source_id, :]
-            existing_ids = set(positive_y) | self.exclude_pairs.get(source_id, set())
-            existing_ids.add(source_id)
-            while len(negative_y) < num_negatives_to_sample:
-                sample_size = (num_negatives_to_sample - len(negative_y)) * 2
-                candidates = list(np.random.choice(self.choices, size=sample_size, p=p))
-                for cid in candidates:
-                    if len(negative_y) == num_negatives_to_sample:
-                        break
-                    if cid not in existing_ids:
-                        negative_y.append(cid)
-                        existing_ids.add(cid)
+            if self.shuffle:
+                negative_y = list(
+                    np.random.choice(
+                        self.choices, size=num_negatives_to_sample, p=p, replace=False
+                    )
+                )
+            else:
+                negative_y = list(np.argpartition(p, -num_negatives_to_sample)[-num_negatives_to_sample:])
+        else:
+            negative_y = []
         y = np.array(positive_y + negative_y, dtype=np.int64)
         r = np.array(positive_r + [0.0] * num_negatives_to_sample, dtype=np.float64)
         x = np.full(self.num_items_per_query, source_id, dtype=np.int64)
         w = np.array([popularity], dtype=np.float64)
         return {
-            "medium": np.array([medium_idx]),
             "sourceid": x,
             "targetid": y,
             "relevance": r,
@@ -148,17 +159,24 @@ class LTRModel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.retrieval_embeddings = nn.ModuleDict(
-            {str(m): nn.Embedding(config["vocab_sizes"][m], 2048) for m in [0, 1]}
+        self.retrieval_embeddings = nn.Embedding(
+            config["vocab_sizes"][args.medium], 2048
         )
-        self.ranking_embeddings = nn.ModuleDict(
-            {str(m): nn.Embedding(config["vocab_sizes"][m], 2048) for m in [0, 1]}
+        self.ranking_embeddings = nn.Embedding(config["vocab_sizes"][args.medium], 2048)
+        self.item_text_embeddings = nn.Embedding(
+            config["vocab_sizes"][args.medium], 3072
         )
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
         if args.features == "all":
-            self.encoder = nn.Linear(2048 * 2, config["embed_dim"], bias=False)
+            self.encoder = nn.Linear(2048 * 2 + 3072, config["embed_dim"], bias=False)
+        elif args.features == "rettext":
+            self.encoder = nn.Linear(2048 + 3072, config["embed_dim"], bias=False)
+        elif args.features == "ranking":
+            self.encoder = nn.Linear(2048, config["embed_dim"], bias=False)
         elif args.features == "retrieval":
             self.encoder = nn.Linear(2048, config["embed_dim"], bias=False)
+        elif args.features == "text":
+            self.encoder = nn.Linear(3072, config["embed_dim"], bias=False)
         elif args.features == "id":
             self.matchedid_embedding = nn.Embedding(
                 config["vocab_sizes"][args.medium], config["embed_dim"]
@@ -166,59 +184,68 @@ class LTRModel(nn.Module):
             x = self.matchedid_embedding
             weight_tied_linear = nn.Linear(*reversed(x.weight.shape), bias=False)
             x.weight = weight_tied_linear.weight
+            return
         else:
             assert False
+        self.encoder = nn.Sequential(nn.Dropout(0.5), self.encoder)
 
     def get_temperature(self):
         return float(self.logit_scale)
 
     def load_pretrained_embeddings(self, filepath):
-        for medium in [0, 1]:
-            print(
-                f"Loading pretrained embeddings from '{filepath}' for medium {medium}"
+        vocab_size = self.config["vocab_sizes"][args.medium]
+        with h5py.File(filepath, "r") as hf:
+            self.retrieval_embeddings.weight.data.copy_(
+                torch.stack(
+                    [
+                        torch.tensor(hf[f"masked.{args.medium}.{i}"][()])
+                        for i in range(vocab_size)
+                    ]
+                )
             )
-            retrieval_emb_layer = self.retrieval_embeddings[str(medium)]
-            ranking_emb_layer = self.ranking_embeddings[str(medium)]
-            vocab_size = self.config["vocab_sizes"][medium]
-            with h5py.File(filepath, "r") as hf:
-                retrieval_weights = torch.stack(
+            self.ranking_embeddings.weight.data.copy_(
+                torch.stack(
                     [
-                        torch.tensor(hf[f"masked.{medium}.{i}"][()])
+                        torch.tensor(hf[f"causal.{args.medium}.{i}"][()])
                         for i in range(vocab_size)
                     ]
                 )
-                ranking_weights = torch.stack(
+            )
+            self.item_text_embeddings.weight.data.copy_(
+                torch.stack(
                     [
-                        torch.tensor(hf[f"causal.{medium}.{i}"][()])
+                        torch.tensor(hf[f"item_text.{args.medium}.{i}"][()])
                         for i in range(vocab_size)
                     ]
                 )
-                retrieval_emb_layer.weight.data = retrieval_weights
-                ranking_emb_layer.weight.data = ranking_weights
-            self.retrieval_embeddings[str(medium)].weight.requires_grad = False
-            self.ranking_embeddings[str(medium)].weight.requires_grad = False
+            )
+        self.retrieval_embeddings.weight.requires_grad = False
+        self.ranking_embeddings.weight.requires_grad = False
+        self.item_text_embeddings.weight.requires_grad = False
 
-    def embed(self, ids, medium_ids):
+    def embed(self, ids):
         if args.features == "all":
-            f_ret = torch.where(
-                medium_ids.unsqueeze(-1) == 0,
-                self.retrieval_embeddings["0"](ids * (medium_ids == 0)),
-                self.retrieval_embeddings["1"](ids * (medium_ids == 1)),
-            )
-            f_rnk = torch.where(
-                medium_ids.unsqueeze(-1) == 0,
-                self.ranking_embeddings["0"](ids * (medium_ids == 0)),
-                self.ranking_embeddings["1"](ids * (medium_ids == 1)),
-            )
-            encoded_features = self.encoder(torch.cat([f_ret, f_rnk], dim=-1))
+            f_ret = self.retrieval_embeddings(ids)
+            f_rnk = self.ranking_embeddings(ids)
+            f_text = self.item_text_embeddings(ids)
+            encoded_features = self.encoder(torch.cat([f_ret, f_rnk, f_text], dim=-1))
+            return F.normalize(encoded_features, dim=-1)
+        elif args.features == "rettext":
+            f_ret = self.retrieval_embeddings(ids)
+            f_text = self.item_text_embeddings(ids)
+            encoded_features = self.encoder(torch.cat([f_ret, f_text], dim=-1))
+            return F.normalize(encoded_features, dim=-1)
+        elif args.features == "ranking":
+            f_rnk = self.ranking_embeddings(ids)
+            encoded_features = self.encoder(f_rnk)
             return F.normalize(encoded_features, dim=-1)
         elif args.features == "retrieval":
-            f_ret = torch.where(
-                medium_ids.unsqueeze(-1) == 0,
-                self.retrieval_embeddings["0"](ids * (medium_ids == 0)),
-                self.retrieval_embeddings["1"](ids * (medium_ids == 1)),
-            )
+            f_ret = self.retrieval_embeddings(ids)
             encoded_features = self.encoder(f_ret)
+            return F.normalize(encoded_features, dim=-1)
+        elif args.features == "text":
+            f_text = self.item_text_embeddings(ids)
+            encoded_features = self.encoder(f_text)
             return F.normalize(encoded_features, dim=-1)
         elif args.features == "id":
             return F.normalize(self.matchedid_embedding(ids), dim=-1)
@@ -230,6 +257,14 @@ class LTRModel(nn.Module):
             x.shape[0], 1, x.shape[1]
         )
 
+    def process_batch(self, batch):
+        source_features = self.embed(batch["sourceid"])
+        target_features = self.embed(batch["targetid"])
+        x = (source_features * target_features).sum(dim=-1) * self.logit_scale.exp()
+        y = batch["relevance"]
+        w = batch["weight"]
+        return x, y, w
+
     def lambdarank_loss(self, x, y, w):
         order = torch.argsort(torch.argsort(x, descending=True)) + 1
         deltag = self.pairwise_diff(y)
@@ -240,12 +275,9 @@ class LTRModel(nn.Module):
         return (wloss.sum(dim=[1, 2]) * w).sum() / w.sum()
 
     def ndcg(self, batch):
-        source_features = self.embed(batch["sourceid"], batch["medium"])
-        target_features = self.embed(batch["targetid"], batch["medium"])
-        pred_scores = (source_features * target_features).sum(
-            dim=-1
-        ) * self.logit_scale.exp()
-        true_relevance = batch["relevance"]
+        x, y, w = self.process_batch(batch)
+        pred_scores = x
+        true_relevance = y
         ranking_indices = torch.argsort(pred_scores, dim=-1, descending=True)
         ranked_relevance = torch.gather(true_relevance, -1, ranking_indices)
         gains = ranked_relevance
@@ -258,15 +290,10 @@ class LTRModel(nn.Module):
         ideal_gains = ideal_relevance
         idcg = (ideal_gains / discounts).sum(dim=-1)
         ndcg = dcg / idcg
-        w = batch["weight"]
         return (ndcg * w).sum() / w.sum()
 
     def forward(self, batch):
-        source_features = self.embed(batch["sourceid"], batch["medium"])
-        target_features = self.embed(batch["targetid"], batch["medium"])
-        x = (source_features * target_features).sum(dim=-1) * self.logit_scale.exp()
-        y = batch["relevance"]
-        w = batch["weight"]
+        x, y, w = self.process_batch(batch)
         return self.lambdarank_loss(x, y, w)
 
 
@@ -347,27 +374,53 @@ def create_learning_rate_schedule(optimizer, tokens_per_batch, epochs):
 
 class EarlyStopper:
     def __init__(self, patience, rtol):
+        # stops if loss doesn't decrease by rtol in patience epochs
         self.patience = patience
         self.rtol = rtol
         self.counter = 0
         self.stop_score = float("inf")
-        self.early_stop = False
+        self.stop = False
         self.saved_score = float("inf")
         self.save_model = False
 
     def __call__(self, score):
+        assert not self.stop
         if score < self.stop_score * (1 - self.rtol):
             self.counter = 0
             self.stop_score = score
         else:
             self.counter += 1
             if self.counter >= self.patience:
-                self.early_stop = True
+                self.stop = True
         if score < self.saved_score:
             self.saved_score = score
             self.save_model = True
         else:
             self.save_model = False
+
+
+class LateStopper:
+    def __init__(self, patience, rtol):
+        # stops if loss has increased by rtol in the last patience epochs
+        self.patience = patience
+        self.rtol = rtol
+        self.counter = 0
+        self.score = float("inf")
+        self.stop = False
+        self.save_model = False
+
+    def __call__(self, score):
+        assert not self.stop
+        if score < self.score * (1 + self.rtol):
+            self.counter = 0
+            self.save_model = True
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.stop = True
+            self.save_model = False
+        if score < self.score:
+            self.score = score
 
 
 def get_logger(name):
@@ -383,14 +436,13 @@ def get_logger(name):
     return logger
 
 
-def checkpoint_model(model, epoch, training_loss, test_loss, oos_loss, save):
+def checkpoint_model(model, epoch, training_loss, test_loss, save):
     if save:
         checkpoint = {
             "model": model._orig_mod.state_dict(),
             "epoch": epoch,
             "training_loss": training_loss,
             "test_loss": test_loss,
-            "oos_loss": oos_loss,
         }
         torch.save(
             checkpoint,
@@ -400,13 +452,12 @@ def checkpoint_model(model, epoch, training_loss, test_loss, oos_loss, save):
     create_csv = epoch < 0
     if create_csv:
         with open(csv_fn, "w") as f:
-            f.write(",".join(["epoch", "training_loss", "test_loss", "oos_loss", "saved"]) + "\n")
+            f.write(",".join(["epoch", "training_loss", "test_loss", "saved"]) + "\n")
     with open(csv_fn, "a") as f:
         vals = [
             epoch,
             training_loss,
             test_loss,
-            oos_loss,
             1 if save else 0,
         ]
         f.write(",".join([str(x) for x in vals]) + "\n")
@@ -419,7 +470,7 @@ def training_config():
     }
     config = {
         "vocab_sizes": vocab_sizes,
-        "embed_dim": 128,
+        "embed_dim": 1024,
         "learning_rate": 3e-4,
         "batch_size": 32,
         "items_per_query": 2048,
@@ -432,6 +483,15 @@ def train():
     logger = get_logger("clip")
     logger.setLevel(logging.DEBUG)
     config = training_config()
+    global training_implicit_negatives
+    rng = np.random.default_rng(seed=42)
+    training_implicit_negatives = (
+        rng.random(
+            (config["vocab_sizes"][args.medium], config["vocab_sizes"][args.medium]),
+            dtype=np.float32,
+        )
+        < 0.9
+    )
     num_epochs = 1024
     model = LTRModel(config)
     model.load_pretrained_embeddings(f"{args.datadir}/input.h5")
@@ -451,7 +511,7 @@ def train():
             num_workers=8,
             worker_init_fn=worker_init_fn,
         )
-        for x in ["training", "validation", "test"]
+        for x in ["training", "test"]
     }
     optimizer = create_optimizer(model, config)
     scheduler = create_learning_rate_schedule(
@@ -460,19 +520,21 @@ def train():
         num_epochs,
     )
     scaler = torch.amp.GradScaler(args.device)
-    stopper = EarlyStopper(patience=5, rtol=0.001)
+    early_stopper = EarlyStopper(patience=5, rtol=0.001)
+    late_stopper = LateStopper(patience=32, rtol=0.01)
     get_loss = lambda x, y: evaluate_metrics(x, dataloaders[y])
-    initial_loss = get_loss(model, "training")
-    logger.info(f"Initial Loss: {initial_loss}")
-    stopper(initial_loss)
-    checkpoint_model(model, -1, np.nan, initial_loss, np.nan, True)
+    training_loss = get_loss(model, "training")
+    logger.info(f"Epoch: -1, Training Loss: {training_loss}")
+    test_loss = get_loss(model, "test")
+    logger.info(f"Epoch: -1, Test Loss: {test_loss}")
+    early_stopper(training_loss)
+    late_stopper(test_loss)
+    checkpoint_model(model, -1, training_loss, test_loss, True)
+    best_losses = (training_loss, test_loss)
     for epoch in range(num_epochs):
-        training_loss = train_epoch(
-            model, dataloaders["training"], optimizer, scheduler, scaler
-        )
-        logger.info(f"Epoch: {epoch}, Training Loss: {training_loss}")
+        train_epoch(model, dataloaders["training"], optimizer, scheduler, scaler)
         generate_embeddings(model)
-        for x in ["training", "validation"]:
+        for x in ["training", "test"]:
             dataloaders[x] = DataLoader(
                 LTRDataset(datasplit=x, config=config, logger=logger),
                 batch_size=config["batch_size"],
@@ -481,15 +543,20 @@ def train():
                 num_workers=8,
                 worker_init_fn=worker_init_fn,
             )
-        test_loss = get_loss(model, "validation")
+        training_loss = get_loss(model, "training")
+        logger.info(f"Epoch: {epoch}, Training Loss: {training_loss}")
+        test_loss = get_loss(model, "test")
         logger.info(f"Epoch: {epoch}, Test Loss: {test_loss}")
-        oos_loss = get_loss(model, "test")
-        logger.info(f"Epoch: {epoch}, OOS Loss: {oos_loss}")
-        stopper(test_loss)
-        checkpoint_model(model, epoch, training_loss, test_loss, oos_loss, stopper.save_model)
-        if stopper.early_stop:
+        early_stopper(training_loss)
+        late_stopper(test_loss)
+        save_model = early_stopper.save_model and late_stopper.save_model
+        if save_model:
+            best_losses = (training_loss, test_loss)
+        checkpoint_model(model, epoch, training_loss, test_loss, save_model)
+        if early_stopper.stop or late_stopper.stop:
             break
-    logger.info(f"Best loss: {stopper.saved_score}")
+    checkpoint_model(model, epoch, training_loss, test_loss, True)
+    logger.info(f"Best losses: {best_losses}")
 
 
 def load_model():
@@ -514,12 +581,10 @@ def generate_embeddings(model):
     batch_size = config["batch_size"]
     final_embeddings = np.zeros((num_items, config["embed_dim"]), dtype=np.float32)
     all_item_ids = torch.arange(num_items, device=device).unsqueeze(-1)
-    all_medium_ids = torch.full((num_items, 1), args.medium, device=device)
     for i in range(0, num_items, batch_size):
         with torch.no_grad():
             batch_ids = all_item_ids[i : i + batch_size, :]
-            medium_ids = all_medium_ids[i : i + batch_size, :]
-            embs = model.embed(batch_ids, medium_ids)
+            embs = model.embed(batch_ids)
             final_embeddings[i : i + batch_size, :] = embs.squeeze(dim=1).cpu().numpy()
     with h5py.File(output_path, "w") as hf:
         for i in range(num_items):
@@ -534,7 +599,11 @@ parser.add_argument("--device", type=int)
 parser.add_argument("--medium", type=int)
 parser.add_argument("--features", type=str)
 args = parser.parse_args()
+training_implicit_negatives = None
 
 if __name__ == "__main__":
+    print(
+        f"[ITEM SIMILARITY] training medium {args.medium} with features {args.features}"
+    )
     train()
     generate_embeddings(load_model())

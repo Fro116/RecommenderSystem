@@ -32,6 +32,7 @@ function download_data(datetag::AbstractString)
         ["$(s)_$(m).csv" for s in SOURCES for m in MEDIUMS],
         ["$(s)_media_relations.csv" for s in SOURCES],
         ["images.csv"],
+        ["item_text_embeddings.$m.json" for m in [0, 1]],
     )
     for fn in files
         cmd = "$retrieval/$fn $datadir/$fn"
@@ -209,7 +210,11 @@ function import_data(datetag::AbstractString)
     CSV.write("$datadir/media_relations.csv", get_relations())
     gen_splits()
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}"
-    files = vcat(["$m.csv" for m in MEDIUMS], ["list_tag", "images.csv", "media_relations.csv"])
+    files = vcat(
+        ["$m.csv" for m in MEDIUMS],
+        ["list_tag", "images.csv", "media_relations.csv"],
+        ["item_text_embeddings.$m.json" for m in [0, 1]],
+    )
     for f in files
         cmd = replace(
             save_template,

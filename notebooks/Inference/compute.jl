@@ -602,6 +602,7 @@ function compile_source(port::Integer, compile_source::AbstractString)
 end
 
 function compile(port::Integer)
+    logtag("STARTUP", "connecting to models")
     while true
         if !update_routing_table()
             logtag("STARTUP", "waiting for models to startup")
@@ -610,6 +611,7 @@ function compile(port::Integer)
             break
         end
     end
+    logtag("STARTUP", "/bluegreen")
     r = HTTP.get("http://localhost:$PORT/bluegreen", status_exception = false)
     if HTTP.iserror(r)
         logerror("bluegreen error $(r.status)")

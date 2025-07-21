@@ -216,6 +216,7 @@ function upload_images(to_add, to_delete)
 end
 
 function encode_images()
+    logtag("IMAGES", "importing data")
     rm(datadir, recursive = true, force = true)
     mkpath(datadir)
     import_data()

@@ -23,7 +23,7 @@ end
 function import_list(datetag::AbstractString, name::AbstractString)
     cmds = [
         "cd $datadir",
-        "rclone -Pv --retries=10 copyto r2:rsys/database/lists/$datetag/$name.zstd $name.zstd",
+        "rclone --retries=10 copyto r2:rsys/database/lists/$datetag/$name.zstd $name.zstd",
         "unzstd $name.zstd",
         "rm $name.zstd",
     ]
@@ -135,14 +135,14 @@ function upload_histories(datetag::AbstractString)
         "cat $datadir/new_histories.header $datadir/new_histories.*.csv > $datadir/new_histories.csv",
         "zstd $datadir/new_histories.csv -o $datadir/new_histories.csv.zstd",
         "rm $datadir/new_histories.*.csv",
-        "rclone -Pv --retries=10 copyto $datadir/new_histories.csv.zstd r2:rsys/database/lists/$datetag/histories.csv.zstd",
+        "rclone --retries=10 copyto $datadir/new_histories.csv.zstd r2:rsys/database/lists/$datetag/histories.csv.zstd",
     ]
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)
 end
 
 function save_histories(startdate::AbstractString, enddate::AbstractString)
-    logtag("HISTORIES", "saving histories from $startdate to $enddate")
+    logtag("SAVE_HISTORIES", "saving histories from $startdate to $enddate")
     rm(datadir, recursive = true, force = true)
     mkpath(datadir)
     list_tags = sort(get_directories("lists"))
