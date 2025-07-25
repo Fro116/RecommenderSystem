@@ -124,7 +124,7 @@ function get_ranking_metrics()
     ret = Dict()
     for medium in [0, 1]
         d = JLD2.load("$datadir/clip.jld2")
-        df = reduce(vcat, [CSV.read("$datadir/clip/$x.similarpairs.csv", DataFrames.DataFrame) for x in ["training", "test"]])
+        df = CSV.read("$datadir/clip/all.similarpairs.csv", DataFrames.DataFrame)
         df = filter(x -> x.cliptype == "medium$medium" && x.score != 0, df)
         df = DataFrames.DataFrame(
             source = df.source_matchedid .+ 1,

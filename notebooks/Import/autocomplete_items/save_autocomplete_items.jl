@@ -248,15 +248,7 @@ function save_autcompletes()
     CSV.write("$datadir/item_autocomplete.csv", df, quotestrings=true)
 end
 
-function upload_autocompletes()
-    logtag("SAVE_AUTOCOMPLETE_ITEMS", "uploading autocompletes")
-    qrun(`./save_autocomplete.sh`)
-end
-
-function upload_autocompletes()
-    download_data()
-    save_autcompletes()
-    upload_autocompletes()
-end
-
-upload_autocompletes()
+download_data()
+save_autcompletes()
+logtag("SAVE_AUTOCOMPLETE_ITEMS", "uploading autocompletes")
+qrun(`./autocomplete.sh`)

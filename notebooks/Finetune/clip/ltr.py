@@ -16,12 +16,15 @@ from tqdm import tqdm
 class LTRDataset(Dataset):
     def __init__(self, datasplit, config, logger):
         super().__init__()
+        if args.prod and datasplit == "test":
+            self.queries = []
+            return
         logger.info(f"loading {datasplit} dataset")
         self.datasplit = datasplit
         self.config = config
         self.num_items_per_query = self.config["items_per_query"]
         if self.datasplit == "training":
-            self.shuffle = True
+            self.shuffle = False # TODO delete shuffle=True code
             self.max_num_positives = int(round(self.num_items_per_query) * 0.9)
         else:
             self.shuffle = False
@@ -30,7 +33,8 @@ class LTRDataset(Dataset):
         self.load_hard_negatives()
 
     def load_queries(self):
-        df = pd.read_csv(f"{args.datadir}/{self.datasplit}.similarpairs.csv")
+        fn = "all" if args.prod else self.datasplit
+        df = pd.read_csv(f"{args.datadir}/{fn}.similarpairs.csv")
         df = df.query(f"cliptype == 'medium{args.medium}'").copy()
         df["target_tuple"] = list(zip(df["target_matchedid"], df["score"]))
         grouped = df.groupby(["cliptype", "source_matchedid", "source_popularity"])[
@@ -95,12 +99,6 @@ class LTRDataset(Dataset):
             k = x["sourceid"]
             for v, _ in x["targets"][: self.max_num_positives]:
                 self.sample_probs[k, v] = 0
-        if self.datasplit == "training":
-            self.sample_probs *= training_implicit_negatives
-        elif self.datasplit == "test":
-            self.sample_probs *= ~training_implicit_negatives
-        else:
-            assert False
         row_sums = self.sample_probs.sum(axis=1, keepdims=True)
         row_sums[row_sums == 0] = 1
         self.sample_probs /= row_sums
@@ -128,7 +126,11 @@ class LTRDataset(Dataset):
                     )
                 )
             else:
-                negative_y = list(np.argpartition(p, -num_negatives_to_sample)[-num_negatives_to_sample:])
+                negative_y = list(
+                    np.argpartition(p, -num_negatives_to_sample)[
+                        -num_negatives_to_sample:
+                    ]
+                )
         else:
             negative_y = []
         y = np.array(positive_y + negative_y, dtype=np.int64)
@@ -167,17 +169,14 @@ class LTRModel(nn.Module):
             config["vocab_sizes"][args.medium], 3072
         )
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
-        if args.features == "all":
-            self.encoder = nn.Linear(2048 * 2 + 3072, config["embed_dim"], bias=False)
-        elif args.features == "rettext":
-            self.encoder = nn.Linear(2048 + 3072, config["embed_dim"], bias=False)
-        elif args.features == "ranking":
-            self.encoder = nn.Linear(2048, config["embed_dim"], bias=False)
+        if args.features == "rettext":
+            encoder = nn.Linear(2048 + 3072, config["embed_dim"], bias=False)
         elif args.features == "retrieval":
-            self.encoder = nn.Linear(2048, config["embed_dim"], bias=False)
+            encoder = nn.Linear(2048, config["embed_dim"], bias=False)
         elif args.features == "text":
-            self.encoder = nn.Linear(3072, config["embed_dim"], bias=False)
+            encoder = nn.Linear(3072, config["embed_dim"], bias=False)
         elif args.features == "id":
+            # TODO delete
             self.matchedid_embedding = nn.Embedding(
                 config["vocab_sizes"][args.medium], config["embed_dim"]
             )
@@ -187,7 +186,8 @@ class LTRModel(nn.Module):
             return
         else:
             assert False
-        self.encoder = nn.Sequential(nn.Dropout(0.5), self.encoder)
+        if args.features != "id":
+            self.encoder = nn.Sequential(nn.Dropout(0.1), encoder)
 
     def get_temperature(self):
         return float(self.logit_scale)
@@ -224,20 +224,10 @@ class LTRModel(nn.Module):
         self.item_text_embeddings.weight.requires_grad = False
 
     def embed(self, ids):
-        if args.features == "all":
-            f_ret = self.retrieval_embeddings(ids)
-            f_rnk = self.ranking_embeddings(ids)
-            f_text = self.item_text_embeddings(ids)
-            encoded_features = self.encoder(torch.cat([f_ret, f_rnk, f_text], dim=-1))
-            return F.normalize(encoded_features, dim=-1)
-        elif args.features == "rettext":
+        if args.features == "rettext":
             f_ret = self.retrieval_embeddings(ids)
             f_text = self.item_text_embeddings(ids)
             encoded_features = self.encoder(torch.cat([f_ret, f_text], dim=-1))
-            return F.normalize(encoded_features, dim=-1)
-        elif args.features == "ranking":
-            f_rnk = self.ranking_embeddings(ids)
-            encoded_features = self.encoder(f_rnk)
             return F.normalize(encoded_features, dim=-1)
         elif args.features == "retrieval":
             f_ret = self.retrieval_embeddings(ids)
@@ -300,7 +290,7 @@ class LTRModel(nn.Module):
 def evaluate_metrics(model, dataloader):
     losses = 0.0
     weights = 0.0
-    progress = tqdm(desc="Test batches", mininterval=1)
+    progress = tqdm(desc="Eval batches", mininterval=1)
     model.eval()
     for data in dataloader:
         with torch.no_grad():
@@ -313,7 +303,7 @@ def evaluate_metrics(model, dataloader):
         progress.update()
     progress.close()
     model.train()
-    return 1.0 - (losses / weights)
+    return 1.0 - (losses / weights) if weights != 0 else float('nan')
 
 
 def train_epoch(
@@ -399,30 +389,6 @@ class EarlyStopper:
             self.save_model = False
 
 
-class LateStopper:
-    def __init__(self, patience, rtol):
-        # stops if loss has increased by rtol in the last patience epochs
-        self.patience = patience
-        self.rtol = rtol
-        self.counter = 0
-        self.score = float("inf")
-        self.stop = False
-        self.save_model = False
-
-    def __call__(self, score):
-        assert not self.stop
-        if score < self.score * (1 + self.rtol):
-            self.counter = 0
-            self.save_model = True
-        else:
-            self.counter += 1
-            if self.counter >= self.patience:
-                self.stop = True
-            self.save_model = False
-        if score < self.score:
-            self.score = score
-
-
 def get_logger(name):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
@@ -472,7 +438,7 @@ def training_config():
         "vocab_sizes": vocab_sizes,
         "embed_dim": 1024,
         "learning_rate": 3e-4,
-        "batch_size": 32,
+        "batch_size": 128,
         "items_per_query": 2048,
     }
     return config
@@ -483,15 +449,7 @@ def train():
     logger = get_logger("clip")
     logger.setLevel(logging.DEBUG)
     config = training_config()
-    global training_implicit_negatives
     rng = np.random.default_rng(seed=42)
-    training_implicit_negatives = (
-        rng.random(
-            (config["vocab_sizes"][args.medium], config["vocab_sizes"][args.medium]),
-            dtype=np.float32,
-        )
-        < 0.9
-    )
     num_epochs = 1024
     model = LTRModel(config)
     model.load_pretrained_embeddings(f"{args.datadir}/input.h5")
@@ -521,14 +479,12 @@ def train():
     )
     scaler = torch.amp.GradScaler(args.device)
     early_stopper = EarlyStopper(patience=5, rtol=0.001)
-    late_stopper = LateStopper(patience=32, rtol=0.01)
     get_loss = lambda x, y: evaluate_metrics(x, dataloaders[y])
     training_loss = get_loss(model, "training")
     logger.info(f"Epoch: -1, Training Loss: {training_loss}")
     test_loss = get_loss(model, "test")
     logger.info(f"Epoch: -1, Test Loss: {test_loss}")
     early_stopper(training_loss)
-    late_stopper(test_loss)
     checkpoint_model(model, -1, training_loss, test_loss, True)
     best_losses = (training_loss, test_loss)
     for epoch in range(num_epochs):
@@ -548,14 +504,13 @@ def train():
         test_loss = get_loss(model, "test")
         logger.info(f"Epoch: {epoch}, Test Loss: {test_loss}")
         early_stopper(training_loss)
-        late_stopper(test_loss)
-        save_model = early_stopper.save_model and late_stopper.save_model
-        if save_model:
+        if early_stopper.save_model:
             best_losses = (training_loss, test_loss)
-        checkpoint_model(model, epoch, training_loss, test_loss, save_model)
-        if early_stopper.stop or late_stopper.stop:
+        checkpoint_model(
+            model, epoch, training_loss, test_loss, early_stopper.save_model
+        )
+        if early_stopper.stop:
             break
-    checkpoint_model(model, epoch, training_loss, test_loss, True)
     logger.info(f"Best losses: {best_losses}")
 
 
@@ -598,8 +553,8 @@ parser.add_argument("--datadir", type=str)
 parser.add_argument("--device", type=int)
 parser.add_argument("--medium", type=int)
 parser.add_argument("--features", type=str)
+parser.add_argument('--prod', action='store_true')
 args = parser.parse_args()
-training_implicit_negatives = None
 
 if __name__ == "__main__":
     print(

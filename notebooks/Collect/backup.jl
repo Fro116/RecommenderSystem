@@ -15,7 +15,7 @@ function archive(date)
     mkpath(datadir)
     bucket = read("../../secrets/gcp.bucket.backup.txt", String)
     download_cmd = "rclone --retries=10 copyto r2:rsys/database/collect/$date $datadir/$date"
-    if Dates.Day(dateobj) > 7
+    if Dates.day(dateobj) > 7
         # archive images once a month and everything else once a week
         download_cmd *= " --exclude images.tar"
     end

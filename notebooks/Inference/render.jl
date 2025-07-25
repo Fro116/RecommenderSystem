@@ -224,8 +224,7 @@ function retrieval(state)
         )[1:num_items(m)]
         # TODO incorporate other retrieval sources like ptw items or sequels
     end
-    # skip the default id for longtail items
-    p[1] = -Inf
+    p[1] = -Inf # skip the default id for longtail items
     for u in state["users"]
         statuses = Dict(0 => Dict(), 1 => Dict())
         for x in u["user"]["items"]
@@ -290,6 +289,12 @@ function retrieval(state)
             if v[i] != 0
                 p[i] = -Inf
             end
+        end
+    end
+    for a in state["items"]
+        if m == a["medium"]
+            # skip selected items
+            p[a["matchedid"]+1] = -Inf
         end
     end
     info = get_media_info(m)

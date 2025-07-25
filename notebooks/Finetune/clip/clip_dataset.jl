@@ -1,3 +1,4 @@
+import CodecZstd
 import CSV
 import DataFrames
 import HypothesisTests: BinomialTest, confint
@@ -32,7 +33,7 @@ end
 
 function download_media()
     rm("$datadir", recursive = true, force = true)
-    sources = ["mal", "anilist", "kitsu", "animeplanet"]
+    sources = ["mal", "anilist", "kitsu", "animeplanet", "external"]
     for s in sources
         download_media(s)
     end
@@ -75,7 +76,8 @@ function make_symmetric(df)
 end
 
 function smoothed_wilson_score(k, n, w)
-    n = Int(round(max(k, n) + w * 0.01))
+    k = min(n, k)
+    n = n + Int(round(max((w - 2 * n), 0) * 0.05))
     interval = confint(BinomialTest(k, n), level = 1 - 0.05, method = :wald, tail = :both)
     lower_bound = interval[1]
     max(lower_bound, eps(Float32))
@@ -120,22 +122,55 @@ function aggragate_by_matchedid(df, medium)
     counts = get_counts(medium)
     source_counts = DataFrames.rename(counts, :count => :source_popularity)
     df = DataFrames.innerjoin(df, source_counts, on = :source_matchedid => :matchedid)
+    target_counts = DataFrames.rename(counts, :count => :target_popularity)
+    df = DataFrames.innerjoin(df, target_counts, on = :target_matchedid => :matchedid)
     W = JLD2.load("$datadir/../watches.$medium.jld2")["$medium.watches"]
     W += W'
     df[:, :watches] .= 0
     for i = 1:DataFrames.nrow(df)
         df.watches[i] = W[df.source_matchedid[i]+1, df.target_matchedid[i]+1]
     end
-    df[:, :score] = smoothed_wilson_score.(df.count, df.watches, df.source_popularity)
+    df[:, :score] = smoothed_wilson_score.(df.count, df.watches, df.source_popularity + df.target_popularity)
     df
 end
 
+function get_external(key::String)
+    function unquote(x)
+        if x[1] == '"' && x[end] == '"'
+            return x[2:end-1]
+        end
+        x
+    end
+    # file contains fields that are too big for the CSV.jl parser
+    lines = readlines("$datadir/external/external_dependencies.csv")
+    headers = split(lines[1], ",")
+    key_col = findfirst(==("key"), headers)
+    value_col = findfirst(==("value"), headers)
+    for line in lines
+        fields = unquote.(split(line, ","))
+        if fields[key_col] == key
+            value = fields[value_col]
+            bytes = hex2bytes(value[3:end])
+            return String(CodecZstd.transcode(CodecZstd.ZstdDecompressor, bytes))
+        end
+    end
+    @assert false
+end
+
 function get_similar_pairs(source::AbstractString, medium::Int)
-    # TODO weight sources
     mal_weight = 1
     anilist_weight = 1
     animeplanet_weight = 1
-    df = CSV.read("$datadir/$source/$(source)_media.csv", DataFrames.DataFrame, ntasks = 1)
+    if source == "external"
+        df =
+            CSV.read(IOBuffer(get_external("item_similarity_manual")), DataFrames.DataFrame)
+    else
+        df = CSV.read(
+            "$datadir/$source/$(source)_media.csv",
+            DataFrames.DataFrame,
+            ntasks = 1,
+        )
+    end
     records = []
     for i = 1:DataFrames.nrow(df)
         if source == "mal"
@@ -158,7 +193,6 @@ function get_similar_pairs(source::AbstractString, medium::Int)
                 )
             end
         elseif source == "anilist"
-            counts = Dict()
             m = Dict(0 => "MANGA", 1 => "ANIME")[medium]
             if ismissing(df.recommendationspeek[i])
                 continue
@@ -169,22 +203,17 @@ function get_similar_pairs(source::AbstractString, medium::Int)
                     continue
                 end
                 @assert df.medium[i] == lowercase(rec["medium"])
-                for _ = 1:rec["rating"]
-                    k = (string(df.itemid[i]), string(rec.itemid))
-                    counts[k] = get(counts, k, 0) + 1
-                    imputed_username = "@anilist.$(minimum(k)).$(maximum(k)).$(counts[k])"
-                    push!(
-                        records,
-                        (
-                            source,
-                            medium,
-                            imputed_username,
-                            string(df.itemid[i]),
-                            string(rec.itemid),
-                            anilist_weight,
-                        ),
-                    )
-                end
+                push!(
+                    records,
+                    (
+                        source,
+                        medium,
+                        "",
+                        string(df.itemid[i]),
+                        string(rec.itemid),
+                        rec["rating"] * anilist_weight,
+                    ),
+                )
             end
         elseif source == "kitsu"
         elseif source == "animeplanet"
@@ -206,6 +235,22 @@ function get_similar_pairs(source::AbstractString, medium::Int)
                     ),
                 )
             end
+        elseif source == "external"
+            if df.medium[i] != medium
+                continue
+            end
+            @assert df.source1[i] == df.source2[i]
+            push!(
+                records,
+                (
+                    df.source1[i],
+                    medium,
+                    "",
+                    string(df.itemid1[i]),
+                    string(df.itemid2[i]),
+                    df.count[i],
+                ),
+            )
         else
             @assert false
         end
@@ -222,18 +267,6 @@ function get_similar_pairs(source::AbstractString, medium::Int)
     ret
 end
 
-function random_sample_excluded(n::Int, k::Int, exclude::Set{Int})
-    @assert k <= n - length(exclude)
-    result_set = Set{Int}()
-    while length(result_set) < k
-        candidate = rand(0:n-1)
-        if candidate ∉ exclude && candidate ∉ result_set
-            push!(result_set, candidate)
-        end
-    end
-    collect(result_set)
-end
-
 function get_datasplits(df, test_frac::Float64)
     ids = Set()
     for x in eachrow(df)
@@ -241,28 +274,29 @@ function get_datasplits(df, test_frac::Float64)
         push!(ids, x.target_matchedid)
     end
     test_ids = Set([x for x in ids if rand() < test_frac])
-    test_mask =
-        [x.source_matchedid in test_ids || x.target_matchedid in test_ids for x in eachrow(df)]
+    test_mask = [x.source_matchedid in test_ids for x in eachrow(df)]
+    training_mask = [x.source_matchedid ∉ test_ids && x.target_matchedid ∉ test_ids for x in eachrow(df)]
     test = df[test_mask, :]
-    training = df[.!test_mask, :]
+    training = df[training_mask, :]
     training, test
 end
 
 function save_similar_pairs(test_frac::Float64)
-    sources = ["mal", "anilist", "kitsu", "animeplanet"]
+    sources = ["mal", "anilist", "kitsu", "animeplanet", "external"]
+    all_dfs = []
     training_dfs = []
     test_dfs = []
     for medium in [0, 1]
         sdf = reduce(vcat, [get_similar_pairs(s, medium) for s in sources])
-        training, test =
-            get_datasplits(aggragate_by_matchedid(sdf, medium), test_frac)
+        all = aggragate_by_matchedid(sdf, medium)
+        training, test = get_datasplits(all, test_frac)
+        push!(all_dfs, all)
         push!(training_dfs, training)
         push!(test_dfs, test)
     end
-    training_df = reduce(vcat, training_dfs)
-    test_df = reduce(vcat, test_dfs)
-    CSV.write("$datadir/training.similarpairs.csv", training_df)
-    CSV.write("$datadir/test.similarpairs.csv", test_df)
+    CSV.write("$datadir/all.similarpairs.csv", reduce(vcat, all_dfs))
+    CSV.write("$datadir/training.similarpairs.csv", reduce(vcat, training_dfs))
+    CSV.write("$datadir/test.similarpairs.csv", reduce(vcat, test_dfs))
 end
 
 function get_adaptations(medium::Int)
@@ -309,5 +343,5 @@ end
 
 logtag("ITEM_SIMILARITY", "downloading datasets")
 download_media()
-save_similar_pairs(0.01)
+save_similar_pairs(0.1)
 save_adaptations(0.01)
