@@ -6,7 +6,7 @@ header {
   background: #f7f7f7;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
   color: #333;
-  border-bottom: 1px solid #F48FB1;
+  border-bottom: 1px solid #f48fb1;
 }
 
 header.header--toggle {
@@ -30,7 +30,9 @@ header input {
   border-radius: 8px;
   background-color: #fff;
   color: #333;
-  transition: border 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 header input.searched:hover,
@@ -42,7 +44,7 @@ header input.searched:focus {
 header input:focus,
 header input:hover {
   outline: none;
-  border-color: #FB8C00;
+  border-color: #fb8c00;
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
@@ -89,29 +91,28 @@ header input:hover {
 
 .autocomplete-unmatch {
   font-weight: bold;
-  color: #FB8C00;
+  color: #fb8c00;
 }
 
- .autocomplete-avatar-user {
-	width: 48px;
-	height: 48px;
-	object-fit: cover;
-	margin-right: 16px;
-	flex-shrink: 0;
- }
- 
- .autocomplete-avatar-item {
-	height: 72px;
-	width: 50px;
-	object-fit: cover;
-	border-radius: 4px;
- 	margin-right: 16px;
- 	flex-shrink: 0;
- 	background-color: #f0f0f0;
- 	image-rendering: -webkit-optimize-contrast;
- 	image-rendering: high-quality;
- }
+.autocomplete-avatar-user {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  margin-right: 16px;
+  flex-shrink: 0;
+}
 
+.autocomplete-avatar-item {
+  height: 72px;
+  width: 50px;
+  object-fit: cover;
+  border-radius: 4px;
+  margin-right: 16px;
+  flex-shrink: 0;
+  background-color: #f0f0f0;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: high-quality;
+}
 
 /* STYLES for Autocomplete Item Text */
 .autocomplete-item-text-wrapper {
@@ -161,13 +162,16 @@ header input:hover {
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background-color 0.15s ease;
   overflow: hidden;
   position: relative;
 }
 
 .query-mode-button:hover {
-  border-color: #FB8C00;
+  border-color: #fb8c00;
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
@@ -221,7 +225,7 @@ header input:hover {
   background-color: #e0e0e0;
   border: 1px solid #ccc;
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   list-style: none;
   margin: 0;
   padding: 0;
@@ -247,9 +251,9 @@ header input:hover {
 }
 
 .query-mode-item.active .query-mode-description {
-  background-color: #F48FB1;
+  background-color: #f48fb1;
   color: #fff;
-  border-left-color: #F48FB1;
+  border-left-color: #f48fb1;
 }
 
 .query-mode-title {
@@ -292,7 +296,7 @@ header input:hover {
   header input {
     width: 100%;
   }
-  
+
   .query-mode-button-title {
     flex-basis: 30%;
   }
@@ -304,7 +308,7 @@ header input:hover {
   .query-mode-list .query-mode-title {
     flex-basis: 30%;
   }
-  
+
   .autocomplete-container {
     max-height: 45dvh;
   }

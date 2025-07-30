@@ -1,5 +1,8 @@
 /* HomePage specific styles */
-.container.homepage { height: calc(var(--vh, 1vh) * 100); overflow-y: auto; }
+.container.homepage {
+  height: calc(var(--vh, 1vh) * 100);
+  overflow-y: auto;
+}
 
 .source-selection-container {
   margin-top: 20px;
@@ -47,22 +50,24 @@
   border-radius: 9999px;
   background-color: #e0e0e0;
   color: #333333;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .source-button:hover {
-  border-color: #FB8C00;
+  border-color: #fb8c00;
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
 .source-button.selected {
-  background-color: #F48FB1;
+  background-color: #f48fb1;
   color: #fff;
   border-color: #ccc;
 }
 
 .source-button.selected:hover {
-  border-color: #FB8C00;
+  border-color: #fb8c00;
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
@@ -73,7 +78,7 @@
   left: 0;
   width: 100%;
   background-color: #f0f0f0;
-  border-top: 1px solid #F48FB1;
+  border-top: 1px solid #f48fb1;
   padding: 12px 20px;
   z-index: 10;
 }

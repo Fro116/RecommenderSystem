@@ -1,5 +1,7 @@
 /* ViewPage.css */
-header.header--toggle { padding: 10px 20px 0; }
+header.header--toggle {
+  padding: 10px 20px 0;
+}
 .header-toggle {
   display: flex;
   width: 100%;
@@ -29,7 +31,7 @@ header.header--toggle { padding: 10px 20px 0; }
 }
 
 .recsmoe-brand-link:hover {
-  color: #FB8C00;
+  color: #fb8c00;
   text-decoration: underline;
 }
 
@@ -41,7 +43,7 @@ header.header--toggle { padding: 10px 20px 0; }
 }
 
 .profile-link:hover {
-  color: #FB8C00;
+  color: #fb8c00;
   text-decoration: underline;
 }
 
@@ -62,13 +64,15 @@ header.header--toggle { padding: 10px 20px 0; }
   border: 1px solid #ccc;
   height: 36px;
   box-sizing: border-box;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
   overflow: hidden; /* Clip the slider to the bounds */
   cursor: pointer;
 }
 
 .media-toggle:hover {
-  border-color: #FB8C00;
+  border-color: #fb8c00;
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
@@ -95,10 +99,10 @@ header.header--toggle { padding: 10px 20px 0; }
   top: 2px;
   bottom: 2px;
   width: calc(50% - 2px);
-  background-color: #F48FB1;
+  background-color: #f48fb1;
   border-radius: 16px;
   transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   z-index: 1; /* Ensure slider is below text */
 }
 
@@ -122,18 +126,20 @@ header.header--toggle { padding: 10px 20px 0; }
   border: 1px solid #ccc;
   height: 36px;
   box-sizing: border-box;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
   overflow: hidden;
   cursor: pointer;
 }
 
 .view-type-toggle:hover {
-  border-color: #FB8C00;
+  border-color: #fb8c00;
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
 .view-type-toggle .toggle-slider {
-  background-color: #90CAF9; /* A different color for this toggle */
+  background-color: #90caf9; /* A different color for this toggle */
 }
 .view-type-toggle .toggle-slider.grid {
   transform: translateX(0);
@@ -166,12 +172,14 @@ header.header--toggle { padding: 10px 20px 0; }
   border: 2px solid #ccc;
   border-radius: 12px;
   overflow: hidden;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
   cursor: pointer;
 }
 
 .card:hover {
-  border-color: #FB8C00;
+  border-color: #fb8c00;
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
@@ -197,7 +205,7 @@ header.header--toggle { padding: 10px 20px 0; }
   overflow: hidden;
 }
 
-.card-back { 
+.card-back {
   transform: rotateY(180deg);
   padding: 0;
   color: #ffffff;
@@ -221,13 +229,13 @@ header.header--toggle { padding: 10px 20px 0; }
   z-index: 2;
   height: 100%;
   display: flex;
-  flex-direction: column; 
+  flex-direction: column;
   color: #ffffff;
   padding: 0;
   background: rgba(0, 0, 0, 0.6);
   border-radius: 12px;
   overflow: hidden;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 .card-back-body {
@@ -250,7 +258,7 @@ header.header--toggle { padding: 10px 20px 0; }
 }
 
 .card-back-header:hover .card-back-title {
-  color: #FB8C00;
+  color: #fb8c00;
 }
 
 .card-back-title {
@@ -297,7 +305,7 @@ header.header--toggle { padding: 10px 20px 0; }
   padding: 4px 0;
   vertical-align: top;
   font-size: 15px;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.7);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
 }
 .card-details td:first-child {
   font-weight: bold;
@@ -334,7 +342,7 @@ header.header--toggle { padding: 10px 20px 0; }
   font-size: 0.9rem;
   color: #fff;
   transition: background-color 0.15s ease;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 .card-back-cta {
@@ -364,7 +372,8 @@ header.header--toggle { padding: 10px 20px 0; }
   display: none;
 }
 
-.list-view-header, .list-item {
+.list-view-header,
+.list-item {
   display: flex;
   align-items: center;
   padding: 0 10px;
@@ -380,18 +389,21 @@ header.header--toggle { padding: 10px 20px 0; }
   background: #fff;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
   min-height: 90px;
   cursor: pointer;
 }
 
 .list-item:hover {
-  border-color: #FB8C00;
+  border-color: #fb8c00;
   box-shadow: 0 4px 8px rgba(251, 140, 0, 0.1);
 }
 
-.header-cell, .item-cell {
+.header-cell,
+.item-cell {
   padding: 4px 5px;
   display: flex;
   align-items: center;
@@ -414,10 +426,23 @@ header.header--toggle { padding: 10px 20px 0; }
   height: 90px; /* Set fixed height to reserve space only on item rows */
 }
 
-.title-cell { flex: 1 1 30%; min-width: 200px; }
-.detail-cell { flex: 0 1 110px; justify-content: center; }
-.type-cell { flex-basis: 90px; }
-.tags-cell { flex: 1 1 25%; justify-content: center; white-space: normal; text-align: center; }
+.title-cell {
+  flex: 1 1 30%;
+  min-width: 200px;
+}
+.detail-cell {
+  flex: 0 1 110px;
+  justify-content: center;
+}
+.type-cell {
+  flex-basis: 90px;
+}
+.tags-cell {
+  flex: 1 1 25%;
+  justify-content: center;
+  white-space: normal;
+  text-align: center;
+}
 
 .list-item-image {
   width: 100%;
@@ -439,7 +464,7 @@ header.header--toggle { padding: 10px 20px 0; }
 }
 
 .list-item-title-link:hover .list-item-title {
-  color: #FB8C00;
+  color: #fb8c00;
   text-decoration: underline;
 }
 
@@ -503,7 +528,7 @@ header.header--toggle { padding: 10px 20px 0; }
 
 .loading-spinner {
   border: 6px solid rgba(243, 243, 243, 0.3);
-  border-top: 6px solid #F48FB1;
+  border-top: 6px solid #f48fb1;
   border-radius: 50%;
   width: 50px;
   height: 50px;
@@ -512,8 +537,12 @@ header.header--toggle { padding: 10px 20px 0; }
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 .loading-container p {
@@ -523,18 +552,22 @@ header.header--toggle { padding: 10px 20px 0; }
 }
 
 @media (max-width: 900px) {
-  .list-view-header .tags-cell, .list-item .tags-cell { display: none; }
+  .list-view-header .tags-cell,
+  .list-item .tags-cell {
+    display: none;
+  }
 }
 
 @media (max-width: 768px) {
-  .list-view-header, .list-item .detail-cell {
+  .list-view-header,
+  .list-item .detail-cell {
     display: none;
   }
   .list-item {
     padding: 8px;
   }
   .item-cell.image-cell {
-     flex-basis: 70px;
+    flex-basis: 70px;
   }
   .list-item-image {
     max-width: 60px;

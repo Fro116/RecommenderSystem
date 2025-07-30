@@ -8,11 +8,13 @@
   border: 2px solid #ccc;
   border-radius: 12px;
   overflow: hidden;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .card:hover {
-  border-color: #FB8C00;
+  border-color: #fb8c00;
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
   backdrop-filter: blur(2px);
 }
@@ -91,16 +93,19 @@
   text-align: center;
   cursor: pointer;
   color: #000;
-  transition: background-color 0.15s ease, color 0.15s ease, border-bottom-color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-bottom-color 0.15s ease;
 }
 
 .card-back-header:hover {
-  color: #FB8C00;
-  border-bottom-color: #FB8C00;
+  color: #fb8c00;
+  border-bottom-color: #fb8c00;
 }
 
 .card:hover .card-back-header {
-  border-bottom-color: #FB8C00;
+  border-bottom-color: #fb8c00;
 }
 
 .card-back-english-title {
@@ -111,7 +116,7 @@
 }
 
 .card-back-header:hover .card-back-english-title {
-  color: #FB8C00;
+  color: #fb8c00;
 }
 
 .card-back-body {

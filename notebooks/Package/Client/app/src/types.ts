@@ -21,13 +21,12 @@ export interface Result {
   image: any;
 }
 
-export type SourceType = 'MyAnimeList' | 'AniList' | 'Kitsu' | 'Anime-Planet';
-export type CardType = 'Anime' | 'Manga';
+export type SourceType = "MyAnimeList" | "AniList" | "Kitsu" | "Anime-Planet";
+export type CardType = "Anime" | "Manga";
 
 export interface AddUserPayload {
   state: string;
   action: {
-    type: 'add_user';
     source: string;
     username: string;
   };
@@ -36,7 +35,6 @@ export interface AddUserPayload {
 export interface AddItemPayload {
   state: string;
   action: {
-    type: 'add_item';
     medium: CardType;
     source: string;
     itemid: string;
@@ -46,7 +44,6 @@ export interface AddItemPayload {
 export interface MediaTypePayload {
   state: string;
   action: {
-    type: 'set_media';
     medium: CardType;
   };
 }
@@ -79,25 +76,24 @@ export interface AutocompleteItem {
   matched: boolean[];
 }
 
-
 // Helper function (can also reside here or in a separate utils file)
 export const getBiggestImageUrl = (images: any): string => {
   if (Array.isArray(images) && images.length > 0) {
     return images.reduce((prev: any, curr: any) => {
-      return (prev.width * prev.height) >= (curr.width * curr.height) ? prev : curr;
+      return prev.width * prev.height >= curr.width * curr.height ? prev : curr;
     }).url;
   }
-  return images || '';
+  return images || "";
 };
 
-export const API_BASE = 'https://api.recs.moe';
-export const UPDATE_URL = `${API_BASE}/update`;
+// export const API_BASE = 'https://api.recs.moe';
+export const API_BASE = "http://eva-03:8080";
 
 export const SOURCE_MAP: Record<SourceType, string> = {
-  MyAnimeList: 'mal',
-  AniList: 'anilist',
-  Kitsu: 'kitsu',
-  'Anime-Planet': 'animeplanet',
+  MyAnimeList: "mal",
+  AniList: "anilist",
+  Kitsu: "kitsu",
+  "Anime-Planet": "animeplanet",
 };
 
 export const stringToHslColor = (str: string, s: number, l: number): string => {

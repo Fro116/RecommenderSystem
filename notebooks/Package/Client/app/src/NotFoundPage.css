@@ -36,7 +36,7 @@
 }
 
 .not-found-content-overlay::before {
-  content: '';
+  content: "";
   position: absolute;
   top: 0;
   left: 0;
@@ -64,7 +64,7 @@
 .not-found-text-content .not-found-title {
   font-size: clamp(5em, 22vw, 7em);
   font-weight: bold;
-  color: #F48FB1;
+  color: #f48fb1;
   margin-top: 0;
   margin-bottom: 0.1em;
   line-height: 1;
@@ -74,7 +74,7 @@
 }
 
 .not-found-text-content:hover .not-found-title {
-  color: #D870A0;
+  color: #d870a0;
 }
 
 .not-found-text-content .not-found-message {

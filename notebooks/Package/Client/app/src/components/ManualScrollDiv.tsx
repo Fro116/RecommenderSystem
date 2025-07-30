@@ -1,8 +1,11 @@
 // src/components/ManualScrollDiv.tsx
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect } from "react";
 
 // ManualScrollDiv Component with momentum scrolling and boundary pass-through
-const ManualScrollDiv: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ children, ...props }) => {
+const ManualScrollDiv: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({
+  children,
+  ...props
+}) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const startY = useRef<number>(0);
   const startScrollTop = useRef<number>(0);
@@ -18,7 +21,9 @@ const ManualScrollDiv: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ child
     }
     startY.current = e.touches[0].clientY;
     lastY.current = e.touches[0].clientY;
-    startScrollTop.current = scrollRef.current ? scrollRef.current.scrollTop : 0;
+    startScrollTop.current = scrollRef.current
+      ? scrollRef.current.scrollTop
+      : 0;
     lastTime.current = e.timeStamp;
     velocity.current = 0;
     e.stopPropagation();
@@ -31,7 +36,8 @@ const ManualScrollDiv: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ child
 
     if (scrollRef.current) {
       const newScrollTop = startScrollTop.current - deltaY;
-      const maxScrollTop = scrollRef.current.scrollHeight - scrollRef.current.clientHeight;
+      const maxScrollTop =
+        scrollRef.current.scrollHeight - scrollRef.current.clientHeight;
       if (newScrollTop > 0 && newScrollTop < maxScrollTop) {
         scrollRef.current.scrollTop = newScrollTop;
         e.preventDefault();
@@ -60,7 +66,8 @@ const ManualScrollDiv: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ child
     velocity.current *= friction;
     if (
       scrollRef.current.scrollTop <= 0 ||
-      scrollRef.current.scrollTop >= scrollRef.current.scrollHeight - scrollRef.current.clientHeight
+      scrollRef.current.scrollTop >=
+        scrollRef.current.scrollHeight - scrollRef.current.clientHeight
     ) {
       return;
     }
@@ -75,20 +82,21 @@ const ManualScrollDiv: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ child
     const el = scrollRef.current;
     if (!el) return;
     // Check if it's a touch device before adding listeners
-    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const isTouchDevice =
+      "ontouchstart" in window || navigator.maxTouchPoints > 0;
     if (isTouchDevice) {
-        el.addEventListener('touchstart', handleTouchStart, { passive: false });
-        el.addEventListener('touchmove', handleTouchMove, { passive: false });
-        el.addEventListener('touchend', handleTouchEnd, { passive: false });
+      el.addEventListener("touchstart", handleTouchStart, { passive: false });
+      el.addEventListener("touchmove", handleTouchMove, { passive: false });
+      el.addEventListener("touchend", handleTouchEnd, { passive: false });
     }
     return () => {
       if (isTouchDevice && el) {
-          el.removeEventListener('touchstart', handleTouchStart);
-          el.removeEventListener('touchmove', handleTouchMove);
-          el.removeEventListener('touchend', handleTouchEnd);
-          if (momentumFrame.current) {
-              cancelAnimationFrame(momentumFrame.current);
-          }
+        el.removeEventListener("touchstart", handleTouchStart);
+        el.removeEventListener("touchmove", handleTouchMove);
+        el.removeEventListener("touchend", handleTouchEnd);
+        if (momentumFrame.current) {
+          cancelAnimationFrame(momentumFrame.current);
+        }
       }
     };
   }, []);

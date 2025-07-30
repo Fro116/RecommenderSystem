@@ -52,6 +52,13 @@ function update_routing_table()::Bool
     false
 end
 
+function difftime(speedscope)
+    tags = [x[1] for x in speedscope[2:end]]
+    times = diff([x[2] for x in speedscope])
+    total = speedscope[end][2] - speedscope[1][2]
+    [total, serverid, collect(zip(tags, times))]
+end
+
 Oxygen.@get "/bluegreen" function read_bluegreen(r::HTTP.Request)::HTTP.Response
     encoding = nothing
     if occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
@@ -117,7 +124,7 @@ function read_autocomplete_item(data::Dict)::HTTP.Response
 end
 
 function autocomplete_user(d::Dict, encoding)::HTTP.Response
-    speedscope = [time()]
+    speedscope = [("start", time())]
     prefix = lowercase(sanitize(d["prefix"]))
     d = Dict(
         "source" => d["source"],
@@ -125,7 +132,7 @@ function autocomplete_user(d::Dict, encoding)::HTTP.Response
         "type" => d["type"],
     )
     r_ac = read_autocomplete(d)
-    push!(speedscope, time())
+    push!(speedscope, ("read", time()))
     if HTTP.iserror(r_ac)
         ret = []
     else
@@ -172,8 +179,8 @@ function autocomplete_user(d::Dict, encoding)::HTTP.Response
             push!(ret, x)
         end
     end
-    push!(speedscope, time())
-    ret = Dict("prefix" => d["prefix"], "autocompletes" => ret, "speedscope" => [serverid, diff(speedscope)])
+    push!(speedscope, ("finish", time()))
+    ret = Dict("prefix" => d["prefix"], "autocompletes" => ret, "speedscope" => difftime(speedscope))
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
@@ -232,7 +239,7 @@ function temporally_consistent_sample(arr::Vector, salt::String, window::Real)
 end
 
 function autocomplete_item(d::Dict, encoding)::HTTP.Response
-    speedscope = [time()]
+    speedscope = [("start", time())]
     prefix = lowercase(lstrip(d["prefix"]))
     args = Dict(
         "medium" => Dict("Manga" => 0, "Anime" => 1)[d["medium"]],
@@ -240,7 +247,7 @@ function autocomplete_item(d::Dict, encoding)::HTTP.Response
         "type" => d["type"],
     )
     r_ac = read_autocomplete(args)
-    push!(speedscope, time())
+    push!(speedscope, ("read", time()))
     if HTTP.iserror(r_ac)
         ret = []
     else
@@ -292,8 +299,8 @@ function autocomplete_item(d::Dict, encoding)::HTTP.Response
             end
         end
     end
-    push!(speedscope, time())
-    ret = Dict("prefix" => d["prefix"], "autocompletes" => ret, "speedscope" => [serverid, diff(speedscope)])
+    push!(speedscope, ("finish", time()))
+    ret = Dict("prefix" => d["prefix"], "autocompletes" => ret, "speedscope" => difftime(speedscope))
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
 
@@ -402,105 +409,25 @@ end
     d
 end
 
-Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
-    speedscope = [time()]
-    encoding = nothing
-    if occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
-        encoding = :gzip
-    end
+function decode_state(r::HTTP.Request)
+    speedscope = [("start", time())]
     d = decode(r)
     state = d["state"]
-    action = d["action"]
     if isempty(d["state"])
-        if action["type"] == "add_item"
-            default_medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
-        else
-            default_medium = 1
-        end
-        state = Dict{String,Any}("medium" => default_medium, "users" => [], "items" => [])
+        state = Dict("medium" => 1, "users" => [], "items" => [])
     else
         state = MsgPack.unpack(Base64.base64decode(d["state"]))
     end
-    push!(speedscope, time())
-    followup_action = nothing
-    if action["type"] == "add_user"
-        username = sanitize(action["username"])
-        source = action["source"]
-        followup_action =
-            Dict("type" => "refresh_user", "source" => source, "username" => username)
-        r_embed =
-            add_user(Dict("source" => source, "username" => username), state["medium"])
-        if r_embed.status == 404 && refresh_user(source, username)
-            r_embed =
-                add_user(Dict("source" => source, "username" => username), state["medium"])
-            followup_action = nothing
-        end
-        if HTTP.iserror(r_embed)
-            return HTTP.Response(r_embed.status)
-        end
-        d_embed = decode(r_embed)
-        push!(state["users"], d_embed)
-    elseif action["type"] == "add_item"
-        source = action["source"]
-        medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
-        itemid = action["itemid"]
-        matchedid = get(get_matchedid_map(medium), (source, itemid), nothing)
-        if isnothing(matchedid)
-            return HTTP.Response(404, [])
-        end
-        card = get(get_media_info(medium), matchedid, nothing)
-        if isnothing(card)
-            return HTTP.Response(404, [])
-        end
-        d_item = Dict(
-            "medium" => medium,
-            "matchedid" => matchedid,
-            "header" => Dict(
-                "titlename" => card["title"],
-                "titleurl" => card["url"],
-            ),
-        )
-        push!(state["items"], d_item)
-    elseif action["type"] == "refresh_user"
-        username = sanitize(action["username"])
-        source = action["source"]
-        idx = nothing
-        for (i, x) in Iterators.enumerate(state["users"])
-            if x["username"] == username && x["source"] == source
-                idx = i
-                break
-            end
-        end
-        if isnothing(idx) || !refresh_user(source, username)
-            return HTTP.Response(200, encode(Dict(), :json, encoding)...)
-        end
-        r_embed =
-            add_user(Dict("source" => source, "username" => username), state["medium"])
-        if HTTP.iserror(r_embed)
-            return HTTP.Response(r_embed.status)
-        end
-        d_embed = decode(r_embed)
-        state["users"][idx] = d_embed
-    elseif action["type"] == "set_media"
-        medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
-        state["medium"] = medium
-        Threads.@threads for i = 1:length(state["users"])
-            u = state["users"][i]
-            if "masked.$medium" in keys(u["embeds"])
-                continue
-            end
-            d_embed = query_model(u["user"], medium, nothing)
-            if isnothing(d_embed)
-                update_routing_table()
-                return HTTP.Response(500, [])
-            end
-            state["users"][i]["embeds"] = merge(state["users"][i]["embeds"], d_embed)
-        end
-    else
-        return HTTP.Response(400, [])
-    end
-    push!(speedscope, time())
-    r, ok = render(state, d["pagination"])
+    pagination = d["pagination"]
+    encoding = get_preferred_encoding(r)
+    action = d["action"]
+    push!(speedscope, ("state", time()))
+    state, action, pagination, encoding, speedscope
+end
+
+function render_state(state, pagination, encoding, followup_action, speedscope)
+    push!(speedscope, ("prerender", time()))
+    r, ok = render(state, pagination)
     if !ok
         return r
     end
@@ -515,10 +442,100 @@ Oxygen.@post "/update" function update_state(r::HTTP.Request)::HTTP.Response
     header = first(vcat(state["users"], state["items"]))["header"]
     ret["titlename"] = header["titlename"]
     ret["titleurl"] = header["titleurl"]
-    push!(speedscope, time())
-    ret["speedscpe"] = [serverid, diff(speedscope)]
+    push!(speedscope, ("state", time()))
+    ret["speedscope"] = difftime(speedscope)
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
+
+Oxygen.@post "/add_user" function add_user_endpoint(r::HTTP.Request)::HTTP.Response
+    state, action, pagination, encoding, speedscope = decode_state(r)
+    username = sanitize(action["username"])
+    source = action["source"]
+    followup_action =
+        Dict("endpoint" => "/refresh_user", "source" => source, "username" => username)
+    r_embed =
+        add_user(Dict("source" => source, "username" => username), state["medium"])
+    if r_embed.status == 404 && refresh_user(source, username)
+        r_embed =
+            add_user(Dict("source" => source, "username" => username), state["medium"])
+        followup_action = nothing
+    end
+    if HTTP.iserror(r_embed)
+        return HTTP.Response(r_embed.status)
+    end
+    d_embed = decode(r_embed)
+    push!(state["users"], d_embed)
+    render_state(state, pagination, encoding, followup_action, speedscope)
+end
+
+Oxygen.@post "/refresh_user" function refresh_user_endpoint(r::HTTP.Request)::HTTP.Response
+    state, action, pagination, encoding, speedscope = decode_state(r)
+    username = sanitize(action["username"])
+    source = action["source"]
+    idx = nothing
+    for (i, x) in Iterators.enumerate(state["users"])
+        if x["username"] == username && x["source"] == source
+            idx = i
+            break
+        end
+    end
+    if isnothing(idx) || !refresh_user(source, username)
+        return HTTP.Response(200, encode(Dict(), :json, encoding)...)
+    end
+    r_embed =
+        add_user(Dict("source" => source, "username" => username), state["medium"])
+    if HTTP.iserror(r_embed)
+        return HTTP.Response(r_embed.status)
+    end
+    d_embed = decode(r_embed)
+    state["users"][idx] = d_embed
+    render_state(state, pagination, encoding, nothing, speedscope)
+end
+
+Oxygen.@post "/add_item" function add_item_endpoint(r::HTTP.Request)::HTTP.Response
+    state, action, pagination, encoding, speedscope = decode_state(r)
+    source = action["source"]
+    medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
+    itemid = action["itemid"]
+    matchedid = get(get_matchedid_map(medium), (source, itemid), nothing)
+    if isnothing(matchedid)
+        return HTTP.Response(404, [])
+    end
+    card = get(get_media_info(medium), matchedid, nothing)
+    if isnothing(card)
+        return HTTP.Response(404, [])
+    end
+    d_item = Dict(
+        "medium" => medium,
+        "matchedid" => matchedid,
+        "header" => Dict(
+            "titlename" => card["title"],
+            "titleurl" => card["url"],
+        ),
+    )
+    push!(state["items"], d_item)
+    render_state(state, pagination, encoding, nothing, speedscope)
+end
+
+Oxygen.@post "/set_media" function set_media_endpoint(r::HTTP.Request)::HTTP.Response
+    state, action, pagination, encoding, speedscope = decode_state(r)
+    medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
+    state["medium"] = medium
+    Threads.@threads for i = 1:length(state["users"])
+        u = state["users"][i]
+        if "masked.$medium" in keys(u["embeds"])
+            continue
+        end
+        d_embed = query_model(u["user"], medium, nothing)
+        if isnothing(d_embed)
+            update_routing_table()
+            return HTTP.Response(500, [])
+        end
+        state["users"][i]["embeds"] = merge(state["users"][i]["embeds"], d_embed)
+    end
+    render_state(state, pagination, encoding, nothing, speedscope)
+end
+
 
 function compile_source(port::Integer, compile_source::AbstractString)
     test_users = CSV.read(
@@ -535,9 +552,9 @@ function compile_source(port::Integer, compile_source::AbstractString)
     )
     state = ""
     pagination = Dict("offset" => 0, "limit" => 25)
-    function apply_action(action)
+    function apply_action(endpoint, action)
         r = HTTP.post(
-            "http://localhost:$PORT/update",
+            "http://localhost:$PORT/$endpoint",
             encode(
                 Dict("state" => state, "action" => action, "pagination" => pagination),
                 :json,
@@ -572,7 +589,7 @@ function compile_source(port::Integer, compile_source::AbstractString)
             status_exception = false,
         )
         logtag("STARTUP", "/add_item $compile_source")
-        apply_action(Dict("type" => "add_item", "source" => source, "medium" => m, "itemid" => itemid))
+        apply_action("add_item", Dict("source" => source, "medium" => m, "itemid" => itemid))
     end
     for (source, username) in zip(test_users.source, test_users.username)
         if source != compile_source
@@ -589,15 +606,13 @@ function compile_source(port::Integer, compile_source::AbstractString)
             status_exception = false,
         )
         logtag("STARTUP", "/add_user $compile_source")
-        apply_action(Dict("type" => "add_user", "source" => source, "username" => username))
+        apply_action("add_user", Dict("source" => source, "username" => username))
         logtag("STARTUP", "/refresh_user $compile_source")
-        apply_action(
-            Dict("type" => "refresh_user", "source" => source, "username" => username),
-        )
+        apply_action("refresh_user", Dict("source" => source, "username" => username))
     end
     logtag("STARTUP", "/set_media $compile_source")
     for m in ["Manga", "Anime"]
-        apply_action(Dict("type" => "set_media", "medium" => m))
+        apply_action("set_media", Dict("medium" => m))
     end
 end
 
