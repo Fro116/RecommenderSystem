@@ -39,7 +39,19 @@ function decode(r::HTTP.Message)::Dict
         return JSON3.read(String(body), Dict{String,Any})
     elseif HTTP.headercontains(r, "Content-Type", "application/msgpack")
         return MsgPack.unpack(body)
+    elseif HTTP.headercontains(r, "Content-Type", "application/octet-stream")
+        return body
     else
         @assert false
+    end
+end
+
+function get_preferred_encoding(r::HTTP.Request)
+    if occursin("zstd", HTTP.header(r, "Accept-Encoding", ""))
+        return :zstd
+    elseif occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
+        return :gzip
+    else
+        return nothing
     end
 end

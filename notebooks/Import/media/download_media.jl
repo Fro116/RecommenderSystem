@@ -1,7 +1,7 @@
-import CSV
 import DataFrames
 import Glob
 import JSON3
+import ProgressMeter: @showprogress
 import StatsBase
 include("../../julia_utils/stdout.jl")
 include("common.jl")
@@ -93,8 +93,7 @@ function import_media_relations()
         "animeplanet" => animeplanet_relation_map,
     )
     for source in keys(relation_maps)
-        df =
-            CSV.read("$datadir/$source/$(source)_media_relations.csv", DataFrames.DataFrame)
+        df = read_csv("$datadir/$source/$(source)_media_relations.csv")
         relation_map = relation_maps[source]
         for x in setdiff(Set(df.relation), keys(relation_map))
             @info "could not parse relation $x from $source"
@@ -102,13 +101,13 @@ function import_media_relations()
         df[!, :target_medium] = lowercase.(df.target_medium)
         df[!, :relation] = map(x -> get(relation_map, x, "unknown"), df.relation)
         df[!, :source] .= source
-        CSV.write("$datadir/$(source)_media_relations.csv", df)
+        write_csv("$datadir/$(source)_media_relations.csv", df)
     end
 end
 
 function import_mal(medium)
     source = "mal"
-    df = CSV.read("$datadir/$source/$(source)_media.csv", DataFrames.DataFrame, ntasks = 1)
+    df = read_csv("$datadir/$source/$(source)_media.csv")
     df = filter(x -> x.medium == medium && !ismissing(x.db_last_success_at), df)
     function alternative_titles(x)
         if ismissing(x)
@@ -239,6 +238,39 @@ function import_mal(medium)
         filter!(x -> x ∉ ["Eligible Titles for You Should Read This"], vals)
         JSON3.write(vals)
     end
+    function recommendations(x)
+        if ismissing(x)
+            return missing
+        end
+        records = []
+        r = JSON3.read(x)
+        for rec in r
+            d = Dict(
+                "username" => rec.username,
+                "itemid" => string(rec.itemid),
+                "count" => 1,
+            )
+            push!(records, d)
+        end
+        JSON3.write(records)
+    end
+    function reviews(x)
+        if ismissing(x)
+            return missing
+        end
+        records = []
+        r = JSON3.read(x)
+        for rec in r
+            d = Dict(
+                "username" => rec.username,
+                "text" => rec.text,
+                "count" => rec.upvotes,
+                "rating" => rec.rating,
+            )
+            push!(records, d)
+        end
+        JSON3.write(records)
+    end
     ret = DataFrames.DataFrame()
     ret[!, "medium"] = df.medium
     ret[!, "itemid"] = df.itemid
@@ -260,12 +292,14 @@ function import_mal(medium)
     ret[!, "anilistid"] .= missing
     ret[!, "synopsis"] = df.synopsis
     ret[!, "genres"] = genre.(df.genres)
-    CSV.write("$datadir/$(source)_$(medium).csv", ret)
+    ret[!, "recommendations"] = recommendations.(df.userrec)
+    ret[!, "reviews"] = reviews.(df.reviews)
+    write_csv("$datadir/$(source)_$(medium).csv", ret)
 end
 
 function import_anilist(medium)
     source = "anilist"
-    df = CSV.read("$datadir/$source/$(source)_media.csv", DataFrames.DataFrame, ntasks = 1)
+    df = read_csv("$datadir/$source/$(source)_media.csv")
     df = filter(x -> x.medium == medium && !ismissing(x.db_last_success_at), df)
     function title(x)
         json = try
@@ -388,6 +422,38 @@ function import_anilist(medium)
         end
         get(source_map, x, missing)
     end
+    function recommendations(x)
+        if ismissing(x)
+            return missing
+        end
+        records = []
+        m = Dict("manga" => "MANGA", "anime" => "ANIME")[medium]
+        r = JSON3.read(x)
+        for rec in r
+            if rec["medium"] != m
+                continue
+            end
+            push!(records, ("", string(rec.itemid), rec["rating"]))
+        end
+        JSON3.write(records)
+    end
+    function reviews(x)
+        if ismissing(x)
+            return missing
+        end
+        records = []
+        r = JSON3.read(x)
+        for rec in r
+            d = Dict(
+                "username" => string(rec.userId),
+                "text" => rec.summary * "\n" * rec.body,
+                "count" => rec.rating - (rec.ratingAmount - rec.rating),
+                "rating" => rec.score / 10,
+            )
+            push!(records, d)
+        end
+        JSON3.write(records)
+    end
     ret = DataFrames.DataFrame()
     ret[!, "medium"] = df.medium
     ret[!, "itemid"] = df.itemid
@@ -410,12 +476,14 @@ function import_anilist(medium)
     ret[!, "anilistid"] = df.itemid
     ret[!, "synopsis"] = df.summary
     ret[!, "genres"] = df.genres
-    CSV.write("$datadir/$(source)_$(medium).csv", ret)
+    ret[!, "recommendations"] = recommendations.(df.recommendationspeek)
+    ret[!, "reviews"] = reviews.(df.reviewspeek)
+    write_csv("$datadir/$(source)_$(medium).csv", ret)
 end
 
 function import_kitsu(medium)
     source = "kitsu"
-    df = CSV.read("$datadir/$source/$(source)_media.csv", DataFrames.DataFrame, ntasks = 1)
+    df = read_csv("$datadir/$source/$(source)_media.csv")
     df = filter(x -> x.medium == medium && !ismissing(x.db_last_success_at), df)
     function alternative_titles(x)
         try
@@ -464,7 +532,7 @@ function import_kitsu(medium)
         end
         x = string(x)
         while endswith(x, "-01")
-            x = chop(x, tail=length("-01"))
+            x = chop(x, tail = length("-01"))
         end
         x
     end
@@ -506,12 +574,14 @@ function import_kitsu(medium)
     ret[!, "anilistid"] = df.anilistid
     ret[!, "synopsis"] = df.synopsis
     ret[!, "genres"] = df.genres
-    CSV.write("$datadir/$(source)_$(medium).csv", ret)
+    ret[!, "recommendations"] .= missing
+    ret[!, "reviews"] .= missing
+    write_csv("$datadir/$(source)_$(medium).csv", ret)
 end
 
 function import_animeplanet(medium)
     source = "animeplanet"
-    df = CSV.read("$datadir/$source/$(source)_media.csv", DataFrames.DataFrame, ntasks = 1)
+    df = read_csv("$datadir/$source/$(source)_media.csv")
     df = filter(x -> x.medium == medium && !ismissing(x.db_last_success_at), df)
     function alternative_titles(x)
         if ismissing(x)
@@ -534,7 +604,7 @@ function import_animeplanet(medium)
         ]
         for s in suffixes
             if endswith(x, s)
-                return chop(x, tail=length(s))
+                return chop(x, tail = length(s))
             end
         end
         x
@@ -690,6 +760,34 @@ function import_animeplanet(medium)
         end
         missing
     end
+    function recommendations(x)
+        if ismissing(x)
+            return missing
+        end
+        records = []
+        r = JSON3.read(x)
+        for rec in r
+            push!(records, (rec.username, string(rec.itemid), 1))
+        end
+        JSON3.write(records)
+    end
+    function reviews(x)
+        if ismissing(x)
+            return missing
+        end
+        records = []
+        r = JSON3.read(x)
+        for rec in r
+            d = Dict(
+                "username" => rec.username,
+                "text" => rec.text,
+                "count" => rec.upvotes,
+                "rating" => rec.rating,
+            )
+            push!(records, d)
+        end
+        JSON3.write(records)
+    end
     ret = DataFrames.DataFrame()
     ret[!, "medium"] = df.medium
     ret[!, "itemid"] = df.itemid
@@ -711,7 +809,9 @@ function import_animeplanet(medium)
     ret[!, "anilistid"] .= missing
     ret[!, "synopsis"] = df.summary
     ret[!, "genres"] = df.genres
-    CSV.write("$datadir/$(source)_$(medium).csv", ret)
+    ret[!, "recommendations"] = recommendations.(df.recommendations)
+    ret[!, "reviews"] = reviews.(df.reviews)
+    write_csv("$datadir/$(source)_$(medium).csv", ret)
 end
 
 function download_items(source::String)
@@ -737,23 +837,23 @@ function download_items(source::String)
     cmd = "mlr --csv cut -f $usercol,medium,itemid $outdir/$(source)_user_items.csv > $outdir/items.csv"
     run(`sh -c $cmd`)
     rm("$outdir/$(source)_user_items.csv")
-    cmd = ("mlr --csv split -n 10000000 --prefix $outdir/items_split $outdir/items.csv ")
+    cmd = ("mlr --csv split -n 10000000 --prefix $outdir/items_split $outdir/items.csv")
     run(`sh -c $cmd`)
     rm("$outdir/items.csv")
     fns = Glob.glob("$outdir/items_split*.csv")
     invalid_users = Set()
     for medium in ["manga", "anime"]
         items = Set()
-        for fn in fns
-            df = CSV.read(fn, DataFrames.DataFrame)
+        @showprogress for fn in fns
+            df = read_csv(fn)
             mask = df.medium .== medium
             items = union(items, Set(df.itemid[mask]))
         end
         num_items = length(items)
         min_items = 5
         max_items = num_items * 0.8
-        for fn in fns
-            df = CSV.read(fn, DataFrames.DataFrame)
+        @showprogress for fn in fns
+            df = read_csv(fn)
             mask = df.medium .== medium
             total_user_counts = StatsBase.countmap(df[:, usercol])
             media_user_counts = StatsBase.countmap(df[:, usercol][mask])
@@ -766,8 +866,8 @@ function download_items(source::String)
         end
     end
     for medium in ["manga", "anime"]
-        for (i, fn) in Iterators.enumerate(fns)
-            df = CSV.read(fn, DataFrames.DataFrame)
+        @showprogress for (i, fn) in collect(Iterators.enumerate(fns))
+            df = read_csv(fn)
             filter!(x -> x[usercol] ∉ invalid_users, df)
             mask = df.medium .== medium
             counts = StatsBase.countmap(df.itemid[mask])
@@ -775,14 +875,17 @@ function download_items(source::String)
                 Dict("itemid" => collect(keys(counts)), "count" => collect(values(counts))),
             )
             mdf[!, "medium"] .= medium
-            CSV.write("$outdir/$medium.$i.csv", mdf)
+            write_csv("$outdir/$medium.$i.csv", mdf)
 
         end
         cmd = "cd $outdir && mlr --csv cat $medium.*.csv > $medium.csv && rm $medium.*.csv"
         run(`sh -c $cmd`)
-        df = CSV.read("$outdir/$medium.csv", DataFrames.DataFrame)
-        df = DataFrames.combine(DataFrames.groupby(df, [:itemid, :medium]), :count => sum => :count)
-        CSV.write("$outdir/$medium.csv", df)
+        df = read_csv("$outdir/$medium.csv")
+        df = DataFrames.combine(
+            DataFrames.groupby(df, [:itemid, :medium]),
+            :count => sum => :count,
+        )
+        write_csv("$outdir/$medium.csv", df)
     end
     cmd = "rm $outdir/items_split*.csv"
     run(`sh -c $cmd`)
@@ -801,7 +904,7 @@ function save_media()
         import_kitsu(m)
         import_animeplanet(m)
     end
-    for source in ["mal", "anilist", "kitsu", "animeplanet"]
+    for source in reverse(["mal", "anilist", "kitsu", "animeplanet"])
         download_items(source)
     end
 end

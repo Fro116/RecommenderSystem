@@ -1,4 +1,3 @@
-import CSV
 import DataFrames
 import JSON3
 include("common.jl")
@@ -42,7 +41,7 @@ function save_mapping(source1::String, source2::String, medium::String)
     else
         df = DataFrames.DataFrame(mappings, colnames)
     end
-    CSV.write("$datadir/manami/$medium.$source1.$source2.csv", df)
+    write_csv("$datadir/manami/$medium.$source1.$source2.csv", df)
 end
 
 function save_matches()

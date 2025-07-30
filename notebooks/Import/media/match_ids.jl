@@ -1,9 +1,8 @@
-import CSV
 import DataFrames
 include("common.jl")
 
 function get_media(source, medium)
-    CSV.read("$datadir/$(source)_$(medium).csv", DataFrames.DataFrame, ntasks = 1)
+    read_csv("$datadir/$(source)_$(medium).csv")
 end
 
 function get_mediatype_map(source::String, medium::String)
@@ -42,7 +41,7 @@ function save_mapping(source1::String, source2::String, medium::String)
     else
         df = DataFrames.DataFrame(mappings, colnames)
     end
-    CSV.write("$datadir/ids/$medium.$source1.$source2.csv", df)
+    write_csv("$datadir/ids/$medium.$source1.$source2.csv", df)
 end
 
 function save_matches()

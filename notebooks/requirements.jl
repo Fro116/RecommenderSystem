@@ -1,7 +1,9 @@
 import Pkg
 
 dependencies = [
+    ("Accessors", "0.1.42"),
     ("CSV", "0.10.15"),
+    ("CSVFiles", "1.0.2"),
     ("CodecZlib", "0.7.8"),
     ("CodecZstd", "0.8.6"),
     ("DataFrames", "1.7.0"),

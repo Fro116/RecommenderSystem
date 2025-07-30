@@ -1,4 +1,3 @@
-import CSV
 import DataFrames
 import ProgressMeter: @showprogress
 import StatsBase
@@ -9,12 +8,12 @@ const itemtype = Tuple{String,Union{AbstractString,Int}}
 const edgetype = Tuple{itemtype,itemtype}
 
 @memoize function get_items(medium::String, source::String)
-    df = CSV.read("$datadir/users/$source/$medium.csv", DataFrames.DataFrame)
+    df = read_csv("$datadir/users/$source/$medium.csv")
     Dict(df.itemid .=> df.count)
 end
 
 function get_edges(edgetype::String, medium::String, source1::String, source2::String)
-    df = CSV.read("$datadir/$edgetype/$medium.$source1.$source2.csv", DataFrames.DataFrame)
+    df = read_csv("$datadir/$edgetype/$medium.$source1.$source2.csv")
     items1 = get_items(medium, source1)
     items2 = get_items(medium, source2)
     edges::Set{Tuple{itemtype,itemtype}} = Set()
@@ -125,7 +124,7 @@ function save_graph(vs, medium::String)
         push!(records, (k..., id_map[v], get_items(medium, k[1])[k[2]]))
     end
     df = DataFrames.DataFrame(records, ["source", "itemid", "groupid", "count"])
-    CSV.write("$datadir/$medium.groups.csv", df)
+    write_csv("$datadir/$medium.groups.csv", df)
 end
 
 function match_media()

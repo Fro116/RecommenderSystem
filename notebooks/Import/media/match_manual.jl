@@ -1,4 +1,3 @@
-import CSV
 import DataFrames
 include("common.jl")
 
@@ -15,7 +14,7 @@ include("common.jl")
     end
     colnames = ["edgetype", "medium", "source1", "itemid1", "source2", "itemid2"]
     records = []
-    df = CSV.read("$datadir/$(source)_media_relations.csv", DataFrames.DataFrame)
+    df = read_csv("$datadir/$(source)_media_relations.csv")
     df = filter(x -> x.medium == medium && x.target_medium == medium, df)
     for (s, t) in zip(df.itemid, df.target_id)
         if Set([s, t]) in invalid_pairs
@@ -36,10 +35,10 @@ end
 @memoize function get_matches()
     fn = "$datadir/external/media_match_manual.csv"
     if ispath(fn)
-        df = CSV.read(fn, DataFrames.DataFrame)
+        df = read_csv(fn)
     else
         df = CSV.read(IOBuffer(get_external("media_match_manual")), DataFrames.DataFrame)
-        CSV.write(fn, df)
+        write_csv(fn, df)
     end
     df
 end
@@ -64,7 +63,7 @@ function save_mapping(source1::String, source2::String, medium::String, edgetype
     else
         df = DataFrames.DataFrame(mappings, colnames)
     end
-    CSV.write("$datadir/$edgetype/$medium.$source1.$source2.csv", df)
+    write_csv("$datadir/$edgetype/$medium.$source1.$source2.csv", df)
 end
 
 function save_matches()

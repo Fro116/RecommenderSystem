@@ -1,4 +1,3 @@
-import CSV
 import DataFrames
 import Dates
 import JSON3
@@ -85,7 +84,7 @@ function to_set(x)
 end
 
 function get_media(source, medium)
-    df = CSV.read("$datadir/$(source)_$(medium).csv", DataFrames.DataFrame, ntasks = 1)
+    df = read_csv("$datadir/$(source)_$(medium).csv")
     for k in ["startdate", "enddate"]
         tmp = to_datetype.(df[:, k])
         DataFrames.select!(df, DataFrames.Not(k))
@@ -398,7 +397,7 @@ function save_matches()
                 else
                     df = DataFrames.DataFrame(mappings, colnames)
                 end
-                CSV.write("$outdir/$medium.$(sources[j]).$(sources[i]).csv", df)
+                write_csv("$outdir/$medium.$(sources[j]).$(sources[i]).csv", df)
             end
         end
     end
