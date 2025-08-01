@@ -1,5 +1,7 @@
 module histories
 
+include("../../julia_utils/stdout.jl")
+
 import Dates
 
 const min_ts = Dates.datetime2unix(Dates.DateTime(2000, 1, 1))
@@ -109,10 +111,7 @@ function infer_history(user, source::AbstractString, db_refreshed_at::Float64)
     items = []
     for x in user["items"]
         created_at = get_col(x, source, "created_at", db_refreshed_at)
-        updated_at = get_col(x, source, "updated_at", db_refreshed_at)
-        if isnothing(created_at) ||
-           isnothing(updated_at) ||
-           (updated_at - created_at < 86400)
+        if isnothing(created_at)
             continue
         end
         item = copy(x)
@@ -128,13 +127,71 @@ function infer_history(user, source::AbstractString, db_refreshed_at::Float64)
     user
 end
 
-function is_same_item(x, y, source::AbstractString)::Bool
+function is_consistent_item(x, y, source::AbstractString)::Bool
     get_col(x, source, "rating", nothing) == get_col(y, source, "rating", nothing) &&
         get_col(x, source, "status", nothing) == get_col(y, source, "status", nothing) &&
         get_col(x, source, "progress", nothing) == get_col(y, source, "progress", nothing) &&
         get_col(x, source, "progress_volumes", nothing) == get_col(y, source, "progress_volumes", nothing) &&
         x["history_min_ts"] < y["history_max_ts"] + ts_epsilon/2 &&
         y["history_min_ts"] < x["history_max_ts"] + ts_epsilon/2
+end
+
+function is_duplicate_item(x, y, source::AbstractString)::Bool
+    for k in intersect(keys(x), keys(y))
+        if startswith(k, "history") || k in ["item_order"]
+            continue
+        end
+        if x[k] != y[k]
+            return false
+        end
+    end
+    true
+end
+
+function deduplicate_user(user, source::AbstractString)
+    user = copy(user)
+    if source == "anilist"
+        statuses =
+            [nothing, "DROPPED", "PAUSED", "PLANNING", "CURRENT", "COMPLETED", "REPEATING"]
+        statuses = Dict(x => i for (i, x) in Iterators.enumerate(statuses))
+        seen = Dict()
+        for (i, x) in Iterators.enumerate(user["items"])
+            k = (x["medium"], x["itemid"])
+            v = (i, get(statuses, x["status"], 0))
+            if k ∉ keys(seen)
+                seen[k] = v
+            else
+                if v[2] > seen[k][2]
+                    seen[k] = v
+                end
+            end
+        end
+        keep = Set(v[1] for v in values(seen))
+        items = [x for (i, x) in Iterators.enumerate(user["items"]) if i in keep]
+        user["items"] = items
+    else
+        seen = Set()
+        skipped = false
+        items = []
+        for x in user["items"]
+            k = (x["medium"], x["itemid"])
+            if k ∉ seen
+                push!(seen, k)
+                push!(items, x)
+            else
+                skipped = true
+            end
+        end
+        user["items"] = items
+        if skipped
+            user_str =
+                get(user["user"], "username", "") *
+                " " *
+                string(get(user["user"], "userid", ""))
+            logerror("skipping duplicate items for $source $user_str")
+        end
+    end
+    user
 end
 
 function update_history(
@@ -144,6 +201,7 @@ function update_history(
     db_refreshed_at::Float64,
     datetag::AbstractString,
 )
+    user = deduplicate_user(user, source)
     if isnothing(hist)
         hist = infer_history(user, source, db_refreshed_at)
     end
@@ -181,7 +239,7 @@ function update_history(
             end
         end
         # set min_ts
-        sort!(items, by = x -> -x["item_order"])
+        sort!(items, by = x -> x["item_order"], rev=true)
         for m in ["manga", "anime"]
             ts_lower_bound = min_ts
             for x in items
@@ -216,37 +274,68 @@ function update_history(
     end
     sort!(items, by = x -> (x["history_max_ts"], x["history_min_ts"]))
 
-    # add items from the new list
+    # merge new list into the history
+    snapshots = Dict()
     prev_snapshot = Dict()
     for x in hist["items"]
         k = (x["medium"], x["itemid"])
+        if k ∉ keys(snapshots)
+            snapshots[k] = []
+        end
+        push!(snapshots[k], x)
         if x["history_tag"] == "delete"
             delete!(prev_snapshot, k)
         else
             prev_snapshot[k] = x
         end
     end
-    merged_items = copy(hist["items"])
     for x in items
         k = (x["medium"], x["itemid"])
+        if k ∉ keys(snapshots)
+            snapshots[k] = []
+        end
+        duplicate_item = false
+        for y in snapshots[k]
+            if y["history_tag"] ∉ ["infer", "delete"] && is_duplicate_item(x, y, source)
+                y["history_tag"] = datetag
+                duplicate_item = true
+                break
+            end
+        end
+        if duplicate_item
+            continue
+        end
         if k ∉ keys(prev_snapshot)
             x["history_min_ts"] = max(x["history_min_ts"], hist["user"]["history_ts"])
             x["history_tag"] = datetag
-            push!(merged_items, x)
+            push!(snapshots[k], x)
         else
             y = prev_snapshot[k]
-            if is_same_item(x, y, source)
+            if is_consistent_item(x, y, source)
                 x["history_min_ts"] = max(x["history_min_ts"], y["history_min_ts"])
                 x["history_max_ts"] = min(x["history_max_ts"], y["history_max_ts"])
-                y["history_remove"] = true
+                y["history_max_ts"] = Inf # set to Inf to remove y
+                y["history_min_ts"] = Inf
             else
                 x["history_min_ts"] = max(x["history_min_ts"], hist["user"]["history_ts"])
             end
             x["history_tag"] = datetag
-            push!(merged_items, x)
+            push!(snapshots[k], x)
         end
     end
-    merged_items = [x for x in merged_items if !get(x, "history_remove", false)]
+    for k in collect(keys(snapshots))
+        v = snapshots[k]
+        sort!(v, by = x -> (x["history_max_ts"], x["history_min_ts"]))
+        idx = findfirst(==(datetag), [x["history_tag"] for x in v])
+        if !isnothing(idx)
+            v = v[1:idx]
+        end
+        snapshots[k] = v
+    end
+    merged_items = []
+    for v in values(snapshots)
+        append!(merged_items, v)
+    end
 
     # delete items that are not in the new list
     new_items = Set((x["medium"], x["itemid"]) for x in items)
