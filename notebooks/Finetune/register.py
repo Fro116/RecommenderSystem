@@ -11,13 +11,6 @@ def register_transformer(modeltype, medium):
         f"transformer.{modeltype}.{medium}.watch.bias": d["model"][f"watch_heads.{medium}.0.bias"].numpy(),
         f"transformer.{modeltype}.{medium}.rating_mean": d['config']['rating_mean'],
     }
-    if modeltype == "masked":
-        ret |= {
-            f"transformer.{modeltype}.{medium}.rating.weight.1": d["model"][f"rating_head.0.weight"].numpy(),
-            f"transformer.{modeltype}.{medium}.rating.bias.1": d["model"][f"rating_head.0.bias"].numpy(),
-            f"transformer.{modeltype}.{medium}.rating.weight.2": d["model"][f"rating_head.2.weight"].numpy(),
-            f"transformer.{modeltype}.{medium}.rating.bias.2": d["model"][f"rating_head.2.bias"].numpy(),
-        }
     return ret
 
 

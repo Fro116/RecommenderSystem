@@ -115,7 +115,7 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
         setError("");
       }
 
-      const limit = isMobile ? 12 : 24;
+      const limit = isMobile ? 8 : 16;
       const extendedPayload = { ...payload, pagination: { offset, limit } };
       const payloadString = JSON.stringify(extendedPayload);
       const compressedPayload = pako.gzip(payloadString);
@@ -239,8 +239,8 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
   useEffect(() => {
     if (initialFetchStartedRef.current) return;
 
-    let payload: Payload | null = null;
-    let endpoint: string | null = null;
+    let endpoint: string;
+    let payload: Payload;
 
     if (isUserMode) {
       endpoint = "/add_user";
@@ -255,22 +255,20 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
           itemid: itemid!,
         },
       };
-    }
-
-    if (payload) {
-      const randomTextIndex = Math.floor(
-        Math.random() * loadingMessages.length,
-      );
-      setLoadingText(loadingMessages[randomTextIndex]);
-      initialFetchStartedRef.current = true;
-      fetchResults(endpoint, payload, 0, false, true);
-    } else {
+    } else{
       console.warn("Missing or invalid URL parameters. Redirecting home.");
       setError("Invalid URL. Please start a search from the homepage.");
       setIsLoading(false);
       const timer = setTimeout(() => navigate("/"), 3000);
       return () => clearTimeout(timer);
     }
+
+    const randomTextIndex = Math.floor(
+      Math.random() * loadingMessages.length,
+    );
+    setLoadingText(loadingMessages[randomTextIndex]);
+    initialFetchStartedRef.current = true;
+    fetchResults(endpoint, payload, 0, false, true);
   }, [
     fetchResults,
     navigate,

@@ -303,18 +303,21 @@ function retrieval(state)
     ids
 end
 
-function ranking(state, idxs)
+function ranking(state, idxs, speedscope)
     m = state["medium"]
     ts = time()
     Threads.@threads for i = 1:length(state["users"])
-        source = state["users"][i]["source"]
-        d_embed = query_model(state["users"][i]["user"], m, idxs .- 1)
+        s = state["users"][i]
+        source = s["source"]
+        u = copy(s["user"])
+        u["embeds"] = Dict(k => s["embeds"][k] for k in ["masked.$m"])
+        d_embed = query_model(u, m, idxs .- 1)
         if isnothing(d_embed)
-            update_routing_table()
             return HTTP.Response(500, []), false
         end
-        state["users"][i]["embeds"] = merge(state["users"][i]["embeds"], d_embed)
+        s["embeds"] = merge(s["embeds"], d_embed)
     end
+    push!(speedscope, ("ranking_model", time()))
     score = zeros(Float32, length(idxs))
     for user in state["users"]
         u = user["embeds"]
@@ -330,30 +333,16 @@ function ranking(state, idxs)
         p = sum(registry["$m.retrieval.coefs"] .* [p_masked, p_causal])
         # rating feature
         r_baseline = fill(registry["transformer.causal.$m.rating_mean"], length(idxs))
-        r_masked = let
-            a = registry["transformer.masked.$m.watch.weight"][idxs, :]'
-            u_emb = repeat(u["masked.$m"], 1, length(idxs))
-            h = vcat(u_emb, a)
-            h =
-                registry["transformer.masked.$m.rating.weight.1"] * h .+
-                registry["transformer.masked.$m.rating.bias.1"]
-            h = gelu(h)
-            h' * registry["transformer.masked.$m.rating.weight.2"] .+
-            only(registry["transformer.masked.$m.rating.bias.2"])
-        end
+        r_masked = u["masked.ranking.$m"]
         r_causal = u["causal.ranking.$m"]
         r = sum(registry["$m.rating.coefs"] .* [r_baseline, r_masked, r_causal])
-        if length(user["user"]["items"]) == 0
-            # TODO reevaluate new-user overrides on newer models
-            score = log.(p) + r
-        else
-            score = log.(p) + r
-        end
+        score += log.(p) + r
     end
+    push!(speedscope, ("ranking_sort", time()))
     score, true
 end
 
-function render(state, pagination)
+function render(state, pagination, speedscope)
     # add types
     for u in state["users"]
         for k in keys(u["embeds"])
@@ -380,8 +369,9 @@ function render(state, pagination)
     idxs = idxs[page*max_items_to_rank+1:(page+1)*max_items_to_rank]
     sidx -= page * max_items_to_rank
     eidx -= page * max_items_to_rank
+    push!(speedscope, ("retrieval_sort", time()))
     # ranking
-    r, ok = ranking(state, idxs)
+    r, ok = ranking(state, idxs, speedscope)
     if !ok
         return r, false
     end

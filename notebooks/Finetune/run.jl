@@ -3,18 +3,6 @@ function torchrun(cmd)
     run(`sh -c $cmd`)
 end
 
-function blue_green_deploy()
-    enable = read("../../data/finetune/bluegreen", String)
-    disable = Dict("blue" => "green", "green" => "blue")[enable]
-    region = read("../../secrets/gcp.region.txt", String)
-    cmds = [
-        "gcloud auth login --cred-file=../../secrets/gcp.auth.json --quiet",
-        "gcloud compute instance-groups managed resize embed-$(disable)-instance-group --size 0 --region $region",
-    ]
-    cmd = join(cmds, " && ")
-    run(`sh -c $cmd`)
-end
-
 function finetune(list_tag::AbstractString)
     run(`julia import_data.jl $list_tag`)
     run(`julia transformer.jl`)
@@ -31,7 +19,6 @@ function finetune(list_tag::AbstractString)
         cmd = "cd ../Package/$app && julia package.jl"
         run(`sh -c $cmd`)
     end
-    blue_green_deploy()
 end
 
 finetune(ARGS[1])

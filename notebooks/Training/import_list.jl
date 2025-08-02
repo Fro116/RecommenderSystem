@@ -59,15 +59,9 @@ function read_csv(fn)
     df[:, colnames]
 end
 
-function decompress(x::AbstractString)
-    MsgPack.unpack(
-        CodecZstd.transcode(CodecZstd.ZstdDecompressor, Vector{UInt8}(hex2bytes(x[3:end]))),
-    )
-end
-
-function decompress(x::Vector)
-    MsgPack.unpack(CodecZstd.transcode(CodecZstd.ZstdDecompressor, Vector{UInt8}(x)))
-end
+decompress(x::Vector{UInt8}) = MsgPack.unpack(CodecZstd.transcode(CodecZstd.ZstdDecompressor, x))
+decompress(x::AbstractString) = decompress(Vector{UInt8}(hex2bytes(x[3:end])))
+decompress(x::Vector) = decompress(Vector{UInt8}(x))
 
 function get_progress(source, medium, itemid, episodes, chapters, volumes)::Float32
     df = get_media_progress(medium)

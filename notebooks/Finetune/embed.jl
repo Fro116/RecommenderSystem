@@ -7,7 +7,7 @@ const models = Dict(
     t in ["retrieval", "ranking"]
 )
 
-function call_model_url(users, medium, task)
+function call_model_url(users, medium::Int, task::String)
     max_retries = 3
     for retry in 1:max_retries
         try
@@ -27,7 +27,7 @@ function call_model_url(users, medium, task)
     nothing
 end
 
-function run_model(medium::Integer, task::AbstractString)
+function run_model(medium::Int, task::String)
     batch_size = 16
     model = models[(medium, task)]
     while true
@@ -53,7 +53,7 @@ end
 
 function query_model(
     user,
-    medium::Integer,
+    medium::Int,
     test_matchedids::Union{Vector,Nothing};
 )
     if isnothing(test_matchedids)
@@ -62,7 +62,7 @@ function query_model(
         task = "ranking"
         ts = user["timestamp"]
         test_items = []
-        ranking_items = get_ranking_items(medium, user["user"]["source"])
+        ranking_items = get_ranking_items(medium, Int(user["user"]["source"]))
         for idx in test_matchedids
             item = copy(ranking_items[idx])
             item["history_max_ts"] = ts
@@ -85,12 +85,12 @@ function query_model(
     data
 end
 
-@memoize function num_items(medium::Integer)
+@memoize function num_items(medium::Int)
     m = Dict(0 => "manga", 1 => "anime")[medium]
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks = 1).matchedid) + 1
 end
 
-@memoize function get_ranking_items(medium, source)
+@memoize function get_ranking_items(medium::Int, source::Int)
     info = Dict()
     for i = 1:num_items(medium)
         info[i-1] = Dict{String,Any}(

@@ -47,12 +47,13 @@ def project(user):
 
 def predict(users, task, medium):
     max_user_len = 1024
+    max_ranking_items = 1024
     if task == "retrieval":
         modeltype = "masked"
         max_seq_len = max_user_len
     elif task == "ranking":
         modeltype = "causal"
-        max_seq_len = max_user_len+1024
+        max_seq_len = max_user_len + max_ranking_items
     else:
         assert False
     d = {
@@ -71,6 +72,10 @@ def predict(users, task, medium):
         "rating": np.zeros((len(users), max_seq_len), dtype=np.float32),
         "progress": np.zeros((len(users), max_seq_len), dtype=np.float32),
     }
+    if modeltype == "causal":
+        masked_dim = models[f"transformer.masked.{medium}"].config["embed_dim"]
+        masked_embs = np.zeros((len(users), masked_dim), dtype=np.float32)
+        masked_pos = np.zeros((len(users), max_ranking_items), dtype=np.int32)
     for u in range(len(users)):
         userid = u + 1
         items = project(users[u])
@@ -78,7 +83,7 @@ def predict(users, task, medium):
         if len(items) > max_user_len - extra_tokens:
             items = items[-(max_user_len - extra_tokens) :]
         if modeltype == "causal" and task == "ranking":
-             test_items = users[u]["test_items"]
+            test_items = users[u]["test_items"]
         else:
             test_items = [make_masked_item(users[u]["timestamp"])]
         for i, x in enumerate(items + test_items):
@@ -104,28 +109,45 @@ def predict(users, task, medium):
                 d["status"][u, i] = x["status"]
                 d["rating"][u, i] = x["rating"]
                 d["progress"][u, i] = x["progress"]
+        if modeltype == "causal":
+            masked_embs[u, :] = users[u]["embeds"][f"masked.{medium}"]
+            masked_pos[u, :] = [x["matchedid"] for x in users[u]["test_items"]]
     e = {}
     with gpu_lock:
         for k in d:
             d[k] = torch.tensor(d[k]).to(device)
             torch._dynamo.mark_dynamic(d[k], 0)
+        if modeltype == "causal":
+            masked_embs = torch.tensor(masked_embs).to(device)
+            masked_pos = torch.tensor(masked_pos).to(device)
         start_time = time.time()
         with torch.no_grad():
             with torch.amp.autocast(device, dtype=torch.bfloat16):
                 ret = models[f"transformer.{modeltype}.{medium}"](d, task)
+                if modeltype == "causal":
+                    m = models[f"transformer.masked.{medium}"]
+                    X = torch.cat(
+                        (
+                            masked_embs.unsqueeze(1).repeat(1, max_ranking_items, 1),
+                            m.item_embedding.matchedid_embeddings[medium](masked_pos),
+                        ),
+                        dim=-1,
+                    )
+                    masked_ret = m.rating_head(X).squeeze(-1)
         duration = time.time() - start_time
         logger.debug(f"batch of {len(users)} completed in {duration} seconds")
         if modeltype == "causal":
             e_ret, e_rnk = ret
             e["retrieval"] = e_ret.to("cpu")
-            e["ranking"] =  e_rnk.to("cpu")
+            e["ranking"] = e_rnk.to("cpu")
+            e["masked_ranking"] = masked_ret.to("cpu")
         else:
             e["retrieval"] = ret.to("cpu")
         del ret
     if modeltype == "masked":
         ret = []
         for i, u in enumerate(users):
-            d = {"version": version}
+            d = {}
             N = min(len(project(u)), max_user_len - 1)
             d[f"masked.{medium}"] = e["retrieval"][i, N, :].tolist()
             ret.append(d)
@@ -133,13 +155,14 @@ def predict(users, task, medium):
     elif modeltype == "causal":
         ret = []
         for i, u in enumerate(users):
-            d = {"version": version}
+            d = {}
             N = min(len(project(u)), max_user_len - 1)
             causal_idxs = []
             for j in range(len(u["test_items"])):
                 causal_idxs.append(2 * (N + j) + 1)
             d[f"causal.ranking.{medium}"] = e["ranking"][i, causal_idxs, 0].tolist()
-            d[f"causal.retrieval.{medium}"] =  e["retrieval"][i, 2 * N, :].tolist()
+            d[f"causal.retrieval.{medium}"] = e["retrieval"][i, 2 * N, :].tolist()
+            d[f"masked.ranking.{medium}"] = masked_ret[i, :].tolist()
             ret.append(d)
         return ret
     else:
@@ -191,8 +214,6 @@ logger.info("STARTUP BEGIN")
 starttime = time.time()
 device = "cuda"
 datadir = "../../data/finetune"
-with open(f"{datadir}/finetune_tag") as f:
-    version = f.read()
 gpu_lock = threading.Lock()
 models = {}
 for modeltype in ["causal", "masked"]:
@@ -213,14 +234,20 @@ for modeltype in ["causal", "masked"]:
     torch.cuda.empty_cache()
 for task in ["retrieval", "ranking"]:
     for medium in [0, 1]:
-        for batch_size in range(1, 16+1):
-            test_user = {
-                "user": {"source": "mal"},
-                "items": [],
-                "timestamp": time.time(),
-                "test_items": [make_masked_item(time.time())],
-            }
-            predict([test_user]*batch_size, task, medium)
+        test_user = {
+            "user": {"source": "mal"},
+            "items": [],
+            "timestamp": time.time(),
+        }
+        if task == "ranking":
+            max_ranking_items = 1024
+            masked_dim = models[f"transformer.masked.{medium}"].config["embed_dim"]
+            test_user["test_items"] = [
+                make_masked_item(time.time())
+            ] * max_ranking_items
+            test_user["embeds"] = {f"masked.{medium}": np.random.rand(masked_dim)}
+        for batch_size in range(1, 16 + 1):
+            predict([test_user] * batch_size, task, medium)
 logger.info(f"STARTUP END AFTER {time.time() - starttime}s")
 app = FastAPI()
 

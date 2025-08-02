@@ -12,7 +12,6 @@ include("../Import/lists/import_history.jl")
 const PORT = parse(Int, ARGS[1])
 const LAYER_3_URL = ARGS[2] != "nothing" ? ARGS[2] : nothing
 
-Oxygen.@post "/read_user_history" read_user_history(r::HTTP.Request)::HTTP.Response = read_user_history(decode(r))
 function read_user_history(data::Dict)::HTTP.Response
     source = data["source"]
     username = data["username"]
@@ -131,7 +130,6 @@ function decompress(x::Vector)
     MsgPack.unpack(CodecZstd.transcode(CodecZstd.ZstdDecompressor, Vector{UInt8}(x)))
 end
 
-Oxygen.@post "/fetch_user_history" fetch_user_history(r::HTTP.Request)::HTTP.Response = fetch_user_history(decode(r))
 function fetch_user_history(data::Dict)::HTTP.Response
     if isnothing(LAYER_3_URL)
         return HTTP.Response(403, [])

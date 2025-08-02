@@ -17,7 +17,7 @@ function compute(basedir::String)
     files = vcat(
         ["$m.csv" for m in mediums],
         ["media_relations.$m.jld2" for m in [0, 1]],
-        ["finetune_tag", "bluegreen", "model.registry.jld2", "images.csv", "clip.jld2"],
+        ["training_tag", "finetune_tag", "model.registry.jld2", "images.csv", "clip.jld2"],
     )
     for f in files
         copy("data/finetune/$f", app)
@@ -26,37 +26,25 @@ function compute(basedir::String)
     copy("secrets", app)
 end
 
-function build(basedir::String, name::String, tag::String, args::String)
-    run(`docker build --network host -t $name $basedir`)
+function build(basedir::String, name::String, tag::String)
     repo = read("secrets/gcp.docker.txt", String)
-    project = read("secrets/gcp.project.txt", String)
-    region = read("secrets/gcp.region.txt", String)
+    run(`docker container run --rm --runtime=nvidia --gpus all -p 5000:8080 --name embed embed`, wait = false)
+    run(`docker build --network host -t $name $basedir`)
+    run(`docker container stop embed`)
     run(`docker tag $name $repo/$name:$tag`)
     run(`docker push $repo/$name:$tag`)
+    run(`docker system prune -af --filter until=24h`)
+    project = read("secrets/gcp.project.txt", String)
+    region = read("secrets/gcp.region.txt", String)
+    group = read("secrets/gcp.igname.txt", String)
+    template = read("secrets/gcp.igtemplate.txt", String)
+    t = Int(round(time()))
     cmds = [
         "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet",
-        "gcloud run deploy {app} --image={repo}/{app}:{tag} --region={region} --project={project} $args",
-        "gcloud beta run services update {app} --scaling=auto --region {region}",
-        "gcloud run services update {app} --min 1 --region {region}",
+        "gcloud beta compute instance-groups managed rolling-action start-update $group --project=$project --region=$region --type=proactive --max-unavailable=0 --min-ready=0 --minimal-action=replace --replacement-method=substitute --max-surge=3 --version=template=$template,name=0-$t",
     ]
-    deploy = replace(
-        join(cmds, " && "),
-        "{repo}" => repo,
-        "{project}" => project,
-        "{region}" => region,
-        "{app}" => name,
-        "{tag}" => tag,
-        "{args}" => args,
-    )
-    for attempt in 1:3
-        try
-            run(`sh -c $deploy`)
-            break
-        catch e
-            println("attempt $attempt: error $e")
-        end
-    end
-    run(`docker system prune -af --filter until=24h`)
+    deploy = replace(join(cmds, " && "))
+    run(`sh -c $deploy`)
 end
 
 cd("../../..")
@@ -67,5 +55,4 @@ end
 mkpath(basedir)
 cp("notebooks/Package/Compute/app", basedir, force = true)
 compute(basedir)
-const tag = read("data/finetune/finetune_tag", String)
-build(basedir, "compute", tag, "--set-cloudsql-instances={project}:{region}:inference --execution-environment=gen2 --cpu=2 --memory=8Gi")
+build(basedir, "compute", "latest")

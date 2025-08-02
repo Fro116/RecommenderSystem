@@ -82,7 +82,7 @@ function save_users(medium, registry)
             nothing,
         )
         @assert !isnothing(r_retrieval)
-        data = merge(data, r_retrieval)
+        data["embeds"] = r_retrieval
         last_status = Dict()
         for x in data["items"]
             if x["medium"] != medium
@@ -92,7 +92,7 @@ function save_users(medium, registry)
         end
         data["last_status"] = last_status
         logp = logsoftmax(
-            registry["transformer.masked.$m.watch.weight"] * data["masked.$m"] +
+            registry["transformer.masked.$m.watch.weight"] * data["embeds"]["masked.$m"] +
             registry["transformer.masked.$m.watch.bias"],
         )
         # apply business rules
@@ -110,12 +110,12 @@ function save_users(medium, registry)
         end
         # ranking
         r_ranking = query_model(
-            Dict(k => data[k] for k in ["user", "items", "timestamp"]),
+            Dict(k => data[k] for k in ["user", "items", "timestamp", "embeds"]),
             medium,
             idxs,
         )
         @assert !isnothing(r_ranking)
-        data = merge(data, r_ranking)
+        merge!(data["embeds"], r_ranking)
         data["ranking_matchedids"] = idxs
         users[i] = data
     end
@@ -124,8 +124,8 @@ function save_users(medium, registry)
     for u in rets
         project!(u)
         record = Dict()
-        for k in ["masked.$m", "causal.retrieval.$m", "causal.ranking.$m"]
-            record[k] = Float32.(u[k])
+        for (k, v) in u["embeds"]
+            record[k] = Float32.(v)
         end
         record["ranking_matchedids"] = u["ranking_matchedids"]
         item = only(u["oos_items"])
@@ -295,16 +295,8 @@ function regress_ranking(users, registry, medium::Integer)
         end
         idx = u["matchedid"] + 1
         p_baseline = registry["transformer.causal.$m.rating_mean"]
-        p_masked = let
-            a = registry["transformer.masked.$m.watch.weight"][idx, :]
-            h = vcat(u["masked.$m"], a)
-            h =
-                registry["transformer.masked.$m.rating.weight.1"] * h +
-                registry["transformer.masked.$m.rating.bias.1"]
-            h = gelu(h)
-            registry["transformer.masked.$m.rating.weight.2"]' * h +
-            only(registry["transformer.masked.$m.rating.bias.2"])
-        end
+        p_masked =
+            u["masked.ranking.$m"][findfirst(==(u["matchedid"]), u["ranking_matchedids"])]
         p_causal =
             u["causal.ranking.$m"][findfirst(==(u["matchedid"]), u["ranking_matchedids"])]
         x_baseline[i] = p_baseline
@@ -343,17 +335,7 @@ function get_ranking_features(users, registry, medium::Integer)
         p[:, i] .= sum(registry["$m.retrieval.coefs"] .* [p_masked, p_causal])
         # rating feature
         r_baseline = fill(registry["transformer.causal.$m.rating_mean"], length(idxs))
-        r_masked = let
-            a = registry["transformer.masked.$m.watch.weight"][idxs, :]'
-            u_emb = repeat(u["masked.$m"], 1, length(idxs))
-            h = vcat(u_emb, a)
-            h =
-                registry["transformer.masked.$m.rating.weight.1"] * h .+
-                registry["transformer.masked.$m.rating.bias.1"]
-            h = gelu(h)
-            h' * registry["transformer.masked.$m.rating.weight.2"] .+
-            only(registry["transformer.masked.$m.rating.bias.2"])
-        end
+        r_masked = u["masked.ranking.$m"]
         r_causal = u["causal.ranking.$m"]
         r[:, i] .= sum(registry["$m.rating.coefs"] .* [r_baseline, r_masked, r_causal])
     end
@@ -423,7 +405,6 @@ function save_weights()
     for medium in [0, 1]
         save_users(medium, registry)
     end
-    save_users(0, registry)
     stop_server(port)
     for medium in [0, 1]
         users = JLD2.load("$datadir/regress.$medium.jld2")["users"]

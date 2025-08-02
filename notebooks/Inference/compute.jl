@@ -4,6 +4,7 @@ import Base64
 import Oxygen
 import UUIDs
 import Random
+import Serialization
 include("../Training/import_list.jl")
 include("../julia_utils/database.jl")
 include("../julia_utils/http.jl")
@@ -12,59 +13,21 @@ include("../julia_utils/multithreading.jl")
 include("../Finetune/embed.jl")
 
 const secretdir = "../../secrets"
-const PORT = parse(Int, ARGS[1])
+const PORT = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 8080
 const DATABASE_WRITE_URL = length(ARGS) >= 2 ? ARGS[2] : read("$secretdir/url.database.txt", String)
 const datadir = "../../data/finetune"
-const bluegreen = read("$datadir/bluegreen", String)
-const MODEL_URLS = (length(ARGS) >= 4) ? [ARGS[4]] : readlines("$secretdir/url.embed.$bluegreen.txt")
-MODEL_URL = first(MODEL_URLS)
-UPDATE_ROUTING_TABLE_TS::Float64 = -Inf
+const MODEL_URL = (length(ARGS) >= 3) ? ARGS[3] : read("$secretdir/url.embed.txt", String)
 include("render.jl")
 
-standardize(x::Dict) = Dict(lowercase(String(k)) => v for (k, v) in x)
 sanitize(x) = strip(x)
 
 const serverid = UUIDs.uuid4()
-
-Oxygen.@get "/update_routing_table" function update_routing_table(r::HTTP.Request)::HTTP.Response
-    status = update_routing_table() ? 200 : 404
-    HTTP.Response(status, [])
-end
-
-function update_routing_table()::Bool
-    global UPDATE_ROUTING_TABLE_TS
-    if time() - UPDATE_ROUTING_TABLE_TS < 30
-        return false
-    end
-    UPDATE_ROUTING_TABLE_TS = time()
-    for url in MODEL_URLS
-        try
-            r = HTTP.get("$url/ready", status_exception=false, connect_timeout=1)
-            if !HTTP.iserror(r)
-                global MODEL_URL
-                MODEL_URL = url
-                return true
-            end
-        catch e
-            @assert isa(e, HTTP.ConnectError)
-        end
-    end
-    false
-end
 
 function difftime(speedscope)
     tags = [x[1] for x in speedscope[2:end]]
     times = diff([x[2] for x in speedscope])
     total = speedscope[end][2] - speedscope[1][2]
     [total, serverid, collect(zip(tags, times))]
-end
-
-Oxygen.@get "/bluegreen" function read_bluegreen(r::HTTP.Request)::HTTP.Response
-    encoding = nothing
-    if occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
-        encoding = :gzip
-    end
-    HTTP.Response(200, encode(Dict("bluegreen" => bluegreen), :json, encoding)...)
 end
 
 Oxygen.@post "/autocomplete" function autocomplete(r::HTTP.Request)::HTTP.Response
@@ -318,7 +281,7 @@ function get_user_url(source, username, userid)
     end
 end
 
-function read_user_history(data::Dict)::HTTP.Response
+function read_user_history(data::Dict)
     source = data["source"]
     username = data["username"]
     tables = get(data, "tables", ["user_histories", "online_user_histories"])
@@ -343,23 +306,21 @@ function read_user_history(data::Dict)::HTTP.Response
         push!(dfs, df)
     end
     if isempty(dfs)
-        return HTTP.Response(404, [])
+        return HTTP.Response(404, []), false
     end
     df = reduce(vcat, dfs)
     sort!(df, :db_refreshed_at, rev=true)
     d = Dict(k => df[1, k] for k in DataFrames.names(df))
-    HTTP.Response(200, encode(d, :msgpack)...)
+    d, true
 end
 
-function add_user(d::Dict, medium::Integer)::HTTP.Response
-    r_read = read_user_history(Dict("source" => d["source"], "username" => d["username"]))
-    if HTTP.iserror(r_read)
-        return HTTP.Response(r_read.status, [])
+function add_user(d::Dict, medium::Int, speedscope)::HTTP.Response
+    d_read, ok = read_user_history(Dict("source" => d["source"], "username" => d["username"]))
+    if !ok
+        return d_read
     end
-    d_read = decode(r_read)
+    push!(speedscope, ("dbread", time()))
     data = decompress(d_read["data"])
-    data["user"] = standardize(data["user"])
-    data["items"] = standardize.(data["items"])
     u = import_user(d_read["source"], data, d_read["db_refreshed_at"])
     u["timestamp"] = time()
     usermap = data["usermap"]
@@ -372,11 +333,12 @@ function add_user(d::Dict, medium::Integer)::HTTP.Response
             "titleurl" => get_user_url(d["source"], usermap["username"], usermap["userid"]),
         ),
     )
+    push!(speedscope, ("import", time()))
     d_embed = query_model(u, medium, nothing)
     if isnothing(d_embed)
-        update_routing_table()
         return HTTP.Response(500, [])
     end
+    push!(speedscope, ("retrieval_model", time()))
     ret["embeds"] = d_embed
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
@@ -416,7 +378,7 @@ function decode_state(r::HTTP.Request)
     if isempty(d["state"])
         state = Dict("medium" => 1, "users" => [], "items" => [])
     else
-        state = MsgPack.unpack(Base64.base64decode(d["state"]))
+        state = Serialization.deserialize(IOBuffer(Base64.base64decode(d["state"])))
     end
     pagination = d["pagination"]
     encoding = get_preferred_encoding(r)
@@ -427,13 +389,15 @@ end
 
 function render_state(state, pagination, encoding, followup_action, speedscope)
     push!(speedscope, ("prerender", time()))
-    r, ok = render(state, pagination)
+    r, ok = render(state, pagination, speedscope)
     if !ok
         return r
     end
+    push!(speedscope, ("render", time()))
     view, total = r
+    state_str = let io = IOBuffer(); Serialization.serialize(io, state); Base64.base64encode(take!(io)) end
     ret = Dict(
-        "state" => Base64.base64encode(MsgPack.pack(state)),
+        "state" => state_str,
         "view" => view,
         "total" => total,
         "medium" => Dict(0 => "Manga", 1 => "Anime")[state["medium"]],
@@ -442,7 +406,7 @@ function render_state(state, pagination, encoding, followup_action, speedscope)
     header = first(vcat(state["users"], state["items"]))["header"]
     ret["titlename"] = header["titlename"]
     ret["titleurl"] = header["titleurl"]
-    push!(speedscope, ("state", time()))
+    push!(speedscope, ("finish", time()))
     ret["speedscope"] = difftime(speedscope)
     HTTP.Response(200, encode(ret, :json, encoding)...)
 end
@@ -454,10 +418,10 @@ Oxygen.@post "/add_user" function add_user_endpoint(r::HTTP.Request)::HTTP.Respo
     followup_action =
         Dict("endpoint" => "/refresh_user", "source" => source, "username" => username)
     r_embed =
-        add_user(Dict("source" => source, "username" => username), state["medium"])
+        add_user(Dict("source" => source, "username" => username), state["medium"], speedscope)
     if r_embed.status == 404 && refresh_user(source, username)
         r_embed =
-            add_user(Dict("source" => source, "username" => username), state["medium"])
+            add_user(Dict("source" => source, "username" => username), state["medium"], speedscope)
         followup_action = nothing
     end
     if HTTP.iserror(r_embed)
@@ -483,7 +447,7 @@ Oxygen.@post "/refresh_user" function refresh_user_endpoint(r::HTTP.Request)::HT
         return HTTP.Response(200, encode(Dict(), :json, encoding)...)
     end
     r_embed =
-        add_user(Dict("source" => source, "username" => username), state["medium"])
+        add_user(Dict("source" => source, "username" => username), state["medium"], speedscope)
     if HTTP.iserror(r_embed)
         return HTTP.Response(r_embed.status)
     end
@@ -528,7 +492,6 @@ Oxygen.@post "/set_media" function set_media_endpoint(r::HTTP.Request)::HTTP.Res
         end
         d_embed = query_model(u["user"], medium, nothing)
         if isnothing(d_embed)
-            update_routing_table()
             return HTTP.Response(500, [])
         end
         state["users"][i]["embeds"] = merge(state["users"][i]["embeds"], d_embed)
@@ -551,15 +514,18 @@ function compile_source(port::Integer, compile_source::AbstractString)
         ntasks = 1,
     )
     state = ""
-    pagination = Dict("offset" => 0, "limit" => 25)
+    pagination = Dict("offset" => 0, "limit" => 16)
     function apply_action(endpoint, action)
+        headers, data = encode(
+            Dict("state" => state, "action" => action, "pagination" => pagination),
+            :json,
+            :gzip,
+        )
+        headers["Accept-Encoding"] = rand(["gzip", "zstd"])
         r = HTTP.post(
             "http://localhost:$PORT/$endpoint",
-            encode(
-                Dict("state" => state, "action" => action, "pagination" => pagination),
-                :json,
-                :gzip,
-            )...,
+            headers,
+            data,
             status_exception = false,
             decompress = false,
         )
@@ -618,18 +584,15 @@ end
 
 function compile(port::Integer)
     logtag("STARTUP", "connecting to models")
-    while true
-        if !update_routing_table()
+    models_started = false
+    while !models_started
+        try
+            r = HTTP.get("$MODEL_URL/ready")
+            models_started = true
+        catch
             logtag("STARTUP", "waiting for models to startup")
             sleep(10)
-        else
-            break
         end
-    end
-    logtag("STARTUP", "/bluegreen")
-    r = HTTP.get("http://localhost:$PORT/bluegreen", status_exception = false)
-    if HTTP.iserror(r)
-        logerror("bluegreen error $(r.status)")
     end
     logtag("STARTUP", "loading memoize caches")
     get_autocomplete_items_map.([0, 1])

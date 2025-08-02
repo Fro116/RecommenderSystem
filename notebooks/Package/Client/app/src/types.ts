@@ -86,8 +86,7 @@ export const getBiggestImageUrl = (images: any): string => {
   return images || "";
 };
 
-// export const API_BASE = 'https://api.recs.moe';
-export const API_BASE = "http://eva-03:8080";
+export const API_BASE = 'https://api.recs.moe';
 
 export const SOURCE_MAP: Record<SourceType, string> = {
   MyAnimeList: "mal",
