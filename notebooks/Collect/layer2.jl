@@ -6,7 +6,7 @@ const LAYER_1_URLS = split(ARGS[3], ",")
 const DEFAULT_IMPERSONATE = parse(Bool, ARGS[4])
 const DEFAULT_TIMEOUT = parse(Int, ARGS[5])
 const USE_SHARED_IPS = parse(Bool, ARGS[6])
-const API_VERSION = "5.1.0"
+const API_VERSION = "5.2.0"
 
 import CSV
 import DataFrames
@@ -1252,14 +1252,34 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
                     relationType(version: 2)
                 }
             }
-            characters(sort: RELEVANCE) {
+            characters(sort: RELEVANCE, perPage: 25, page: {characters_page}) {
                 edges {
                     role
+                    name
                     node {
                         name {
                             full
+                            alternative
+                            alternativeSpoiler
                         }
+                        image {
+                            large
+                            medium
+                        }
+                        description
+                        gender
+                        dateOfBirth {
+                            year
+                            month
+                            day
+                        }
+                        age
+                        bloodType
+                        favourites
                     }
+                }
+                pageInfo {
+                    hasNextPage
                 }
             }
             staff(sort: RELEVANCE) {
@@ -1352,6 +1372,38 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
                     hasNextPage
                 }
             }
+            """,
+            "characters" => """
+            characters(sort: RELEVANCE, perPage: 25, page: {characters_page}) {
+                edges {
+                    role
+                    name
+                    node {
+                        name {
+                            full
+                            alternative
+                            alternativeSpoiler
+                        }
+                        image {
+                            large
+                            medium
+                        }
+                        description
+                        gender
+                        dateOfBirth {
+                            year
+                            month
+                            day
+                        }
+                        age
+                        bloodType
+                        favourites
+                    }
+                }
+                pageInfo {
+                    hasNextPage
+                }
+            }
             """
         )
         query = header
@@ -1369,7 +1421,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
     end
     details = Dict()
     relations = []
-    pages = Dict("reviews" => 1, "recommendations" => 1)
+    pages = Dict("reviews" => 1, "recommendations" => 1, "characters" => 1)
     while !isempty(pages)
         variables = Dict("id" => itemid, "MEDIA" => uppercase(medium))
         is_first_page = all(values(pages) .== 1)
@@ -1424,7 +1476,11 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
                 "isLocked" => optget(data, "isLocked"),
                 "tags" => optget(data, "tags"),
                 "charactersPeek" => [
-                    Dict("role" => x["role"], "name" => x["node"]["name"]["full"])
+                    Dict(
+                        "role" => x["role"],
+                        "name" => x["name"],
+                        "node" => x["node"],
+                    )
                     for x in get(data["characters"], "edges", [])
                 ],
                 "staffPeek" => [
@@ -1473,6 +1529,16 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
                         "itemid" => x["mediaRecommendation"]["id"],
                     ) for x in get(data["recommendations"], "nodes", []) if
                     !isnothing(x["mediaRecommendation"])
+                ]
+            end
+            if "characters" in keys(pages)
+                page_details["charactersPeek"] = [
+                    Dict(
+                        "role" => x["role"],
+                        "name" => x["name"],
+                        "node" => x["node"],
+                    )
+                    for x in get(data["characters"], "edges", [])
                 ]
             end
             page_relations = []
