@@ -6,7 +6,7 @@ const LAYER_1_URLS = split(ARGS[3], ",")
 const DEFAULT_IMPERSONATE = parse(Bool, ARGS[4])
 const DEFAULT_TIMEOUT = parse(Int, ARGS[5])
 const USE_SHARED_IPS = parse(Bool, ARGS[6])
-const API_VERSION = "5.2.0"
+const API_VERSION = "5.3.0"
 
 import CSV
 import DataFrames
@@ -560,7 +560,7 @@ function mal_get_media(resource::Resource, medium::String, itemid::Integer)
             "rating",
             "studios",
         ],
-        "manga" => ["num_volumes", "num_chapters", "authors", "serialization"],
+        "manga" => ["num_volumes", "num_chapters", "authors{first_name,last_name}", "serialization{name}"],
     )
     params = Dict("fields" => join(vcat(fields["common"], fields[medium]), ","))
     url = string(HTTP.URI("https://api.myanimelist.net/v2/$medium/$itemid"; query = params))
@@ -610,7 +610,7 @@ function mal_get_media(resource::Resource, medium::String, itemid::Integer)
         "num_chapters" => optget(json, "num_chapters"),
         "authors" =>
             "authors" in keys(json) ?
-            [Dict("id" => x["node"]["id"], "role" => x["role"]) for x in json["authors"]] : nothing,
+            [Dict("first_name" => x["node"]["first_name"], "last_name" => x["node"]["last_name"], "role" => x["role"]) for x in json["authors"]] : nothing,
     )
     # the mal API does not return manga relations for anime entries and vice versa        
     ret = Dict("details" => details)
