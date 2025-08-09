@@ -23,6 +23,7 @@ function save_url(key::String, url::String)
     for delay in ExponentialBackOff(;n=3)
         r = HTTP.get(url; status_exception=false)
         if HTTP.iserror(r)
+            logerror("failed to save $key $url")
             continue
         end
         write_db(key, String(r.body))
@@ -42,8 +43,8 @@ function save()
     save_url(
         "manami",
         (
-            "https://github.com/manami-project/" *
-            "anime-offline-database/raw/master/anime-offline-database.json"
+            "https://github.com/manami-project/anime-offline-database" *
+            "/releases/download/latest/anime-offline-database.json"
         ),
     )
     save_external("media_match_manual", "media_match_manual.csv")
