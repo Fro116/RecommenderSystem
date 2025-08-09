@@ -1,26 +1,15 @@
 import CSV
-import CSVFiles
 import CodecZstd
 import Memoize: @memoize
 
 const datadir = "../../../data/import/media"
 
 function read_csv(fn)
-    # file contains fields that are too big for the CSV.jl parser
-    df = DataFrames.DataFrame(CSVFiles.load(fn, type_detect_rows = 1_000_000))
-    if DataFrames.nrow(df) == 0
-        return CSV.read(fn, DataFrames.DataFrame) # to get column names
-    end
-    for col in DataFrames.names(df)
-        if eltype(df[!, col]) <: AbstractString
-            df[!, col] = replace(df[:, col], "" => missing)
-        end
-    end
-    df
+    CSV.read(fn, DataFrames.DataFrame, ntasks = 1)
 end
 
 function write_csv(fn, df)
-    CSV.write(fn, df, bufsize = 2^24)
+    CSV.write(fn, df)
 end
 
 @memoize function get_valid_ids(source::String, medium::String)

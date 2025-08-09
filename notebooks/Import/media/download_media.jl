@@ -1,10 +1,30 @@
+import CSV
+import CSVFiles
 import DataFrames
 import Glob
 import JSON3
 import ProgressMeter: @showprogress
 import StatsBase
 include("../../julia_utils/stdout.jl")
-include("common.jl")
+include("types.jl")
+
+const datadir = "../../../data/import/media"
+
+function read_csv(fn)
+    # file contains fields that are too big for the CSV.jl parser
+    df = DataFrames.DataFrame(CSVFiles.load(fn, type_detect_rows = 1_000_000))
+    if DataFrames.nrow(df) == 0
+        return CSV.read(fn, DataFrames.DataFrame) # to get column names
+    end
+    for col in DataFrames.names(df)
+        if eltype(df[!, col]) <: AbstractString
+            df[!, col] = replace(df[:, col], "" => missing)
+        end
+    end
+    df
+end
+
+write_csv(fn, df) = CSV.write(fn, df)
 
 function download_media(source::String)
     mkdir("$datadir/$source")
@@ -105,13 +125,36 @@ function import_media_relations()
     end
 end
 
+function as_dataframe(x::Item)
+    DataFrames.DataFrame(
+        "medium" => [x.medium],
+        "itemid" => [x.itemid],
+        "malid" => [x.malid],
+        "anilistid" => [x.anilistid],
+        "title" => [x.title],
+        "english_title" => [x.english_title],
+        "alternative_titles" => [JSON3.write(x.alternative_titles)],
+        "mediatype" => [x.mediatype],
+        "status" => [x.status],
+        "source" => [x.source],
+        "startdate" => [x.startdate],
+        "enddate" => [x.enddate],
+        "season" => [x.season],
+        "episodes" => [x.episodes],
+        "volumes" => [x.volumes],
+        "chapters" => [x.chapters],
+        "duration" => [x.duration],
+        "studios" => [JSON3.write(x.studios)],
+    )
+end
+
 function import_mal(medium)
     source = "mal"
     df = read_csv("$datadir/$source/$(source)_media.csv")
     df = filter(x -> x.medium == medium && !ismissing(x.db_last_success_at), df)
     function alternative_titles(x)
         if ismissing(x)
-            return missing
+            return []
         end
         titles = []
         for (k, v) in JSON3.read(x)
@@ -124,7 +167,7 @@ function import_mal(medium)
                 push!(titles, v)
             end
         end
-        JSON3.write(titles)
+        titles
     end
     function english_title(x)
         if ismissing(x)
@@ -231,73 +274,107 @@ function import_mal(medium)
     end
     function genre(x)
         if ismissing(x)
-            return missing
+            return []
         end
         json = JSON3.read(x)
         vals = [x["name"] for x in json]
         filter!(x -> x ∉ ["Eligible Titles for You Should Read This"], vals)
-        JSON3.write(vals)
+        vals
     end
     function recommendations(x)
+        records = Recommendation[]
         if ismissing(x)
-            return missing
+            return records
         end
-        records = []
         r = JSON3.read(x)
         for rec in r
-            d = Dict(
-                "username" => rec.username,
-                "itemid" => string(rec.itemid),
-                "count" => 1,
+            d = Recommendation(
+                username = rec.username,
+                itemid = string(rec.itemid),
+                text = rec.text,
+                count = 1,
             )
             push!(records, d)
         end
-        JSON3.write(records)
+        records
     end
     function reviews(x)
+        records = Review[]
         if ismissing(x)
-            return missing
+            return records
         end
-        records = []
         r = JSON3.read(x)
         for rec in r
-            d = Dict(
-                "username" => rec.username,
-                "text" => rec.text,
-                "count" => rec.upvotes,
-                "rating" => rec.rating,
+            d = Review(
+                username = rec.username,
+                text = rec.text,
+                count = rec.upvotes,
+                rating = rec.rating,
             )
             push!(records, d)
         end
-        JSON3.write(records)
+        records
     end
-    ret = DataFrames.DataFrame()
-    ret[!, "medium"] = df.medium
-    ret[!, "itemid"] = df.itemid
-    ret[!, "title"] = df.title
-    ret[!, "alternative_titles"] = alternative_titles.(df.alternative_titles)
-    ret[!, "english_title"] = english_title.(df.alternative_titles)
-    ret[!, "mediatype"] = mediatype.(df.media_type)
-    ret[!, "startdate"] = df.start_date
-    ret[!, "enddate"] = df.end_date
-    ret[!, "episodes"] = optnum.(df.num_episodes)
-    ret[!, "duration"] = duration.(df.average_episode_duration)
-    ret[!, "chapters"] = optnum.(df.num_chapters)
-    ret[!, "volumes"] = optnum.(df.num_volumes)
-    ret[!, "status"] = [status(x...) for x in zip(df.status, df.start_date)]
-    ret[!, "season"] = season.(df.start_season)
-    ret[!, "source"] = mediasource.(df.source)
-    ret[!, "studios"] = df.studios
-    ret[!, "malid"] = df.itemid
-    ret[!, "anilistid"] .= missing
-    ret[!, "synopsis"] = df.synopsis
-    ret[!, "genres"] = genre.(df.genres)
-    ret[!, "recommendations"] = recommendations.(df.userrec)
-    ret[!, "reviews"] = reviews.(df.reviews)
-    write_csv("$datadir/$(source)_$(medium).csv", ret)
+    function studios(x)
+        if ismissing(x)
+            return []
+        end
+        string.(JSON3.parse(x))
+    end
+    function authors(x, version)
+        if ismissing(x) || version < "5.2.1" # TODO don't gate
+            return []
+        end
+        ret = []
+        for y in JSON3.parse(x)
+            name = x["first_name"] * " " * x["last_name"]
+            push!(ret, name)
+        end
+        ret
+    end
+    optstring(x) = ismissing(x) ? missing : string(x)
+    items = Item[]
+    for x in eachrow(df)
+        item = Item(
+            medium = x.medium,
+            itemid = string(x.itemid),
+            malid = string(x.itemid),
+            anilistid = missing,
+            title = x.title,
+            english_title = english_title(x.alternative_titles),
+            alternative_titles = alternative_titles(x.alternative_titles),
+            mediatype = mediatype(x.media_type),
+            status = status(x.status, x.start_date),
+            source = mediasource(x.source),
+            startdate = x.start_date,
+            enddate = x.end_date,
+            season = season(x.start_season),
+            episodes = optstring(optnum(x.num_episodes)),
+            volumes = optstring(optnum(x.num_volumes)),
+            chapters = optstring(optnum(x.num_chapters)),
+            duration = duration(x.average_episode_duration),
+            synopsis = x.synopsis,
+            background = x.background,
+            characters = [],
+            genres = genre(x.genres),
+            tags = [],
+            studios = studios(x.studios),
+            authors = authors(x.authors, x.version),
+            recommendations = recommendations(x.userrec),
+            reviews = reviews(x.reviews),
+        )
+        push!(items, item)
+    end
+    open("$datadir/$(source)_$(medium).json", "w") do f
+        JSON3.write(f, to_dict(items))
+    end
+    open("$datadir/$(source)_$(medium).csv", "w") do f
+        CSV.write(f, reduce(vcat, as_dataframe.(items)))
+    end
+    items
 end
 
-function import_anilist(medium)
+function import_anilist(medium::String)::Vector{Item}
     source = "anilist"
     df = read_csv("$datadir/$source/$(source)_media.csv")
     df = filter(x -> x.medium == medium && !ismissing(x.db_last_success_at), df)
@@ -327,7 +404,7 @@ function import_anilist(medium)
         catch
         end
         r = [x for x in r if !isnothing(x)]
-        JSON3.write(r)
+        r
     end
     function english_title(title)
         try
@@ -423,8 +500,9 @@ function import_anilist(medium)
         get(source_map, x, missing)
     end
     function recommendations(x)
+        records = Recommendation[]
         if ismissing(x)
-            return missing
+            return records
         end
         records = []
         m = Dict("manga" => "MANGA", "anime" => "ANIME")[medium]
@@ -433,52 +511,131 @@ function import_anilist(medium)
             if rec["medium"] != m
                 continue
             end
-            push!(records, ("", string(rec.itemid), rec["rating"]))
-        end
-        JSON3.write(records)
-    end
-    function reviews(x)
-        if ismissing(x)
-            return missing
-        end
-        records = []
-        r = JSON3.read(x)
-        for rec in r
-            d = Dict(
-                "username" => string(rec.userId),
-                "text" => rec.summary * "\n" * rec.body,
-                "count" => rec.rating - (rec.ratingAmount - rec.rating),
-                "rating" => rec.score / 10,
+            d = Recommendation(
+                username = "",
+                itemid = string(rec.itemid),
+                text = "",
+                count = rec["rating"],
             )
             push!(records, d)
         end
-        JSON3.write(records)
+        records
     end
-    ret = DataFrames.DataFrame()
-    ret[!, "medium"] = df.medium
-    ret[!, "itemid"] = df.itemid
-    ret[!, "title"] = title.(df.title)
-    ret[!, "alternative_titles"] =
-        [alternative_titles(x...) for x in zip(df.title, df.synonyms)]
-    ret[!, "english_title"] = english_title.(df.title)
-    ret[!, "mediatype"] = mediatype.(df.mediatype)
-    ret[!, "startdate"] = date.(df.startdate)
-    ret[!, "enddate"] = date.(df.enddate)
-    ret[!, "episodes"] = df.episodes
-    ret[!, "duration"] = df.duration
-    ret[!, "chapters"] = df.chapters
-    ret[!, "volumes"] = df.volumes
-    ret[!, "status"] = [status(x...) for x in zip(df.status, df.startdate)]
-    ret[!, "season"] = [season(x...) for x in zip(df.seasonyear, df.season)]
-    ret[!, "source"] = mediasource.(df.source)
-    ret[!, "studios"] = df.studios
-    ret[!, "malid"] = df.malid
-    ret[!, "anilistid"] = df.itemid
-    ret[!, "synopsis"] = df.summary
-    ret[!, "genres"] = df.genres
-    ret[!, "recommendations"] = recommendations.(df.recommendationspeek)
-    ret[!, "reviews"] = reviews.(df.reviewspeek)
-    write_csv("$datadir/$(source)_$(medium).csv", ret)
+    function reviews(x)
+        records = Review[]
+        if ismissing(x)
+            return records
+        end
+        r = JSON3.read(x)
+        for rec in r
+            d = Review(
+                username = string(rec.userId),
+                rating = rec.score / 10,
+                count = rec.rating - (rec.ratingAmount - rec.rating),
+                text = rec.summary * "\n" * rec.body,
+            )
+            push!(records, d)
+        end
+        records
+    end
+    function character(x, version)
+        records = Character[]
+        if ismissing(x) || version < "5.2.0" # TODO remove version check
+            return records
+        end
+        r = JSON3.read(x)
+        for rec in r
+            if isnothing(rec.node.name.full)
+                continue
+            end
+            d = Character(
+                role = rec.role,
+                name = rec.node.name.full,
+                gender = something(rec.node.gender, missing),
+                age = something(rec.node.age, missing),
+                description = something(rec.node.description, missing),
+            )
+            push!(records, d)
+        end
+        records
+    end
+    function studios(x)
+        if ismissing(x)
+            return []
+        end
+        string.(JSON3.parse(x))
+    end
+    function authors(x)
+        if ismissing(x)
+            return []
+        end
+        ret = []
+        for e in JSON3.parse(x)
+            if e["role"] in [
+                "Story & Art",
+                "Story",
+                "Art",
+                "Director",
+                "Original Creator",
+                "Original Story",
+            ]
+                push!(ret, e["name"])
+            end
+        end
+        ret
+    end
+    function genres(x)
+        if ismissing(x)
+            return []
+        end
+        string.(JSON3.parse(x))
+    end
+    function tags(x)
+        if ismissing(x)
+            return []
+        end
+        [y["name"] for y in JSON3.parse(x)]
+    end
+    optstring(x) = ismissing(x) ? missing : string(x)
+    items = Item[]
+    for x in eachrow(df)
+        item = Item(
+            medium = x.medium,
+            itemid = string(x.itemid),
+            malid = optstring(x.malid),
+            anilistid = optstring(x.itemid),
+            title = title(x.title),
+            english_title = english_title(x.title),
+            alternative_titles = alternative_titles(x.title, x.synonyms),
+            mediatype = mediatype(x.mediatype),
+            status = status(x.status, x.startdate),
+            source = mediasource(x.source),
+            startdate = date(x.startdate),
+            enddate = date(x.enddate),
+            season = season(x.seasonyear, x.season),
+            episodes = optstring(x.episodes),
+            volumes = optstring(x.volumes),
+            chapters = optstring(x.chapters),
+            duration = x.duration,
+            synopsis = x.summary,
+            background = missing,
+            characters = character(x.characterspeek, x.version),
+            genres = genres(x.genres),
+            tags = tags(x.tags),
+            studios = studios(x.studios),
+            authors = authors(x.staffpeek),
+            recommendations = recommendations(x.recommendationspeek),
+            reviews = reviews(x.reviewspeek),
+        )
+        push!(items, item)
+    end
+    open("$datadir/$(source)_$(medium).json", "w") do f
+        JSON3.write(f, to_dict(items))
+    end
+    open("$datadir/$(source)_$(medium).csv", "w") do f
+        CSV.write(f, reduce(vcat, as_dataframe.(items)))
+    end
+    items
 end
 
 function import_kitsu(medium)
@@ -488,9 +645,9 @@ function import_kitsu(medium)
     function alternative_titles(x)
         try
             json = JSON3.read(x)
-            return JSON3.write([x for x in values(json) if !isempty(x)])
+            return [x for x in values(json) if !isempty(x)]
         catch
-            return missing
+            return []
         end
     end
     function english_title(x)
@@ -553,30 +710,52 @@ function import_kitsu(medium)
         end
         r
     end
-    ret = DataFrames.DataFrame()
-    ret[!, "medium"] = df.medium
-    ret[!, "itemid"] = df.itemid
-    ret[!, "title"] = df.canonicaltitle
-    ret[!, "alternative_titles"] = alternative_titles.(df.titles)
-    ret[!, "english_title"] = english_title.(df.titles)
-    ret[!, "mediatype"] = mediatype.(df.subtype)
-    ret[!, "startdate"] = date.(df.startdate)
-    ret[!, "enddate"] = date.(df.enddate)
-    ret[!, "episodes"] = df.episodecount
-    ret[!, "duration"] = df.episodelength
-    ret[!, "chapters"] = df.chaptercount
-    ret[!, "volumes"] = df.volumecount
-    ret[!, "status"] = status.(df.status)
-    ret[!, "season"] .= missing
-    ret[!, "source"] .= missing
-    ret[!, "studios"] .= missing
-    ret[!, "malid"] = df.malid
-    ret[!, "anilistid"] = df.anilistid
-    ret[!, "synopsis"] = df.synopsis
-    ret[!, "genres"] = df.genres
-    ret[!, "recommendations"] .= missing
-    ret[!, "reviews"] .= missing
-    write_csv("$datadir/$(source)_$(medium).csv", ret)
+    function genre(x)
+        if ismissing(x)
+            return []
+        end
+        JSON3.read(x)
+    end
+    optstring(x) = ismissing(x) ? missing : string(x)
+    items = Item[]
+    for x in eachrow(df)
+        item = Item(
+            medium = x.medium,
+            itemid = string(x.itemid),
+            malid = optstring(x.malid),
+            anilistid = optstring(x.anilistid),
+            title = x.canonicaltitle,
+            english_title = english_title(x.titles),
+            alternative_titles = alternative_titles(x.titles),
+            mediatype = mediatype(x.subtype),
+            status = status(x.status),
+            source = missing,
+            startdate = date(x.startdate),
+            enddate = date(x.enddate),
+            season = missing,
+            episodes = optstring(x.episodecount),
+            volumes = optstring(x.volumecount),
+            chapters = optstring(x.chaptercount),
+            duration = x.episodelength,
+            synopsis = x.synopsis,
+            background = missing,
+            characters = [],
+            genres = genre(x.genres),
+            tags = [],
+            studios = [],
+            authors = [],
+            recommendations = [],
+            reviews = [],
+        )
+        push!(items, item)
+    end
+    open("$datadir/$(source)_$(medium).json", "w") do f
+        JSON3.write(f, to_dict(items))
+    end
+    open("$datadir/$(source)_$(medium).csv", "w") do f
+        CSV.write(f, reduce(vcat, as_dataframe.(items)))
+    end
+    items
 end
 
 function import_animeplanet(medium)
@@ -585,9 +764,9 @@ function import_animeplanet(medium)
     df = filter(x -> x.medium == medium && !ismissing(x.db_last_success_at), df)
     function alternative_titles(x)
         if ismissing(x)
-            return missing
+            return []
         else
-            return JSON3.write([x])
+            return [x]
         end
     end
     function mediatitle(x)
@@ -668,20 +847,20 @@ function import_animeplanet(medium)
         fields = split(x, " - ")
         first(fields)
     end
-    function enddate(x)
-        if ismissing(x) || x == "TBA"
+    function enddate(date)
+        if ismissing(date) || date == "TBA"
             return missing
         end
-        fields = split(x, " - ")
+        fields = split(date, " - ")
         if length(fields) == 1
             return missing
         end
         @assert length(fields) == 2
-        x = fields[end]
-        if x == "?"
+        date = fields[end]
+        if date == "?"
             return missing
         end
-        x
+        date
     end
     function episodes(x)
         if ismissing(x) || medium != "anime"
@@ -710,7 +889,11 @@ function import_animeplanet(medium)
         if isempty(matches)
             return missing
         end
-        only(matches)
+        m = only(matches)
+        if ismissing(m)
+            return missing
+        end
+        parse(Float64, m)
     end
     function mangacount(x, name)
         if ismissing(x) || medium != "manga"
@@ -760,58 +943,92 @@ function import_animeplanet(medium)
         end
         missing
     end
-    function recommendations(x)
+    function studios(x)
         if ismissing(x)
-            return missing
+            return []
         end
-        records = []
-        r = JSON3.read(x)
-        for rec in r
-            push!(records, (rec.username, string(rec.itemid), 1))
-        end
-        JSON3.write(records)
+        string.(JSON3.parse(x))
     end
-    function reviews(x)
+    function tags(x)
         if ismissing(x)
-            return missing
+            return []
         end
-        records = []
+        vals = string.(JSON3.parse(x))
+        titlecase.(replace.(vals, "-" => " "))
+    end
+    function recommendations(x)
+        records = Recommendation[]
+        if ismissing(x)
+            return records
+        end
         r = JSON3.read(x)
         for rec in r
-            d = Dict(
-                "username" => rec.username,
-                "text" => rec.text,
-                "count" => rec.upvotes,
-                "rating" => rec.rating,
+            d = Recommendation(
+                username = rec.username,
+                itemid = string(rec.itemid),
+                text = rec.text,
+                count = 1,
             )
             push!(records, d)
         end
-        JSON3.write(records)
+        records
     end
-    ret = DataFrames.DataFrame()
-    ret[!, "medium"] = df.medium
-    ret[!, "itemid"] = df.itemid
-    ret[!, "title"] = mediatitle.(df.title)
-    ret[!, "alternative_titles"] = alternative_titles.(df.alttitle)
-    ret[!, "english_title"] .= missing
-    ret[!, "mediatype"] = mediatype.(df[:, mediatype_col[medium]], df.genres)
-    ret[!, "startdate"] = startdate.(df.year)
-    ret[!, "enddate"] = enddate.(df.year)
-    ret[!, "episodes"] = episodes.(df.type)
-    ret[!, "duration"] = duration.(df.type)
-    ret[!, "chapters"] = mangacount.(df.type, "Ch: ")
-    ret[!, "volumes"] = mangacount.(df.type, "Vol: ")
-    ret[!, "status"] .= missing
-    ret[!, "season"] = df.season
-    ret[!, "source"] = mediasource.(df.genres)
-    ret[!, "studios"] .= df.studios
-    ret[!, "malid"] .= missing
-    ret[!, "anilistid"] .= missing
-    ret[!, "synopsis"] = df.summary
-    ret[!, "genres"] = df.genres
-    ret[!, "recommendations"] = recommendations.(df.recommendations)
-    ret[!, "reviews"] = reviews.(df.reviews)
-    write_csv("$datadir/$(source)_$(medium).csv", ret)
+    function reviews(x)
+        records = Review[]
+        if ismissing(x)
+            return records
+        end
+        r = JSON3.read(x)
+        for rec in r
+            d = Review(
+                username = rec.username,
+                text = rec.text,
+                count = rec.upvotes,
+                rating = rec.rating,
+            )
+            push!(records, d)
+        end
+        records
+    end
+    items = Item[]
+    for x in eachrow(df)
+        item = Item(
+            medium = x.medium,
+            itemid = string(x.itemid),
+            malid = missing,
+            anilistid = missing,
+            title = mediatitle(x.title),
+            english_title = missing,
+            alternative_titles = alternative_titles(x.alttitle),
+            mediatype = mediatype(x[Symbol(mediatype_col[medium])], x.genres),
+            status = missing,
+            source = mediasource(x.genres),
+            startdate = startdate(x.year),
+            enddate = enddate(x.year),
+            season = x.season,
+            episodes = episodes(x.type),
+            volumes = mangacount(x.type, "Vol: "),
+            chapters = mangacount(x.type, "Ch: "),
+            duration = duration(x.type),
+            synopsis = x.summary,
+            background = missing,
+            characters = [],
+            genres = [],
+            tags = tags(x.genres),
+            studios = studios(x.studios),
+            authors = [],
+            recommendations = recommendations(x.recommendations),
+            reviews = reviews(x.reviews),
+        )
+        push!(items, item)
+    end
+    open("$datadir/$(source)_$(medium).json", "w") do f
+        JSON3.write(f, to_dict(items))
+    end
+    open("$datadir/$(source)_$(medium).csv", "w") do f
+        CSV.write(f, reduce(vcat, as_dataframe.(items)))
+    end
+    items
 end
 
 function download_items(source::String)
@@ -892,11 +1109,11 @@ function download_items(source::String)
 end
 
 function save_media()
-    rm(datadir, force = true, recursive = true)
-    mkpath(datadir)
-    Threads.@threads for source in ["external", "mal", "anilist", "kitsu", "animeplanet"]
-        download_media(source)
-    end
+   rm(datadir, force = true, recursive = true)
+   mkpath(datadir)
+   Threads.@threads for source in ["external", "mal", "anilist", "kitsu", "animeplanet"]
+       download_media(source)
+   end
     import_media_relations()
     for m in ["manga", "anime"]
         import_mal(m)
