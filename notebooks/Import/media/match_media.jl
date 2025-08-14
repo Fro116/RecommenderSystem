@@ -8,8 +8,14 @@ const itemtype = Tuple{String,Union{AbstractString,Int}}
 const edgetype = Tuple{itemtype,itemtype}
 
 @memoize function get_items(medium::String, source::String)
-    df = read_csv("$datadir/users/$source/$medium.csv")
-    Dict(df.itemid .=> df.count)
+    df = read_csv("$datadir/$source/$(source)_media.csv")
+    filter!(x -> x.medium == medium, df)
+    items = Dict(x => 0 for x in df.itemid)
+    counts = read_csv("$datadir/users/$source/$medium.csv")
+    for x in eachrow(counts)
+        items[x.itemid] = x.count
+    end
+    items
 end
 
 function get_edges(edgetype::String, medium::String, source1::String, source2::String)

@@ -322,12 +322,12 @@ function import_mal(medium)
         string.(JSON3.parse(x))
     end
     function authors(x, version)
-        if ismissing(x) || version < "5.2.1" # TODO don't gate
+        if ismissing(x) || version < "5.2.1" # TODO remove version gate
             return []
         end
         ret = []
         for y in JSON3.parse(x)
-            name = x["first_name"] * " " * x["last_name"]
+            name = y["first_name"] * " " * y["last_name"]
             push!(ret, name)
         end
         ret

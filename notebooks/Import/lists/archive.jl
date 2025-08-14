@@ -11,7 +11,6 @@ function get_directories(db::AbstractString)
 end
 
 function archive(datetag::AbstractString)
-    logtag("SAVE_LISTS", "archiving $datetag")
     tags = sort(get_directories("lists"))
     idx = findfirst(==(datetag), tags)
     @assert !isnothing(idx)
