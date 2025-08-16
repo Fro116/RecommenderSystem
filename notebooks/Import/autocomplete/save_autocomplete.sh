@@ -5,7 +5,7 @@ df="user_autocomplete"
 db="autocomplete_users"
 secretdir="../../../secrets"
 bucket=`cat $secretdir/gcp.bucket.txt`
-connstr=`tail -n 1 $secretdir/db.inference.txt | tr -d '\n'`
+connstr=`head -n 1 $secretdir/db.inference.txt | tr -d '\n'`
 
 mlr --csv cat $df.*.csv > $df.csv
 rm $df.*.csv

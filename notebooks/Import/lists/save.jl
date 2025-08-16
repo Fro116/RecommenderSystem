@@ -13,3 +13,4 @@ open("$datadir/latest", "w") do f
     write(f, datetag)
 end
 run(`rclone --retries=10 copyto $datadir/latest r2:rsys/database/lists/latest`)
+logtag("SAVE_LISTS", "finished $datetag")

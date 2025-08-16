@@ -19,20 +19,20 @@ function download_data(datetag::AbstractString)
         write(f, datetag)
     end
     tag = read("$datadir/list_tag", String)
-    run(`rclone --retries=10 copyto r2:rsys/database/lists/$tag/histories.csv.zstd $datadir/histories.csv.zstd`)
+    run(
+        `rclone --retries=10 copyto r2:rsys/database/lists/$tag/histories.csv.zstd $datadir/histories.csv.zstd`,
+    )
     run(`unzstd $datadir/histories.csv.zstd`)
     run(`rm $datadir/histories.csv.zstd`)
-    run(
-        `mlr --csv split -n 1000000 --prefix $datadir/histories $datadir/histories.csv`,
-    )
+    run(`mlr --csv split -n 1000000 --prefix $datadir/histories $datadir/histories.csv`)
     rm("$datadir/histories.csv")
     retrieval = "rclone --retries=10 copyto r2:rsys/database/import"
     files = vcat(
-        ["$m.groups.csv" for m in MEDIUMS],
         ["$(s)_$(m).csv" for s in SOURCES for m in MEDIUMS],
+        ["$m.groups.csv" for m in MEDIUMS],
         ["$(s)_media_relations.csv" for s in SOURCES],
         ["images.csv"],
-        ["item_text_embeddings.$m.json" for m in [0, 1]],
+        ["embeddings.json" for m in [0, 1]],
     )
     for fn in files
         cmd = "$retrieval/$fn $datadir/$fn"
@@ -42,7 +42,7 @@ end
 
 function get_media(source, medium::String)
     fn = "$datadir/$(source)_$(medium).csv"
-    df = CSV.read(fn, DataFrames.DataFrame, ntasks=1)
+    df = CSV.read(fn, DataFrames.DataFrame, ntasks = 1)
     parseint(x::Missing) = missing
     parseint(x::Real) = x
     parseint(x::AbstractString) = parse(Int, replace(x, "+" => ""))
@@ -72,40 +72,48 @@ end
 
 function get_media_groups(medium::AbstractString)
     fn = "$datadir/$medium.groups.csv"
-    groups = CSV.read(fn, DataFrames.DataFrame, types = Dict("itemid" => String), ntasks=1)
-    media = get_media(medium)
-    df = DataFrames.innerjoin(groups, media, on = [:source, :itemid])
+    groups = copy(JSON3.read("$datadir/embeddings.json"))
+    groups = [x for x in groups if x[:metadata][:medium] == medium]
+    mids = Random.shuffle(1:length(groups))
+    for i = 1:length(groups)
+        groups[i][:matchedid] = mids[i]
+    end
+    open("$datadir/$medium.json", "w") do f
+        JSON3.write(f, groups)
+    end
+    group_map = Dict()
+    for x in groups
+        for k in x[:keys]
+            group_map[k] = x[:matchedid]
+        end
+    end
+    counts = CSV.read("$datadir/$medium.groups.csv", DataFrames.DataFrame)
+    counts = Dict((x.source, x.itemid) => x.count for x in eachrow(counts))
+    df = get_media(medium)
+    df[:, :count] = [get(counts, (x.source, x.itemid), 0) for x in eachrow(df)]
     for c in [:episodes, :chapters, :volumes]
         df[!, c] = coalesce.(df[:, c], 0)
     end
-    sort!(df, :count, rev = true)
     df[!, :distinctid] .= 0
     df[!, :matchedid] .= 0
-    min_count = 100
     distinctid = 0
-    groupmap = Dict()
     for i = 1:DataFrames.nrow(df)
-        if df.count[i] < min_count
+        k = [medium, df.source[i], df.itemid[i]]
+        df[i, :matchedid] = get(group_map, k, 0)
+        if df[i, :matchedid] == 0
             df[i, :distinctid] = 0
-            df[i, :matchedid] = get(groupmap, df[i, :groupid], 0)
         else
             distinctid += 1
-            if df[i, :groupid] ∉ keys(groupmap)
-                groupmap[df[i, :groupid]] = length(groupmap) + 1
-            end
             df[i, :distinctid] = distinctid
-            df[i, :matchedid] = groupmap[df[i, :groupid]]
         end
     end
-    for c in [:distinctid, :matchedid]
-        shuffle_col!(df, c)
-    end
+    shuffle_col!(df, :distinctid)
     df
 end
 
 function get_idmaps()
     media = Dict(
-        k => CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1) for
+        k => CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks = 1) for
         (k, m) in [(0, "manga"), (1, "anime")]
     )
     matched2source = Dict()
@@ -132,7 +140,7 @@ function get_relations()
     medium_map = Dict("manga" => 0, "anime" => 1)
     relations = []
     for s in ["mal", "anilist", "kitsu", "animeplanet"]
-        df = CSV.read("$datadir/$(s)_media_relations.csv", DataFrames.DataFrame, ntasks=1)
+        df = CSV.read("$datadir/$(s)_media_relations.csv", DataFrames.DataFrame, ntasks = 1)
         for i = 1:DataFrames.nrow(df)
             skey = (medium_map[df.medium[i]], s, string(df.itemid[i]))
             tkey = (medium_map[df.target_medium[i]], s, string(df.target_id[i]))
@@ -154,7 +162,7 @@ function get_relations()
 end
 
 function num_items(m::AbstractString, source::AbstractString)
-    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks=1)
+    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks = 1)
     filter!(x -> x.source == source, df)
     n = length(Set(df.matchedid))
     logtag("IMPORT_DATA", "num_items($m, $source) = $n")
@@ -165,15 +173,18 @@ function gen_splits()
     min_items = 5
     max_items = Dict(s => num_items.(MEDIUMS, s) for s in SOURCES)
     test_perc = 0.01
-    @showprogress for (idx, f) in
-                      Iterators.enumerate(Glob.glob("$datadir/histories_*.csv"))
+    @showprogress for (idx, f) in Iterators.enumerate(Glob.glob("$datadir/histories_*.csv"))
         train_dir = "$datadir/users/training/$idx"
         test_dir = "$datadir/users/test/$idx"
         unused_dir = "$datadir/users/unused/$idx"
         mkpath.([train_dir, test_dir, unused_dir])
         df = Random.shuffle(read_csv(f))
         Threads.@threads for i = 1:DataFrames.nrow(df)
-            user = import_user(df.source[i], decompress(df.data[i]), parse(Float64, df.db_refreshed_at[i]))
+            user = import_user(
+                df.source[i],
+                decompress(df.data[i]),
+                parse(Float64, df.db_refreshed_at[i]),
+            )
             n_predict = 0
             n_items = zeros(Int, length(MEDIUMS))
             for x in user["items"]
@@ -186,7 +197,9 @@ function gen_splits()
                 outdir = unused_dir
             elseif any(n_items .> max_items[df.source[i]])
                 k = (df.source[i], df.username[i], df.userid[i])
-                logerror("skipping user $i: $k with $n_items > $(max_items[df.source[i]]) items")
+                logerror(
+                    "skipping user $i: $k with $n_items > $(max_items[df.source[i]]) items",
+                )
                 outdir = unused_dir
             else
                 outdir = rand() < test_perc ? test_dir : train_dir
@@ -213,14 +226,11 @@ function import_data(datetag::AbstractString)
     files = vcat(
         ["$m.csv" for m in MEDIUMS],
         ["list_tag", "images.csv", "media_relations.csv"],
-        ["item_text_embeddings.$m.json" for m in [0, 1]],
+        ["$m.json" for m in MEDIUMS],
     )
     for f in files
-        cmd = replace(
-            save_template,
-            "{INPUT}" => "$datadir/$f",
-            "{OUTPUT}" => "$datetag/$f",
-        )
+        cmd =
+            replace(save_template, "{INPUT}" => "$datadir/$f", "{OUTPUT}" => "$datetag/$f")
         run(`sh -c $cmd`)
     end
 end

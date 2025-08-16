@@ -5,7 +5,7 @@ df="new_histories.csv"
 db="user_histories"
 secretdir="../../../secrets"
 bucket=`cat $secretdir/gcp.bucket.txt`
-connstr=`tail -n 1 $secretdir/db.inference.txt | tr -d '\n'`
+connstr=`head -n 1 $secretdir/db.inference.txt | tr -d '\n'`
 
 tail -n +2 $df > $df.headerless
 mv $df.headerless $df
