@@ -2,6 +2,16 @@ ALL_MEDIUMS = [0, 1]
 ALL_METRICS = ["watch", "rating"]
 
 
+def init_weights(module, std=0.006):
+    if isinstance(module, nn.Linear):
+        module.weight.data.normal_(mean=0.0, std=std)
+        if hasattr(module, "bias") and module.bias is not None:
+            module.bias.data.zero_()
+    elif isinstance(module, nn.Embedding):
+        module.weight.data.normal_(mean=0.0, std=std)
+        module.weight.data[-1].fill_(0)
+
+
 class MaskedEmbedding(nn.Module):
     """Supports using -1 as a masked value"""
 
@@ -11,7 +21,7 @@ class MaskedEmbedding(nn.Module):
         self.embedding = nn.Embedding(self.vocab_size, embed_dim)
 
     def forward(self, x):
-        return self.embedding(torch.where(x == -1, self.vocab_size-1, x))
+        return self.embedding(torch.where(x == -1, self.vocab_size - 1, x))
 
 
 class ActionEmbedding(nn.Module):
@@ -47,7 +57,9 @@ class ActionEmbedding(nn.Module):
         periodic_ts = torch.cat([2 * np.pi * periodic_ts / p for p in periods], dim=-1)
         periodic_ts = periodic_ts.to(torch.float32)
         # embed
-        time_emb = ((ts - min_ts) / (max_ts - min_ts)).to(torch.float32).reshape(*ts.shape, 1)
+        time_emb = (
+            ((ts - min_ts) / (max_ts - min_ts)).to(torch.float32).reshape(*ts.shape, 1)
+        )
         periodic_time_cos_emb = torch.cos(periodic_ts + self.periodic_time_cos)
         periodic_time_sin_emb = torch.sin(periodic_ts + self.periodic_time_sin)
         # actions
@@ -74,53 +86,40 @@ class ActionEmbedding(nn.Module):
 
 
 class ItemEmbedding(nn.Module):
-    def __init__(self, config):
-        super(ItemEmbedding, self).__init__()
-        self.matchedid_embeddings = nn.ModuleList(
-            [
-                MaskedEmbedding(
-                    config["vocab_sizes"][f"{m}_matchedid"],
-                    config["embed_dim"],
-                )
-                for m in ALL_MEDIUMS
-            ]
-        )
-        self.distinctid_embeddings = nn.ModuleList(
-            [
-                MaskedEmbedding(
-                    config["vocab_sizes"][f"{m}_distinctid"],
-                    config["distinctid_dim"],
-                )
-                for m in ALL_MEDIUMS
-            ]
-        )
-        N = sum(
-            [
-                config["embed_dim"],  # matchedid
-                config["distinctid_dim"],  # distictid
-            ]
-        )
-        self.linear = nn.Linear(N, config["embed_dim"])
+    def __init__(self, config, medium):
+        super().__init__()
+        self.medium = medium
+        vocab_size = config["vocab_sizes"][f"{medium}_matchedid"]
+        embed_dim = config["embed_dim"]
+        text_dim = config["text_emb_size"]
+        self.matchedid_embedding = MaskedEmbedding(vocab_size, embed_dim)
+        self.text_embedding = MaskedEmbedding(vocab_size, text_dim)
+        for p in self.text_embedding.parameters():
+            p.requires_grad = False
+        self.projection_layer = nn.Linear(text_dim, embed_dim)
 
-    def forward(self, d):
-        matchedid_emb_0 = self.matchedid_embeddings[0](d["0_matchedid"])
-        matchedid_emb_1 = self.matchedid_embeddings[1](d["1_matchedid"])
-        matchedid_emb = torch.where(
-            (d["0_matchedid"] >= 0).unsqueeze(-1), matchedid_emb_0, matchedid_emb_1
-        )
-        distinctid_emb_0 = self.distinctid_embeddings[0](d["0_distinctid"])
-        distinctid_emb_1 = self.distinctid_embeddings[1](d["1_distinctid"])
-        distinctid_emb = torch.where(
-            (d["0_distinctid"] >= 0).unsqueeze(-1), distinctid_emb_0, distinctid_emb_1
-        )
-        emb = torch.cat(
-            (
-                matchedid_emb,
-                distinctid_emb,
-            ),
-            dim=-1,
-        )
-        return self.linear(emb)
+    def forward(self, x):
+        matched = self.matchedid_embedding(x)
+        text = self.text_embedding(x)
+        proj = self.projection_layer(text)
+        return matched + proj
+
+
+class DualItemEmbedding(nn.Module):
+    def __init__(self, item_embedding: ItemEmbedding):
+        super().__init__()
+        self.item_embedding = item_embedding
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        F = nn.functional
+        m1 = self.item_embedding.matchedid_embedding.embedding.weight
+        m2 = self.item_embedding.text_embedding.embedding.weight
+        W = self.item_embedding.projection_layer.weight
+        b = self.item_embedding.projection_layer.bias
+        logits1 = F.linear(x, m1)
+        logits2 = F.linear(x.matmul(W), m2)
+        bias = x.matmul(b).unsqueeze(-1)
+        return logits1 + logits2 + bias
 
 
 class Llama3(nn.Module):
@@ -165,14 +164,15 @@ class TransformerModel(nn.Module):
         super(TransformerModel, self).__init__()
         self.config = config
         self.action_embedding = ActionEmbedding(config)
-        self.item_embedding = ItemEmbedding(config)
+        self.item_embeddings = nn.ModuleList(
+            [ItemEmbedding(config, m) for m in ALL_MEDIUMS]
+        )
         self.transformers = Llama3(config)
 
         def create_lm_head(medium):
-            x = self.item_embedding.matchedid_embeddings[medium].embedding
-            weight_tied_linear = nn.Linear(*reversed(x.weight.shape))
-            x.weight = weight_tied_linear.weight
-            return nn.Sequential(weight_tied_linear, nn.LogSoftmax(dim=-1))
+            return nn.Sequential(
+                DualItemEmbedding(self.item_embeddings[medium]), nn.LogSoftmax(dim=-1)
+            )
 
         self.watch_heads = nn.ModuleList(
             [create_lm_head(medium) for medium in ALL_MEDIUMS]
@@ -189,11 +189,14 @@ class TransformerModel(nn.Module):
                 nn.GELU(),
                 nn.Linear(config["embed_dim"], 1),
             )
+        self.apply(init_weights)
+        self.load_pretrained_embeddings()
         self.empty_loss = nn.Parameter(torch.tensor(0.0))
         if config["finetune"]:
             for layer in [
                 self.action_embedding,
-                self.item_embedding,
+                self.item_embeddings[0],
+                self.item_embeddings[1],
                 self.watch_heads,
                 self.rating_head,
             ]:
@@ -205,6 +208,16 @@ class TransformerModel(nn.Module):
             self.forward = self.inference_forward
         else:
             assert False
+
+    def load_pretrained_embeddings(self):
+        for medium in [0, 1]:
+            weights = self.item_embeddings[medium].text_embedding.embedding.weight
+            weights.zero_()
+            m = {0: "manga", 1: "anime"}[medium]
+            with open(f'{args.datadir}/{m}.json', 'r') as f:
+                data = json.load(f)
+                for x in data:
+                    weights[x["matchedid"], :] = torch.tensor(x["embedding"])
 
     def mse(self, x, y, w):
         return (torch.square(x - y) * w).sum() / w.sum()
@@ -246,11 +259,7 @@ class TransformerModel(nn.Module):
             if k in ["userid", "rope_input_pos", "token_mask_ids"]:
                 item_tokens[k] = v
                 action_tokens[k] = v
-            elif (
-                k in ["time"]
-                or k.startswith("0.watch")
-                or k.startswith("1.watch")
-            ):
+            elif k in ["time"] or k.startswith("0.watch") or k.startswith("1.watch"):
                 action_tokens[k] = v
             elif (
                 k
@@ -280,7 +289,7 @@ class TransformerModel(nn.Module):
             mask = torch.zeros_like(d["userid"])
             for k in d:
                 if k.endswith(".weight"):
-                    mask += (d[k] > 0)
+                    mask += d[k] > 0
             mask = mask > 0
         else:
             mask = (
@@ -309,17 +318,23 @@ class TransformerModel(nn.Module):
     def to_embedding(self, d):
         if self.config["causal"]:
             e_a = self.action_embedding(d["action_tokens"])
-            e_i = self.item_embedding(d["item_tokens"])
+            e_i = torch.where(
+                (d["item_tokens"]["0_matchedid"] >= 0).unsqueeze(-1),
+                self.item_embeddings[0](d["item_tokens"]["0_matchedid"]),
+                self.item_embeddings[1](d["item_tokens"]["1_matchedid"]),
+            )
             e = self.interleave(e_a, e_i)
             userid = self.interleave(
                 *[d[k]["userid"] for k in ["action_tokens", "item_tokens"]]
             )
             if "rope_input_pos" in d["action_tokens"]:
                 rope_input_pos = self.interleave(
-                    2*d["action_tokens"]["rope_input_pos"], 2*d["item_tokens"]["rope_input_pos"]+1
+                    2 * d["action_tokens"]["rope_input_pos"],
+                    2 * d["item_tokens"]["rope_input_pos"] + 1,
                 )
                 token_mask_ids = self.interleave(
-                    d["action_tokens"]["token_mask_ids"], d["item_tokens"]["token_mask_ids"]
+                    d["action_tokens"]["token_mask_ids"],
+                    d["item_tokens"]["token_mask_ids"],
                 )
                 # TODO make a binary mask of duplicated item ids, shuffle them to the end, and cut
             else:
@@ -335,7 +350,9 @@ class TransformerModel(nn.Module):
                 return q_idx >= kv_idx
 
             def token_mask(b, h, q_idx, kv_idx):
-                return (token_mask_ids[b][kv_idx] == 0) | (token_mask_ids[b][q_idx] == token_mask_ids[b][kv_idx])
+                return (token_mask_ids[b][kv_idx] == 0) | (
+                    token_mask_ids[b][q_idx] == token_mask_ids[b][kv_idx]
+                )
 
             maskfn = and_masks(document_mask, causal_mask, token_mask)
             block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
@@ -351,7 +368,13 @@ class TransformerModel(nn.Module):
             block_mask = create_block_mask(
                 document_mask, B=m, H=None, Q_LEN=n, KV_LEN=n
             )
-            e = self.action_embedding(d) + self.item_embedding(d)
+            e_a = self.action_embedding(d)
+            e_i = torch.where(
+                (d["0_matchedid"] >= 0).unsqueeze(-1),
+                self.item_embeddings[0](d["0_matchedid"]),
+                self.item_embeddings[1](d["1_matchedid"]),
+            )
+            e = e_a + e_i
             e = self.transformers(e, block_mask, None)
             return e
 
@@ -411,9 +434,7 @@ class TransformerModel(nn.Module):
                         X = torch.cat(
                             (
                                 embed,
-                                self.item_embedding.matchedid_embeddings[medium](
-                                    positions.squeeze(dim=1)
-                                ),
+                                self.item_embeddings[medium](positions.squeeze(dim=1)),
                             ),
                             dim=-1,
                         )

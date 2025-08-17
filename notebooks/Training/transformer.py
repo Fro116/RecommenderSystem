@@ -1,5 +1,6 @@
 import argparse
 import datetime
+import json
 import glob
 import logging
 import os
@@ -468,14 +469,9 @@ def training_config():
         config["learning_rate"] = 2e-4
         config["finetune"] = True
         return config
-    num_items = {
-        x: int(pd.read_csv(f"{args.datadir}/{y}.csv").matchedid.max()) + 1
-        for (x, y) in {0: "manga", 1: "anime"}.items()
-    }
-    num_distinct_items = {
-        x: int(pd.read_csv(f"{args.datadir}/{y}.csv").distinctid.max()) + 1
-        for (x, y) in {0: "manga", 1: "anime"}.items()
-    }
+    def get_num_items(medium, col):
+        df = pd.read_csv(f"{args.datadir}/{medium}.csv", low_memory=False)
+        return int(df[col].max()) + 1
     min_ts = datetime.datetime.strptime("20000101", "%Y%m%d").timestamp()
     with open(os.path.join(args.datadir, "list_tag"), "r") as f:
         max_ts = datetime.datetime.strptime(f.read().strip(), "%Y%m%d").timestamp()
@@ -488,12 +484,13 @@ def training_config():
         "distinctid_dim": 128,
         "max_sequence_length": 1024,
         "vocab_sizes": {
-            "0_matchedid": num_items[0],
-            "1_matchedid": num_items[1],
-            "0_distinctid": num_distinct_items[0],
-            "1_distinctid": num_distinct_items[1],
+            "0_matchedid": get_num_items("manga", "matchedid"),
+            "1_matchedid": get_num_items("anime", "matchedid"),
+            "0_distinctid": get_num_items("manga", "distinctid"),
+            "1_distinctid": get_num_items("anime", "distinctid"),
             "status": 9,
         },
+        "text_emb_size": 3072,
         "min_ts": min_ts,
         "max_ts": max_ts,
         "rating_mean": 7.6287384,
@@ -524,6 +521,7 @@ def train():
         grad_accum_steps = 1
         if world_size == 1:
             # emulate training on a 8 gpu setup with gradient accumulation
+            # TODO check if grad_accum_steps is still useful
             single_gpu_batch_size = 8 if config["causal"] else 8
             assert local_batch_size % single_gpu_batch_size == 0
             grad_accum_steps = (8 * local_batch_size) // single_gpu_batch_size
@@ -537,6 +535,8 @@ def train():
             num_epochs = 1
             local_batch_size = 4
             debug_mode = True
+        elif world_size == 8:
+            local_batch_size *= 4
 
     def TransformerDataset(x):
         if config["finetune"]:
@@ -620,10 +620,10 @@ def train():
     )
     task_weights = make_task_weights()
     get_loss = lambda x: evaluate_metrics(local_rank, x, dataloaders["test"])
+    starting_epoch = 0 if checkpoint is None else checkpoint["epoch"] + 1
     initial_loss = get_loss(model)
     logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")
     stopper(wsum(initial_loss, task_weights))
-    starting_epoch = 0 if checkpoint is None else checkpoint["epoch"] + 1
     checkpoint_model(
         local_rank,
         global_rank,
@@ -694,6 +694,7 @@ def download(node, num_nodes):
         ]
         + [f"transformer/{x}/num_tokens.txt" for x in ["training", "test"]]
         + [f"{m}.csv" for m in ["manga", "anime"]]
+        + [f"{m}.json" for m in ["manga", "anime"]]
     )
     for data in files:
         os.system(f"{template}/{data} {args.datadir}/{data}")
