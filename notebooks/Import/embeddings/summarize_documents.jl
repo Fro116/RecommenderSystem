@@ -143,8 +143,8 @@ function queue_batch_job()
     t = Int(round(time()))
     payload = Dict(
         "displayName" => "batch_job_$t",
-        # TODO add model routing to use flash for less popular series
-        "model" => "publishers/google/models/gemini-2.5-pro",
+        # TODO add model routing to use pro for more popular series
+        "model" => "publishers/google/models/gemini-2.5-flash",
         "inputConfig" => Dict(
             "instancesFormat" => "jsonl",
             "gcsSource" =>
@@ -208,14 +208,12 @@ function save_generations()
             try
                 text = only(only(json[:response][:candidates])[:content][:parts])[:text]
                 modelname = json[:response][:modelVersion]
-                generations_cache
                 generations_cache[input_json] =
                     Dict(:text => text, :prompt => prompt, :modelname => modelname)
             catch
                 generations_cache[input_json] = nothing
                 fails += 1
             end
-            push!(generations, input_json)
         end
         if fails > 0
             failure_perc = fails / length(jsons)
@@ -242,7 +240,6 @@ function summarize_documents()
     upload_documents()
     num_jobs = upload_batch_job()
     logtag("[SUMMARIZE_DOCUMENTS]", "running batch job on $num_jobs documents")
-    @assert num_jobs == 0
     if num_jobs > 0
         batch_job_id = queue_batch_job()
         wait_on_batch_job(batch_job_id)

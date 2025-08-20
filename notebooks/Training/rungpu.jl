@@ -69,7 +69,6 @@ function stop_sfcompute()
     end
 end
 
-# returns true on success
 function start_sfcompute(nodes::Int, gpuhour_price::Real)::Bool
     @assert nodes <= 4 && gpuhour_price <= 3
     scaleid = read("../../secrets/sfcompute.scale.txt", String)
@@ -78,9 +77,9 @@ function start_sfcompute(nodes::Int, gpuhour_price::Real)::Bool
     run(`sf scale update $scaleid -p $gpuhour_price -n $ngpus -d 30m -y`)
     cluster = get_active_sf_cluster()
     while isnothing(cluster)
-        cluster = get_active_sf_cluster()
         logerror("wating for cluster to startup")
         sleep(60)
+        cluster = get_active_sf_cluster()
     end
     try
         cmds = [
