@@ -1,0 +1,427 @@
+# transformer.model.py
+
+import json
+
+import numpy as np
+import torch
+import torch.nn as nn
+
+with open("transformer_impl.py") as f:
+    exec(f.read())
+
+
+def init_weights(module, std=0.006):
+    if isinstance(module, nn.Linear):
+        module.weight.data.normal_(mean=0.0, std=std)
+        if hasattr(module, "bias") and module.bias is not None:
+            module.bias.data.zero_()
+    elif isinstance(module, nn.Embedding):
+        module.weight.data.normal_(mean=0.0, std=std)
+        module.weight.data[-1].fill_(0)
+
+
+class MaskedEmbedding(nn.Module):
+    """Supports using -1 as a masked value"""
+
+    def __init__(self, vocab_size, embed_dim):
+        super(MaskedEmbedding, self).__init__()
+        self.vocab_size = vocab_size + 1
+        self.embedding = nn.Embedding(self.vocab_size, embed_dim)
+
+    def forward(self, x):
+        return self.embedding(torch.where(x == -1, self.vocab_size - 1, x))
+
+
+class ActionEmbedding(nn.Module):
+    def __init__(self, config):
+        super(ActionEmbedding, self).__init__()
+        self.config = config
+        self.periodic_time_cos = nn.Parameter(torch.zeros(2))
+        self.periodic_time_sin = nn.Parameter(torch.zeros(2))
+        self.status_embedding = MaskedEmbedding(config["vocab_sizes"]["status"], 16)
+        N = sum(
+            [
+                1,  # time
+                2,  # periodic time cos
+                2,  # periodic time sin
+                1,  # has_rating
+                1,  # rating
+                16,  # status
+                1,  # progress
+            ]
+        )
+        self.linear = nn.Linear(N, config["embed_dim"])
+
+    def forward(self, d):
+        # linear time embedding
+        min_ts = self.config["min_ts"]
+        max_ts = self.config["max_ts"]
+        ts = d["time"].clip(min_ts)
+        # periodic time embedding
+        periodic_ts = ts.reshape(*ts.shape, 1)
+        secs_in_day = 86400
+        secs_in_week = secs_in_day * 7
+        periods = [secs_in_day, secs_in_week]
+        periodic_ts = torch.cat([2 * np.pi * periodic_ts / p for p in periods], dim=-1)
+        periodic_ts = periodic_ts.to(torch.float32)
+        # embed
+        time_emb = (
+            ((ts - min_ts) / (max_ts - min_ts)).to(torch.float32).reshape(*ts.shape, 1)
+        )
+        periodic_time_cos_emb = torch.cos(periodic_ts + self.periodic_time_cos)
+        periodic_time_sin_emb = torch.sin(periodic_ts + self.periodic_time_sin)
+        # actions
+        has_rating_emb = (d["rating"] != 0).int().reshape(*d["rating"].shape, 1)
+        rating_emb = d["rating"].reshape(*d["rating"].shape, 1)
+        rating_emb = has_rating_emb * (
+            (rating_emb - self.config["rating_mean"]) / self.config["rating_std"]
+        )
+        status_emb = self.status_embedding(d["status"])
+        progress_emb = d["progress"].reshape(*d["progress"].shape, 1)
+        emb = torch.cat(
+            (
+                time_emb,
+                periodic_time_cos_emb,
+                periodic_time_sin_emb,
+                has_rating_emb,
+                rating_emb,
+                status_emb,
+                progress_emb,
+            ),
+            dim=-1,
+        )
+        return self.linear(emb)
+
+
+class ItemEmbedding(nn.Module):
+    def __init__(self, config, medium):
+        super().__init__()
+        self.medium = medium
+        vocab_size = config["vocab_sizes"][f"{medium}_matchedid"]
+        embed_dim = config["embed_dim"]
+        text_dim = config["text_emb_size"]
+        self.matchedid_embedding = MaskedEmbedding(vocab_size, embed_dim)
+        self.text_embedding = MaskedEmbedding(vocab_size, text_dim)
+        for p in self.text_embedding.parameters():
+            p.requires_grad = False
+        self.projection_layer = nn.Linear(text_dim, embed_dim)
+
+    def forward(self, x):
+        matched = self.matchedid_embedding(x)
+        text = self.text_embedding(x)
+        proj = self.projection_layer(text)
+        return matched + proj
+
+
+class DualItemEmbedding(nn.Module):
+    def __init__(self, item_embedding: ItemEmbedding):
+        super().__init__()
+        self.item_embedding = item_embedding
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        F = nn.functional
+        m1 = self.item_embedding.matchedid_embedding.embedding.weight
+        m2 = self.item_embedding.text_embedding.embedding.weight
+        W = self.item_embedding.projection_layer.weight
+        b = self.item_embedding.projection_layer.bias
+        logits1 = F.linear(x, m1)
+        logits2 = F.linear(x.matmul(W), m2)
+        bias = x.matmul(b).unsqueeze(-1)
+        return logits1 + logits2 + bias
+
+
+class TransformerModel(nn.Module):
+    def __init__(self, config):
+        super(TransformerModel, self).__init__()
+        self.config = config
+        self.all_mediums = [0, 1]
+        self.all_metrics = ["watch", "rating"]
+        self.action_embedding = ActionEmbedding(config)
+        self.item_embeddings = nn.ModuleList(
+            [ItemEmbedding(config, m) for m in self.all_mediums]
+        )
+        transformer_config = TransformerStackConfig()
+        transformer_config.causal = config["causal"]
+        self.transformers = TransformerStack(transformer_config)
+
+        def create_lm_head(medium):
+            return nn.Sequential(
+                DualItemEmbedding(self.item_embeddings[medium]), nn.LogSoftmax(dim=-1)
+            )
+
+        self.watch_heads = nn.ModuleList(
+            [create_lm_head(medium) for medium in self.all_mediums]
+        )
+        if config["causal"]:
+            self.rating_head = nn.Sequential(
+                nn.Linear(config["embed_dim"], config["embed_dim"]),
+                nn.GELU(),
+                nn.Linear(config["embed_dim"], 1),
+            )
+        else:
+            self.rating_head = nn.Sequential(
+                nn.Linear(2 * config["embed_dim"], config["embed_dim"]),
+                nn.GELU(),
+                nn.Linear(config["embed_dim"], 1),
+            )
+        self.apply(init_weights)
+        if config["finetune"]:
+            for layer in [
+                self.action_embedding,
+                self.item_embeddings[0],
+                self.item_embeddings[1],
+                self.watch_heads,
+                self.rating_head,
+            ]:
+                for _, param in layer.named_parameters():
+                    param.requires_grad = False
+        if config["forward"] == "train":
+            self.forward = self.train_forward
+        elif config["forward"] == "inference":
+            self.forward = self.inference_forward
+        else:
+            assert False
+
+    def load_pretrained_embeddings(self, datadir):
+        for medium in [0, 1]:
+            weights = self.item_embeddings[medium].text_embedding.embedding.weight
+            weights.zero_()
+            m = {0: "manga", 1: "anime"}[medium]
+            with open(f"{datadir}/{m}.json", "r") as f:
+                data = json.load(f)
+                for x in data:
+                    weights[x["matchedid"], :] = torch.tensor(x["embedding"])
+
+    def touch_module_params(self, module):
+        loss = 0
+        for p in module.parameters():
+            loss += p.sum() * 0.0
+        return loss
+
+    def mse(self, x, y, w):
+        return (torch.square(x - y) * w).sum() / w.sum()
+
+    def moments(self, x, y, w):
+        return [
+            (torch.square(x - y) * w).sum() / w.sum(),
+            (torch.square(0 * x - y) * w).sum() / w.sum(),
+            (torch.square(-1 * x - y) * w).sum() / w.sum(),
+        ]
+
+    def crossentropy(self, x, y, w):
+        return (-x * y * w).sum() / w.sum()
+
+    def interleave(self, x, y):
+        # interleave the tokens so that it goes x -> y -> x -> y, etc
+        dims = x.shape
+        if len(dims) == 2:
+            ret = torch.stack([x, y], dim=2)
+            ret = ret.reshape(dims[0], dims[1] * 2)
+            return ret
+        elif len(dims) == 3:
+            ret = torch.stack((x, y), dim=2)
+            ret = ret.reshape(dims[0], dims[1] * 2, dims[2])
+            return ret
+        else:
+            assert False
+
+    def shift_right(self, x):
+        y = torch.zeros_like(x)
+        y[..., 1:] = x[..., :-1]
+        return y
+
+    def split_tokens(self, d):
+        item_tokens = {}
+        action_tokens = {}
+        userid_mask = d["userid"] == self.shift_right(d["userid"])
+        for k, v in d.items():
+            if k in ["userid", "rope_input_pos", "token_mask_ids"]:
+                item_tokens[k] = v
+                action_tokens[k] = v
+            elif k in ["time"] or k.startswith("0.watch") or k.startswith("1.watch"):
+                action_tokens[k] = v
+            elif (
+                k
+                in [
+                    "0_matchedid",
+                    "0_distinctid",
+                    "1_matchedid",
+                    "1_distinctid",
+                ]
+                or k.startswith("0.rating")
+                or k.startswith("1.rating")
+                or k.startswith("0.status")
+                or k.startswith("1.status")
+            ):
+                item_tokens[k] = v
+            elif k in ["status", "rating", "progress"]:
+                action_tokens[k] = self.shift_right(v) * userid_mask
+            else:
+                assert False, k
+        return {
+            "item_tokens": item_tokens,
+            "action_tokens": action_tokens,
+        }
+
+    def mask_tokens(self, d):
+        if self.config["finetune"]:
+            mask = torch.zeros_like(d["userid"])
+            for k in d:
+                if k.endswith(".weight"):
+                    mask += d[k] > 0
+            mask = mask > 0
+        else:
+            mask = (
+                torch.rand(d["userid"].shape, device=d["userid"].device)
+                < self.config["mask_rate"]
+            )
+        for k in d:
+            if k.endswith(".position") or k.endswith(".label") or k.endswith(".weight"):
+                d[k][~mask] = 0
+            elif k in ["userid", "time"]:
+                pass  # don't mask
+            elif k in [
+                "0_matchedid",
+                "0_distinctid",
+                "1_matchedid",
+                "1_distinctid",
+                "status",
+            ]:
+                d[k][mask] = -1
+            elif k in ["rating", "progress"]:
+                d[k][mask] = 0
+            else:
+                assert False
+        return d
+
+    def to_embedding(self, d):
+        if self.config["causal"]:
+            e_a = self.action_embedding(d["action_tokens"])
+            e_i = torch.where(
+                (d["item_tokens"]["0_matchedid"] >= 0).unsqueeze(-1),
+                self.item_embeddings[0](d["item_tokens"]["0_matchedid"]),
+                self.item_embeddings[1](d["item_tokens"]["1_matchedid"]),
+            )
+            e = self.interleave(e_a, e_i)
+            userid = self.interleave(
+                *[d[k]["userid"] for k in ["action_tokens", "item_tokens"]]
+            )
+            if "rope_input_pos" in d["action_tokens"]:
+                input_pos = self.interleave(
+                    2 * d["action_tokens"]["rope_input_pos"],
+                    2 * d["item_tokens"]["rope_input_pos"] + 1,
+                )
+                # TODO use token_mask_ids
+                # token_mask_ids = self.interleave(
+                #     d["action_tokens"]["token_mask_ids"],
+                #     d["item_tokens"]["token_mask_ids"],
+                # )
+                # TODO make a binary mask of duplicated item ids, shuffle them to the end, and cut
+            else:
+                B, S, _ = e.shape
+                input_pos = torch.arange(S, device=e.device).unsqueeze(0).expand(B, -1)
+                # token_mask_ids = torch.zeros_like(userid)
+            e = self.transformers(embeddings=e, ids=userid, input_pos=input_pos)
+            return e
+        else:
+            userid = d["userid"]
+            e_a = self.action_embedding(d)
+            e_i = torch.where(
+                (d["0_matchedid"] >= 0).unsqueeze(-1),
+                self.item_embeddings[0](d["0_matchedid"]),
+                self.item_embeddings[1](d["1_matchedid"]),
+            )
+            e = e_a + e_i
+            B, S, _ = e.shape
+            input_pos = torch.arange(S, device=e.device).unsqueeze(0).expand(B, -1)
+            e = self.transformers(embeddings=e, ids=userid, input_pos=input_pos)
+            return e
+
+    def train_forward(self, d, evaluate):
+        if not self.config["finetune"]:
+            for k in d:
+                d[k] = d[k].reshape(-1, self.config["max_sequence_length"])
+        if self.config["causal"]:
+            d = self.split_tokens(d)
+        else:
+            d = self.mask_tokens(d)
+        e = self.to_embedding(d)
+        losses = []
+        for medium in self.all_mediums:
+            for metric in self.all_metrics:
+                if self.config["causal"]:
+                    if metric == "watch":
+                        w = d["action_tokens"][f"{medium}.{metric}.weight"]
+                        weights = self.interleave(w, w * 0)
+                        l = d["action_tokens"][f"{medium}.{metric}.label"]
+                        labels = self.interleave(l, l * 0)
+                        p = d["action_tokens"][f"{medium}.{metric}.position"]
+                        positions = self.interleave(p, p * 0)
+                    elif metric == "rating":
+                        w = d["item_tokens"][f"{medium}.{metric}.weight"]
+                        weights = self.interleave(w * 0, w)
+                        l = d["item_tokens"][f"{medium}.{metric}.label"]
+                        labels = self.interleave(l * 0, l)
+                        p = d["item_tokens"][f"{medium}.{metric}.position"]
+                        positions = self.interleave(p * 0, p)
+                    else:
+                        assert False
+                else:
+                    weights = d[f"{medium}.{metric}.weight"]
+                    labels = d[f"{medium}.{metric}.label"]
+                    positions = d[f"{medium}.{metric}.position"]
+                if not torch.is_nonzero(weights.sum()):
+                    head = (
+                        self.watch_heads[medium]
+                        if metric == "watch"
+                        else self.rating_head
+                    )
+                    losses.append(self.touch_module_params(head) + e.sum() * 0)
+                    continue
+                positions = positions.reshape(*positions.shape, 1)
+                bp = torch.nonzero(weights, as_tuple=True)
+                embed = e[bp[0], bp[1], :]
+                labels = labels[bp[0], bp[1]]
+                positions = positions[bp[0], bp[1]]
+                weights = weights[bp[0], bp[1]]
+                if metric == "watch":
+                    preds = (
+                        self.watch_heads[medium](embed)
+                        .gather(dim=-1, index=positions)
+                        .reshape(-1)
+                    )
+                    losses.append(self.crossentropy(preds, labels, weights))
+                elif metric == "rating":
+                    if self.config["causal"]:
+                        preds = self.rating_head(embed).reshape(-1)
+                    else:
+                        X = torch.cat(
+                            (
+                                embed,
+                                self.item_embeddings[medium](positions.squeeze(dim=1)),
+                            ),
+                            dim=-1,
+                        )
+                        preds = self.rating_head(X).reshape(-1)
+                    labels = labels - self.config["rating_mean"]
+                    if evaluate:
+                        losses.append(self.moments(preds, labels, weights))
+                    else:
+                        losses.append(self.mse(preds, labels, weights))
+                else:
+                    assert False
+        return losses
+
+    def inference_forward(self, d, task):
+        if self.config["causal"]:
+            d = self.split_tokens(d)
+        e = self.to_embedding(d)
+        if task == "retrieval":
+            return e
+        elif task == "ranking":
+            if self.config["causal"]:
+                return e, self.rating_head(e)
+            else:
+                return e
+        else:
+            assert False
