@@ -480,7 +480,7 @@ def training_config():
         "num_heads": 32,
         "num_kv_heads": 16,
         "embed_dim": 2048,
-        "intermediate_dim": None,  # TODO 8192
+        "intermediate_dim": 5632,
         "distinctid_dim": 128,
         "max_sequence_length": 1024,
         "vocab_sizes": {
@@ -500,12 +500,18 @@ def training_config():
         "learning_rate": 2e-4,
         "causal": args.modeltype == "causal",
         "mask_rate": 0.15,
+        "transformer_backend": "megatron",
+        "use_pretrained_embeddings": False, # TODO enable
+
     }
     return config
 
 
 def train():
+    config = training_config()
     init_process_group(backend="nccl")
+    if config["transformer_backend"] == "megatron":
+        parallel_state.initialize_model_parallel(tensor_model_parallel_size=1, pipeline_model_parallel_size=1)
     local_rank = int(os.environ["LOCAL_RANK"])
     local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
     global_rank = int(os.environ["RANK"])
@@ -513,7 +519,6 @@ def train():
     torch.cuda.set_device(local_rank)
     logger = get_logger(local_rank, "transformer")
     logger.setLevel(logging.DEBUG)
-    config = training_config()
     debug_mode = False
     if config["finetune"]:
         num_epochs = 8

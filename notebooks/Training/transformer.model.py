@@ -1,6 +1,9 @@
 ALL_MEDIUMS = [0, 1]
 ALL_METRICS = ["watch", "rating"]
 
+with open("transformer.megatron.py") as f:
+    exec(f.read())
+
 
 def init_weights(module, std=0.006):
     if isinstance(module, nn.Linear):
@@ -167,7 +170,12 @@ class TransformerModel(nn.Module):
         self.item_embeddings = nn.ModuleList(
             [ItemEmbedding(config, m) for m in ALL_MEDIUMS]
         )
-        self.transformers = Llama3(config)
+        if config["transformer_backend"] == "torchtune":
+            self.transformers = Llama3(config)
+        elif config["transformer_backend"] == "megatron":
+            self.transformers = TransformerStack(config)
+        else:
+            assert False
 
         def create_lm_head(medium):
             return nn.Sequential(
@@ -190,7 +198,8 @@ class TransformerModel(nn.Module):
                 nn.Linear(config["embed_dim"], 1),
             )
         self.apply(init_weights)
-        self.load_pretrained_embeddings()
+        if config["use_pretrained_embeddings"]:
+            self.load_pretrained_embeddings()
         self.empty_loss = nn.Parameter(torch.tensor(0.0))
         if config["finetune"]:
             for layer in [
@@ -340,43 +349,72 @@ class TransformerModel(nn.Module):
             else:
                 rope_input_pos = None
                 token_mask_ids = torch.zeros_like(userid)
-            # attention_masks
-            m, n = userid.shape
+            if self.config["transformer_backend"] == "torchtune":
+                # attention_masks
+                m, n = userid.shape
 
-            def document_mask(b, h, q_idx, kv_idx):
-                return userid[b][q_idx] == userid[b][kv_idx]
+                def document_mask(b, h, q_idx, kv_idx):
+                    return userid[b][q_idx] == userid[b][kv_idx]
 
-            def causal_mask(b, h, q_idx, kv_idx):
-                return q_idx >= kv_idx
+                def causal_mask(b, h, q_idx, kv_idx):
+                    return q_idx >= kv_idx
 
-            def token_mask(b, h, q_idx, kv_idx):
-                return (token_mask_ids[b][kv_idx] == 0) | (
-                    token_mask_ids[b][q_idx] == token_mask_ids[b][kv_idx]
-                )
+                def token_mask(b, h, q_idx, kv_idx):
+                    return (token_mask_ids[b][kv_idx] == 0) | (
+                        token_mask_ids[b][q_idx] == token_mask_ids[b][kv_idx]
+                    )
 
-            maskfn = and_masks(document_mask, causal_mask, token_mask)
-            block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
-            e = self.transformers(e, block_mask, rope_input_pos)
-            return e
+                maskfn = and_masks(document_mask, causal_mask, token_mask)
+                block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
+                e = self.transformers(e, block_mask, rope_input_pos)
+                return e
+            elif self.config["transformer_backend"] == "megatron":
+                m, n = userid.shape
+                userid_mask = userid.unsqueeze(1) == userid.unsqueeze(2)
+                token_mask = (token_mask_ids.unsqueeze(1) == token_mask_ids.unsqueeze(2)) | (token_mask_ids.unsqueeze(1) == 0)
+                mask = userid_mask & token_mask
+                if rope_input_pos is None:
+                    rope_input_pos = torch.arange(n, device=userid.device).expand(m, -1)
+                e = self.transformers(e, mask, rope_input_pos)
+                return e
+            else:
+                assert False
         else:
-            userid = d["userid"]
-            m, n = userid.shape
+            if self.config["transformer_backend"] == "torchtune":
+                userid = d["userid"]
+                m, n = userid.shape
 
-            def document_mask(b, h, q_idx, kv_idx):
-                return userid[b][q_idx] == userid[b][kv_idx]
+                def document_mask(b, h, q_idx, kv_idx):
+                    return userid[b][q_idx] == userid[b][kv_idx]
 
-            block_mask = create_block_mask(
-                document_mask, B=m, H=None, Q_LEN=n, KV_LEN=n
-            )
-            e_a = self.action_embedding(d)
-            e_i = torch.where(
-                (d["0_matchedid"] >= 0).unsqueeze(-1),
-                self.item_embeddings[0](d["0_matchedid"]),
-                self.item_embeddings[1](d["1_matchedid"]),
-            )
-            e = e_a + e_i
-            e = self.transformers(e, block_mask, None)
-            return e
+                block_mask = create_block_mask(
+                    document_mask, B=m, H=None, Q_LEN=n, KV_LEN=n
+                )
+                e_a = self.action_embedding(d)
+                e_i = torch.where(
+                    (d["0_matchedid"] >= 0).unsqueeze(-1),
+                    self.item_embeddings[0](d["0_matchedid"]),
+                    self.item_embeddings[1](d["1_matchedid"]),
+                )
+                e = e_a + e_i
+                e = self.transformers(e, block_mask, None)
+                return e
+            elif self.config["transformer_backend"] == "megatron":
+                userid = d["userid"]
+                m, n = userid.shape
+                mask = userid.unsqueeze(1) == userid.unsqueeze(2)
+                input_pos = torch.arange(n, device=userid.device).expand(m, -1)
+                e_a = self.action_embedding(d)
+                e_i = torch.where(
+                    (d["0_matchedid"] >= 0).unsqueeze(-1),
+                    self.item_embeddings[0](d["0_matchedid"]),
+                    self.item_embeddings[1](d["1_matchedid"]),
+                )
+                e = e_a + e_i
+                e = self.transformers(e, mask, input_pos)
+                return e
+            else:
+                assert False
 
     def train_forward(self, d, evaluate):
         if not self.config["finetune"]:
