@@ -158,6 +158,147 @@ class Llama3(nn.Module):
         x = self.norm(x)
         return x
 
+class MixtureOfExperts(nn.Module):
+    def __init__(
+        self,
+        embed_dim: int,
+        hidden_dim: int,
+        num_experts: int = 8,
+        top_k: int = 2,
+        loss_coef: float = 1e-2,
+    ):
+        super().__init__()
+        assert top_k <= num_experts
+        assert hidden_dim % top_k == 0
+        hidden_dim = hidden_dim // top_k
+        self.embed_dim = embed_dim
+        self.hidden_dim = hidden_dim
+        self.num_experts = num_experts
+        self.top_k = top_k
+        self.loss_coef = loss_coef
+        self.gate = nn.Linear(embed_dim, num_experts, bias=False)
+        self.experts = nn.ModuleList([
+            torchtune.modules.FeedForward(
+                gate_proj=nn.Linear(embed_dim, hidden_dim, bias=False),
+                down_proj=nn.Linear(hidden_dim, embed_dim, bias=False),
+                up_proj=nn.Linear(embed_dim, hidden_dim, bias=False),
+            ) for _ in range(num_experts)
+        ])
+
+    def forward(self, x: torch.Tensor):
+        original_shape = x.shape # [B, S, H]
+        num_tokens = original_shape[0] * original_shape[1]
+        x_flat = x.view(num_tokens, self.embed_dim)
+
+        router_logits = self.gate(x_flat)
+        routing_weights = F.softmax(router_logits, dim=-1, dtype=torch.float32)
+        top_k_weights, top_k_indices = torch.topk(routing_weights, self.top_k, dim=-1)
+        top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)
+        top_k_weights = top_k_weights.to(x.dtype)
+
+        mean_router_probs = routing_weights.mean(dim=0)
+        expert_mask = F.one_hot(top_k_indices, num_classes=self.num_experts).sum(dim=1)
+        fraction_tokens_per_expert = expert_mask.float().mean(dim=0)
+        aux_loss = self.loss_coef * self.num_experts * (fraction_tokens_per_expert * mean_router_probs).sum()
+
+        final_output = torch.zeros_like(x_flat)
+        for i in range(self.num_experts):
+            token_indices, k_choice = torch.where(top_k_indices == i)
+            if token_indices.numel() == 0:
+                continue
+            expert_input = x_flat[token_indices]
+            expert_weights = top_k_weights[token_indices, k_choice]
+            expert_output = self.experts[i](expert_input)
+            weighted_output = expert_output * expert_weights.unsqueeze(-1)
+            final_output.index_add_(0, token_indices, weighted_output)
+        output = final_output.view(original_shape)
+        return output, aux_loss
+
+class TransformerLayer(nn.Module):
+    def __init__(self, attn, mlp, sa_norm, mlp_norm):
+        super().__init__()
+        self.attn = attn
+        self.mlp = mlp
+        self.sa_norm = sa_norm or nn.Identity()
+        self.mlp_norm = mlp_norm or nn.Identity()
+
+    def forward(self, x, mask=None, input_pos=None):
+        h = self.sa_norm(x)
+        attn_out = self.attn(h, h, mask=mask, input_pos=input_pos)
+        h = attn_out + x
+        mlp_out = self.mlp(self.mlp_norm(h))
+        if isinstance(mlp_out, tuple):
+            mlp_out, aux_loss = mlp_out
+        else:
+            aux_loss = 0
+        out = h + mlp_out
+        return out, aux_loss
+
+
+class TransformerStack(nn.Module):
+    def __init__(self, config):
+        super(TransformerStack, self).__init__()
+        embed_dim = config["embed_dim"]
+        num_kv_heads = config["num_kv_heads"]
+        num_heads = config["num_heads"]
+        max_seq_len = config["max_sequence_length"]
+        if config["causal"]:
+            # we split each token into an item and action token
+            max_seq_len *= 2
+        hidden_dim = config["intermediate_dim"]
+        assert num_heads % num_kv_heads == 0
+        assert embed_dim % num_heads == 0
+        head_dim = embed_dim // num_heads
+        rope = torchtune.modules.RotaryPositionalEmbeddings(
+            dim=head_dim,
+            max_seq_len=max_seq_len,
+            base=500_000,
+        )
+        layers = nn.ModuleList()
+        for layer_idx in range(config["num_layers"]):
+            self_attn = torchtune.modules.MultiHeadAttention(
+                embed_dim=embed_dim,
+                num_heads=num_heads,
+                num_kv_heads=num_kv_heads,
+                head_dim=head_dim,
+                q_proj=nn.Linear(embed_dim, num_heads * head_dim, bias=False),
+                k_proj=nn.Linear(embed_dim, num_kv_heads * head_dim, bias=False),
+                v_proj=nn.Linear(embed_dim, num_kv_heads * head_dim, bias=False),
+                output_proj=nn.Linear(embed_dim, embed_dim, bias=False),
+                pos_embeddings=rope,
+                max_seq_len=max_seq_len,
+                attn_dropout=0,
+            )
+            if layer_idx % 2 == 0:
+                mlp = torchtune.modules.FeedForward(
+                    gate_proj=nn.Linear(embed_dim, hidden_dim, bias=False),
+                    down_proj=nn.Linear(hidden_dim, embed_dim, bias=False),
+                    up_proj=nn.Linear(embed_dim, hidden_dim, bias=False),
+                )
+            else:
+                mlp = MixtureOfExperts(
+                    embed_dim=embed_dim,
+                    hidden_dim=hidden_dim
+                )
+            layer = TransformerLayer(
+                attn=self_attn,
+                mlp=mlp,
+                sa_norm=torchtune.modules.RMSNorm(dim=embed_dim, eps=1e-5),
+                mlp_norm=torchtune.modules.RMSNorm(dim=embed_dim, eps=1e-5),
+            )
+            layers.append(layer)
+        self.rope = rope
+        self.layers = layers
+        self.norm = torchtune.modules.RMSNorm(dim=embed_dim, eps=1e-5)
+
+    def forward(self, x, mask, input_pos):
+        aux_losses = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+        for layer in self.layers:
+            x, aux_loss = layer(x, mask=mask, input_pos=input_pos)
+            aux_losses += aux_loss
+        x = self.norm(x)
+        return x
+
 
 class TransformerModel(nn.Module):
     def __init__(self, config):
@@ -167,7 +308,10 @@ class TransformerModel(nn.Module):
         self.item_embeddings = nn.ModuleList(
             [ItemEmbedding(config, m) for m in ALL_MEDIUMS]
         )
-        self.transformers = Llama3(config)
+        if args.moe:
+            self.transformers = TransformerStack(config)
+        else:
+            self.transformers = Llama3(config)
 
         def create_lm_head(medium):
             return nn.Sequential(
@@ -190,7 +334,8 @@ class TransformerModel(nn.Module):
                 nn.Linear(config["embed_dim"], 1),
             )
         self.apply(init_weights)
-        self.load_pretrained_embeddings()
+        if config["use_pretrained_embeddings"]:
+            self.load_pretrained_embeddings()
         self.empty_loss = nn.Parameter(torch.tensor(0.0))
         if config["finetune"]:
             for layer in [

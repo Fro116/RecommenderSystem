@@ -14,8 +14,10 @@ const mediums = [0, 1]
 const metrics = ["watch", "rating", "status"]
 const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
-const batch_size = 64 * 1024 # local_batch_size * max_sequence_length
+const batch_size = 128 * 1024 # local_batch_size * max_sequence_length
 const num_gpus = 32
+const mini = parse(Bool, ARGS[1]) # if true, subsample to half the data
+const transdir = mini ? "transformer_mini" : "transformer"
 
 include("../julia_utils/stdout.jl")
 include("history_tools.jl")
@@ -108,7 +110,7 @@ end
 
 function get_num_tokens(datasplit, shard)
     tokens = 0
-    fns = Glob.glob("$datadir/transformer/$datasplit/$shard/*.h5")
+    fns = Glob.glob("$datadir/$transdir/$datasplit/$shard/*.h5")
     for fn in fns
         HDF5.h5open(fn) do file
             tokens += length(file["userid"])
@@ -128,8 +130,8 @@ function pad_splits(datasplit, num_shards)
             "TRANSFORMER",
             "padding split $x with $num_padding tokens to reach $max_num_tokens tokens",
         )
-        infn = "$datadir/transformer/$datasplit/$x/1.h5"
-        outfn = "$datadir/transformer/$datasplit/$x/pad.h5"
+        infn = "$datadir/$transdir/$datasplit/$x/1.h5"
+        outfn = "$datadir/$transdir/$datasplit/$x/pad.h5"
         HDF5.h5open(outfn, "w") do outfile
             HDF5.h5open(infn) do file
                 for k in keys(file)
@@ -146,12 +148,15 @@ end
 function save_data(datasplit)
     num_shards = num_gpus
     users = sort(Glob.glob("$datadir/users/$datasplit/*/*.msgpack"))
+    if mini
+        users = [x for x in users if rand() < 0.5]
+    end
     while length(users) % num_shards != 0
         push!(users, rand(users))
     end
     Random.shuffle!(users)
     for shard = 1:num_shards
-        dest = mkpath("$datadir/transformer/$datasplit/$shard")
+        dest = mkpath("$datadir/$transdir/$datasplit/$shard")
         files =
             [x for (i, x) in Iterators.enumerate(users) if (i % num_shards) + 1 == shard]
         files = collect(Iterators.partition(Random.shuffle(files), 65_536))
@@ -174,7 +179,7 @@ function save_data(datasplit)
     end
     pad_splits(datasplit, num_shards)
     total_tokens = sum(get_num_tokens.(datasplit, 1:num_shards))
-    open("$datadir/transformer/$datasplit/num_tokens.txt", "w") do f
+    open("$datadir/$transdir/$datasplit/num_tokens.txt", "w") do f
         write(f, "$total_tokens")
     end
 end
@@ -183,11 +188,11 @@ function upload()
     template =
         raw"tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
     cmd =
-        replace(template, "{INPUT}" => "$datadir/transformer", "{OUTPUT}" => "transformer")
+        replace(template, "{INPUT}" => "$datadir/$transdir", "{OUTPUT}" => "$transdir")
     run(`sh -c $cmd`)
 end
 
-rm("$datadir/transformer", recursive = true, force = true)
+rm("$datadir/$transdir", recursive = true, force = true)
 save_data("test")
 save_data("training")
 upload()
