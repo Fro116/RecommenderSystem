@@ -20,21 +20,25 @@ function truncate_item!(item, p)
 end
 
 function truncate_items!(items)
-    max_prompt_tokens = 10_000
+    max_prompt_tokens = 4_000
     max_token_limit = 1e6
     chars_per_token = 4
     capacity = 0.95
     max_character_limit = (max_token_limit - max_prompt_tokens) * chars_per_token * capacity
     for (k, v) in items
+        truncated = false
         while length(JSON3.write(v)) > max_character_limit
             truncate_item!(v, 0.9)
+            truncated = true
+        end
+        if truncated
+            logtag("SUMMARIZE_DOCUMENTS", "truncating item $k")
         end
     end
 end
 
 function upload_documents()
     for medium in ["manga", "anime"]
-        prompt = read("$secretdir/gcp.prompt.txt", String)
         items = JSON3.read("$datadir/$medium.json", Dict)
         truncate_items!(items)
         mkpath("$datadir/$medium")
@@ -54,14 +58,14 @@ function upload_documents()
     run(`sh -c $cmd`)
 end
 
-function generate_input_json(prompt::String, filename::String)
+function generate_input_json(system_prompt::String, user_prompt::String, filename::String)
     Dict(
         "request" => Dict(
             "contents" => [
                 Dict(
                     "role" => "user",
                     "parts" => [
-                        Dict("text" => prompt),
+                        Dict("text" => user_prompt),
                         Dict(
                             "fileData" => Dict(
                                 "fileUri" => filename,
@@ -71,8 +75,23 @@ function generate_input_json(prompt::String, filename::String)
                     ],
                 ),
             ],
+            "systemInstruction" => Dict(
+                "role" => "system",
+                "parts" => [Dict("text" => system_prompt)]
+            ),
         ),
     )
+end
+
+function sanitize_key(json)
+    x = copy(json)
+    for k in [:reviews, :recommendations]
+        for y in x[k]
+            delete!(y, :count)
+        end
+        x[k] = Set(x[k])
+    end
+    x
 end
 
 function get_generations_cache()
@@ -94,17 +113,19 @@ end
 
 function upload_batch_job()
     bucket = read("$secretdir/gcp.bucket.txt", String)
-    prompt = read("$secretdir/gcp.prompt.txt", String)
+    system_prompt = read("$secretdir/gcp.prompt.system.txt", String)
+    user_prompt = read("$secretdir/gcp.prompt.user.txt", String)
     generations_cache = get_generations_cache()
+    generations_cache = Dict(sanitize_key(k) => v for (k, v) in generations_cache)
     jsons = []
     for medium in ["manga", "anime"]
         for fn in readdir("$datadir/$medium")
             input_json = JSON3.read("$datadir/$medium/$fn")
-            if input_json in keys(generations_cache)
+            if sanitize_key(input_json) in keys(generations_cache)
                 continue
             end
             filename = "$bucket/embeddings/documents/$medium/$fn"
-            json = generate_input_json(prompt, filename)
+            json = generate_input_json(system_prompt, user_prompt, filename)
             push!(jsons, json)
         end
     end
@@ -143,7 +164,6 @@ function queue_batch_job()
     t = Int(round(time()))
     payload = Dict(
         "displayName" => "batch_job_$t",
-        # TODO add model routing to use pro for more popular series
         "model" => "publishers/google/models/gemini-2.5-flash",
         "inputConfig" => Dict(
             "instancesFormat" => "jsonl",
@@ -201,7 +221,6 @@ function save_generations()
         fails = 0
         for json in jsons
             req = only(json[:request][:contents])
-            prompt = req[:parts][1][:text]
             input_fn = req[:parts][2][:fileData][:fileUri]
             medium, base = split(input_fn, "/")[end-1:end]
             input_json = copy(JSON3.read("$datadir/$medium/$base"))
@@ -209,7 +228,7 @@ function save_generations()
                 text = only(only(json[:response][:candidates])[:content][:parts])[:text]
                 modelname = json[:response][:modelVersion]
                 generations_cache[input_json] =
-                    Dict(:text => text, :prompt => prompt, :modelname => modelname)
+                    Dict(:text => text, :modelname => modelname)
             catch
                 generations_cache[input_json] = nothing
                 fails += 1

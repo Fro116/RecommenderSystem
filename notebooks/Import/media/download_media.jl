@@ -6,9 +6,65 @@ import JSON3
 import ProgressMeter: @showprogress
 import StatsBase
 include("../../julia_utils/stdout.jl")
-include("types.jl")
 
 const datadir = "../../../data/import/media"
+
+@kwdef struct Character
+    role::Union{String,Missing}
+    name::Union{String,Missing}
+    gender::Union{String,Missing}
+    age::Union{String,Missing}
+    description::Union{String,Missing}
+end
+
+@kwdef struct Recommendation
+    username::String
+    itemid::String
+    text::String
+    count::Int
+end
+
+@kwdef struct Review
+    username::String
+    text::String
+    count::Int
+    rating::Union{Float64,Missing}
+end
+
+@kwdef struct Item
+    medium::String
+    itemid::String
+    malid::Union{String,Missing}
+    anilistid::Union{String,Missing}
+    title::String
+    english_title::Union{String,Missing}
+    alternative_titles::Vector{String}
+    mediatype::Union{String,Missing}
+    status::Union{String,Missing}
+    source::Union{String,Missing}
+    startdate::Union{String,Missing}
+    enddate::Union{String,Missing}
+    season::Union{String,Missing}
+    episodes::Union{String,Missing}
+    volumes::Union{String,Missing}
+    chapters::Union{String,Missing}
+    duration::Union{Float64,Missing}
+    synopsis::Union{String,Missing}
+    background::Union{String,Missing}
+    characters::Vector{Character}
+    genres::Vector{String}
+    tags::Vector{String}
+    studios::Vector{String}
+    authors::Vector{String}
+    recommendations::Vector{Recommendation}
+    reviews::Vector{Review}
+end
+
+function to_dict(s::Union{Character, Recommendation, Review, Item})
+    Dict(k => getfield(s, to_dict(k)) for k in fieldnames(typeof(s)))
+end
+to_dict(s::Vector) = to_dict.(s)
+to_dict(s) = s
 
 function read_csv(fn)
     # file contains fields that are too big for the CSV.jl parser
@@ -1109,11 +1165,11 @@ function download_items(source::String)
 end
 
 function save_media()
-   rm(datadir, force = true, recursive = true)
-   mkpath(datadir)
-   Threads.@threads for source in ["external", "mal", "anilist", "kitsu", "animeplanet"]
-       download_media(source)
-   end
+    rm(datadir, force = true, recursive = true)
+    mkpath(datadir)
+    Threads.@threads for source in ["external", "mal", "anilist", "kitsu", "animeplanet"]
+        download_media(source)
+    end
     import_media_relations()
     for m in ["manga", "anime"]
         import_mal(m)

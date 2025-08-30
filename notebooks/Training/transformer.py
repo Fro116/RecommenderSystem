@@ -1,7 +1,7 @@
 import argparse
 import datetime
-import json
 import glob
+import json
 import logging
 import os
 import subprocess
@@ -231,7 +231,6 @@ def train_epoch(
     dataloader,
     optimizer,
     scheduler,
-    scaler,
     task_weights,
     grad_accum_steps,
 ):
@@ -249,13 +248,11 @@ def train_epoch(
                 training_losses[i] += float(tloss[i].detach()) * w
                 training_weights[i] += w
             loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss))) / grad_accum_steps
-        scaler.scale(loss).backward()
+        loss.backward()
         if (step + 1) % grad_accum_steps != 0:
             continue
-        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer)
-        scaler.update()
+        optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         scheduler.step()
         progress.update()
@@ -386,14 +383,12 @@ def checkpoint_model(
     model,
     optimizer,
     scheduler,
-    scaler,
     config,
     epoch,
     loss,
     task_weights,
     save,
     logger,
-    debug_mode,
 ):
     if local_rank != 0:
         return
@@ -408,13 +403,12 @@ def checkpoint_model(
                 "model": model.module._orig_mod.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
-                "scaler": scaler.state_dict(),
                 "config": config,
                 "epoch": epoch,
                 "loss": loss,
             }
             torch.save(checkpoint, f"{args.datadir}/transformer.{args.modeltype}.pt")
-            if global_rank == 0 and not debug_mode:
+            if global_rank == 0 and args.prod:
                 cmd = f"rclone --retries=10 copyto {args.datadir}/transformer.{args.modeltype}.pt r2:rsys/database/training/{list_tag}/transformer.{args.modeltype}.pt"
                 os.system(f"{cmd} &")
         else:
@@ -432,7 +426,7 @@ def checkpoint_model(
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
     if args.finetune is None:
         csv_fn = f"{args.datadir}/transformer.{args.modeltype}.csv"
-        create_csv = not os.path.exists(csv_fn)
+        create_csv = not os.path.exists(csv_fn) and args.prod
     else:
         csv_fn = f"{args.datadir}/transformer.{args.modeltype}.{args.finetune_medium}.finetune.csv"
         create_csv = epoch < 0
@@ -442,13 +436,13 @@ def checkpoint_model(
     with open(csv_fn, "a") as f:
         vals = [epoch, wsum(loss, task_weights)] + loss
         f.write(",".join([str(x) for x in vals]) + "\n")
-    if global_rank == 0 and not debug_mode and args.finetune is None:
+    if global_rank == 0 and args.prod and args.finetune is None:
         cmd = f"rclone --retries=10 copyto {args.datadir}/transformer.{args.modeltype}.csv r2:rsys/database/training/{list_tag}/transformer.{args.modeltype}.csv"
         os.system(f"{cmd} &")
 
 
-def upload(global_rank, logger, debug_mode):
-    if global_rank != 0 or args.finetune is not None or debug_mode:
+def upload(global_rank, logger):
+    if global_rank != 0 or args.finetune is not None or not args.prod:
         return
     logger.info("uploading model")
     with open(os.path.join(args.datadir, "list_tag"), "r") as f:
@@ -460,7 +454,7 @@ def upload(global_rank, logger, debug_mode):
         os.system(cmd)
 
 
-def training_config():
+def get_training_config():
     if args.finetune is not None:
         checkpoint = torch.load(
             f"{args.datadir}/transformer.{args.modeltype}.pt", weights_only=False, map_location="cpu"
@@ -468,6 +462,7 @@ def training_config():
         config = checkpoint["config"]
         config["learning_rate"] = 2e-4
         config["finetune"] = True
+        config["gpu_config"] = get_gpu_config()
         return config
     def get_num_items(medium, col):
         df = pd.read_csv(f"{args.datadir}/{medium}.csv", low_memory=False)
@@ -480,8 +475,8 @@ def training_config():
         "num_heads": 32,
         "num_kv_heads": 16,
         "embed_dim": 2048,
-        "intermediate_dim": None,  # TODO 8192
-        "distinctid_dim": 128,
+        "intermediate_dim": 5632,
+        # "distinctid_dim": 128, # deprecated
         "max_sequence_length": 1024,
         "vocab_sizes": {
             "0_matchedid": get_num_items("manga", "matchedid"),
@@ -500,9 +495,24 @@ def training_config():
         "learning_rate": 2e-4,
         "causal": args.modeltype == "causal",
         "mask_rate": 0.15,
+        "use_pretrained_embeddings": True,
+        "gpu_config": get_gpu_config(),
     }
+    if args.mini:
+        assert config["num_layers"] % 2 == 0
+        config["num_layers"] = config["num_layers"] // 2
     return config
 
+
+def get_gpu_config():
+    name = torch.cuda.get_device_name(0).lower()
+    if "h100" in name.lower():
+        return "H100"
+    elif "b200" in name.lower():
+        return "B200"
+    else:
+        assert int(os.environ["WORLD_SIZE"]) == 1
+        return "local"
 
 def train():
     init_process_group(backend="nccl")
@@ -512,36 +522,38 @@ def train():
     world_size = int(os.environ["WORLD_SIZE"])
     torch.cuda.set_device(local_rank)
     logger = get_logger(local_rank, "transformer")
-    logger.setLevel(logging.DEBUG)
-    config = training_config()
-    debug_mode = False
+    config = get_training_config()
+    gpu_config = config["gpu_config"]
     if config["finetune"]:
         num_epochs = 8
         local_batch_size = 32 if config["causal"] else 64
         grad_accum_steps = 1
-        if world_size == 1:
-            # emulate training on a 8 gpu setup with gradient accumulation
-            # TODO check if grad_accum_steps is still useful
-            single_gpu_batch_size = 8 if config["causal"] else 8
-            assert local_batch_size % single_gpu_batch_size == 0
-            grad_accum_steps = (8 * local_batch_size) // single_gpu_batch_size
-            local_batch_size = single_gpu_batch_size
+        assert gpu_config == "local"
+        # emulate training on a 8 gpu setup with gradient accumulation
+        # TODO check if grad_accum_steps is still useful
+        single_gpu_batch_size = 8 if config["causal"] else 8
+        assert local_batch_size % single_gpu_batch_size == 0
+        grad_accum_steps = (8 * local_batch_size) // single_gpu_batch_size
+        local_batch_size = single_gpu_batch_size
     else:
         num_epochs = 8 if config["causal"] else 64
-        local_batch_size = 16 if config["causal"] else 64
-        grad_accum_steps = 1
-        if world_size == 1:
-            logger.error("LOCAL DEBUG MODE ENABLED")
-            num_epochs = 1
-            local_batch_size = 4
-            debug_mode = True
-        elif world_size == 8:
-            local_batch_size *= 4
+        global_batch_size = 512 if config["causal"] else 2048
+        if gpu_config == "B200":
+            local_batch_size = 64 if config["causal"] else 128
+        elif gpu_config == "H100":
+            local_batch_size = 16 if config["causal"] else 64
+        elif gpu_config == "local":
+            local_batch_size = 4 if config["causal"] else 16
+        else:
+            assert False
+        assert global_batch_size % (world_size * local_batch_size) == 0
+        grad_accum_steps = global_batch_size // (world_size * local_batch_size)
 
     def TransformerDataset(x):
+        transdir = "transformer_mini" if args.mini else "transformer"
         if config["finetune"]:
             return FinetuneDataset(
-                f"{args.datadir}/transformer/{x}",
+                f"{args.datadir}/{transdir}/{x}",
                 local_rank,
                 local_world_size,
                 local_batch_size,
@@ -549,7 +561,7 @@ def train():
             )
         else:
             return PretrainDataset(
-                f"{args.datadir}/transformer/{x}",
+                f"{args.datadir}/{transdir}/{x}",
                 local_rank,
                 local_world_size,
                 tokens_per_batch=local_batch_size * config["max_sequence_length"],
@@ -582,7 +594,7 @@ def train():
         )
     else:
         checkpoint_fn = f"{args.datadir}/transformer.{args.modeltype}.pt"
-        if os.path.exists(checkpoint_fn):
+        if os.path.exists(checkpoint_fn) and args.prod:
             checkpoint = torch.load(
                 checkpoint_fn, weights_only=False, map_location=f"cuda:{local_rank}"
             )
@@ -603,14 +615,11 @@ def train():
         local_batch_size * world_size * config["max_sequence_length"],
         num_epochs,
     )
-    scaler = torch.amp.GradScaler(local_rank)
     if checkpoint is not None:
         logger.info(f"loading optimizer state from epoch {checkpoint['epoch']}")
         optimizer.load_state_dict(checkpoint["optimizer"])
-        scaler.load_state_dict(checkpoint["scaler"])
         scheduler.load_state_dict(checkpoint["scheduler"])
         del checkpoint["optimizer"]
-        del checkpoint["scaler"]
         del checkpoint["scheduler"]
 
     stopper = (
@@ -630,14 +639,12 @@ def train():
         model,
         optimizer,
         scheduler,
-        scaler,
         config,
         starting_epoch - 1,
         initial_loss,
         task_weights,
         config["finetune"],
         logger,
-        debug_mode,
     )
     for epoch in range(starting_epoch, num_epochs):
         training_loss = train_epoch(
@@ -646,7 +653,6 @@ def train():
             dataloaders["training"],
             optimizer,
             scheduler,
-            scaler,
             task_weights,
             grad_accum_steps,
         )
@@ -666,14 +672,12 @@ def train():
             model,
             optimizer,
             scheduler,
-            scaler,
             config,
             epoch,
             test_loss,
             task_weights,
             stopper.save_model,
             logger,
-            debug_mode,
         )
         if stopper.early_stop:
             break
@@ -681,35 +685,45 @@ def train():
         destroy_process_group()
     except Exception as e:
         logger.info(f"Destroying process group failed with {e}")
-    upload(global_rank, logger, debug_mode)
+    upload(global_rank, logger)
 
 
 def download(node, num_nodes):
     template = "tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto r2:rsys/database/training/$tag"
+    transdir = "transformer_mini" if args.mini else "transformer"
     files = (
-        [
-            "list_tag",
-            f"transformer.{args.modeltype}.pt",
-            f"transformer.{args.modeltype}.csv",
-        ]
-        + [f"transformer/{x}/num_tokens.txt" for x in ["training", "test"]]
+        ["list_tag"]
+        + [f"{transdir}/{x}/num_tokens.txt" for x in ["training", "test"]]
         + [f"{m}.csv" for m in ["manga", "anime"]]
         + [f"{m}.json" for m in ["manga", "anime"]]
     )
+    if args.prod:
+        files += [
+            "transformer.masked.pt",
+            "transformer.masked.csv",
+            "transformer.causal.pt",
+            "transformer.causal.csv",
+        ]
     for data in files:
         os.system(f"{template}/{data} {args.datadir}/{data}")
     with open(f"{args.datadir}/list_tag") as f:
         list_tag = f.read()
-    for x in ["training", "test"]:
-        cmd = f"rclone lsd r2:rsys/database/training/{list_tag}/transformer/{x} | wc -l"
-        res = subprocess.run(cmd, capture_output=True, text=True, shell=True)
-        parts = int(res.stdout)
-        assert parts % num_nodes == 0
-        for i in range(parts):
-            if i % num_nodes == node:
-                os.system(
-                    f"rclone --retries=10 copyto r2:rsys/database/training/{list_tag}/transformer/{x}/{i+1} {args.datadir}/transformer/{x}/{i+1}"
-                )
+    if num_nodes == 1:
+        os.system(
+            f"rclone --retries=10 copyto r2:rsys/database/training/{list_tag}/{transdir} {args.datadir}/{transdir}"
+        )
+    else:
+        for x in ["training", "test"]:
+            cmd = f"rclone lsd r2:rsys/database/training/{list_tag}/{transdir}/{x} | wc -l"
+            res = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+            parts = int(res.stdout)
+            assert parts % num_nodes == 0
+            cmds = []
+            for i in range(parts):
+                if i % num_nodes == node:
+                    os.system(
+                        f"rclone --retries=10 copyto r2:rsys/database/training/{list_tag}/{transdir}/{x}/{i+1} {args.datadir}/{transdir}/{x}/{i+1}"
+                    )
 
 
 parser = argparse.ArgumentParser()
@@ -718,6 +732,8 @@ parser.add_argument("--modeltype", type=str)
 parser.add_argument("--finetune", type=str, default=None)
 parser.add_argument("--finetune_medium", type=int, default=None)
 parser.add_argument("--download", metavar="N", type=int, nargs="+", default=None)
+parser.add_argument('--mini', action='store_true')
+parser.add_argument('--prod', action='store_true')
 args = parser.parse_args()
 
 if __name__ == "__main__":

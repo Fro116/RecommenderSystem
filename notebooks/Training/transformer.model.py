@@ -158,7 +158,6 @@ class Llama3(nn.Module):
         x = self.norm(x)
         return x
 
-
 class TransformerModel(nn.Module):
     def __init__(self, config):
         super(TransformerModel, self).__init__()
@@ -190,7 +189,8 @@ class TransformerModel(nn.Module):
                 nn.Linear(config["embed_dim"], 1),
             )
         self.apply(init_weights)
-        self.load_pretrained_embeddings()
+        if config["use_pretrained_embeddings"]:
+            self.load_pretrained_embeddings()
         self.empty_loss = nn.Parameter(torch.tensor(0.0))
         if config["finetune"]:
             for layer in [
@@ -356,8 +356,7 @@ class TransformerModel(nn.Module):
 
             maskfn = and_masks(document_mask, causal_mask, token_mask)
             block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
-            e = self.transformers(e, block_mask, rope_input_pos)
-            return e
+            return self.transformers(e, block_mask, rope_input_pos)
         else:
             userid = d["userid"]
             m, n = userid.shape
@@ -375,8 +374,7 @@ class TransformerModel(nn.Module):
                 self.item_embeddings[1](d["1_matchedid"]),
             )
             e = e_a + e_i
-            e = self.transformers(e, block_mask, None)
-            return e
+            return self.transformers(e, block_mask, None)
 
     def train_forward(self, d, evaluate):
         if not self.config["finetune"]:

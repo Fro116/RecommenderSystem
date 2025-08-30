@@ -71,14 +71,6 @@ function json_to_document(x)
     push!(doc_parts, "# Characters\n$character_str")
     review_str = join([y[:text] for y in first(x[:reviews], 4)], "\n")
     push!(doc_parts, "# Reviews\n$review_str")
-    recommendations = []
-    for y in first(x[:recommendations], 3)
-        title = y[:title]
-        reason = join(first(y[:reasons], 4), " ")
-        push!(recommendations, "- **$title** $reason")
-    end
-    recommendation_str = join(recommendations, "\n")
-    push!(doc_parts, "# Recommendations\n$recommendation_str")
     keyword_str = join(x[:tags], ", ")
     push!(doc_parts, "# Keywords\n$keyword_str")
     join(doc_parts, "\n\n")
@@ -92,7 +84,6 @@ function document_to_sections(x::String)
         "Analysis",
         "Characters",
         "Reviews",
-        "Recommendations",
         "Keywords",
         "Synopsis",
     ])
@@ -145,28 +136,26 @@ function sections_to_document(data_dict::Dict{String,String}, section_order::Vec
 end
 
 function document_to_chunks(text::String)
+    # TODO unchunk once embeddings models get >2048 context limit
     sections = document_to_sections(text)
     metadata = sections_to_document(
         sections,
-        ["Title", "Tagline", "Metadata", "Premise", "Keywords", "Characters"],
+        ["Title", "Metadata", "Keywords", "Synopsis", "Characters", "Premise"],
     )
     analysis = sections_to_document(
         sections,
         [
             "Title",
             "Tagline",
+            "Metadata",
             "Premise",
             "Analysis",
+            "Characters",
             "Reviews",
             "Keywords",
-            "Recommendations",
         ],
     )
-    synopsis = sections_to_document(
-        sections,
-        ["Title", "Tagline", "Synopsis", "Premise", "Characters"],
-    )
-    Dict("metadata" => metadata, "analysis" => analysis, "synopsis" => synopsis)
+    Dict("metadata" => metadata, "analysis" => analysis)
 end
 
 const secretdir = "../../../secrets"
@@ -195,7 +184,12 @@ function get_embedding(text::AbstractString, gcp_access_token::AbstractString)
         return ret, false
     end
     data = JSON3.read(ret.body)
-    Float32.(data["predictions"][1]["embeddings"]["values"]), true
+    embs = only(data["predictions"])["embeddings"]
+    if embs["statistics"]["truncated"]
+        num_tokens = embs["statistics"]["token_count"]
+        println("truncated embedding with $num_tokens tokens")
+    end
+    Float32.(embs["values"]), true
 end
 
 function get_embedding(text::AbstractString)
@@ -235,6 +229,8 @@ function save_embeddings()
     open("$datadir/embeddings.json", "w") do f
         JSON3.write(f, jsons)
     end
+    cmd = "rclone --retries=10 copyto $datadir/embeddings.json r2:rsys/database/import/embeddings.json"
+    run(`sh -c $cmd`)
 end
 
 save_embeddings()

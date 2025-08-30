@@ -2,32 +2,35 @@ import JSON3
 include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
 
-function write_entrypoint_yaml(modeltype::AbstractString, nodes::Int)
-    image = "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-devel"
+
+function write_yaml(;prod::Bool)
+    if prod
+        nodes = 4
+        finalcmds = ["./startup.sh"]
+        name = "prod"
+    else
+        nodes = 1
+        finalcmds = ["apt install tmux -y", "sleep 86400"]
+        name = "dev"
+    end
+    image = "nvcr.io/nvidia/pytorch:25.08-py3"
     envvars = readlines("../../secrets/r2.auth.txt")
     script = [
         "export NUM_NODES=$nodes",
-        "export MODELTYPE=$modeltype",
         "apt update",
         "apt install wget -y",
         "wget https://github.com/Fro116/RecommenderSystem/raw/main/notebooks/Training/entrypoint.sh -O startup.sh",
         "chmod +x startup.sh",
-        "./startup.sh",
+        finalcmds...,
     ]
     entrypoint = join(vcat(envvars, script), " && ")
     yaml = read("entrypoint.yaml", String)
-    yaml = replace(yaml, "{IMAGE}" => image, "{ENTRYPOINT}" => entrypoint, "{NODES}" => nodes, "{MODELTYPE}" => modeltype)
-    fn = "../../data/training/$modeltype.yaml"
+    yaml = replace(yaml, "{IMAGE}" => image, "{ENTRYPOINT}" => entrypoint, "{NODES}" => nodes)
+    fn = "../../data/training/$name.yaml"
     open(fn, "w") do f
         write(f, yaml)
     end
 end
-
-function prepare_sfcompute(nodes::Int)
-    for modeltype in ["causal", "masked"]
-        write_entrypoint_yaml(modeltype, nodes)
-    end
-end    
 
 function read_json(cmd::Cmd)
     text = try
@@ -105,16 +108,14 @@ function wait_sfcompute()
     finished = false
     while !finished
         finished = true
-        for modeltype in ["causal", "masked"]
-            print("rclone --retries=10 ls r2:rsys/database/training/$list_tag/transformer.$modeltype.finished")
-            success = read(
-                `rclone --retries=10 ls r2:rsys/database/training/$list_tag/transformer.$modeltype.finished`,
-                String,
-            )
-            if isempty(success)
-                finished = false
-                break
-            end
+        print("rclone --retries=10 ls r2:rsys/database/training/$list_tag/transformer.$modeltype.finished")
+        success = read(
+            `rclone --retries=10 ls r2:rsys/database/training/$list_tag/transformer.$modeltype.finished`,
+            String,
+        )
+        if isempty(success)
+            finished = false
+            break
         end
         if !finished
             logtag("[RUNGPU]", "waiting for models to finish")
@@ -127,7 +128,7 @@ end
 function pretrain()
     num_nodes = 4
     gpuhour_price = 2.5
-    prepare_sfcompute(num_nodes)
+    write_yaml(prod=true)
     success = start_sfcompute(num_nodes, gpuhour_price)
     if !sfcompute_success
         logerror("sfcompute training failed")
@@ -138,4 +139,5 @@ function pretrain()
     run(`rclone --retries=10 copyto ../../data/training/list_tag r2:rsys/database/training/latest`)
 end
 
+write_yaml(prod=false)
 pretrain()
