@@ -6,7 +6,7 @@ include("../julia_utils/multithreading.jl")
 function write_yaml(;prod::Bool)
     if prod
         nodes = 4
-        finalcmd = ["./startup.sh"]
+        finalcmds = ["./startup.sh"]
         name = "prod"
     else
         nodes = 1

@@ -167,6 +167,7 @@ class MixtureOfExperts(nn.Module):
         num_experts: int = 8,
         top_k: int = 2,
         loss_coef: float = 1e-2,
+        capacity_factor: float = 1.25,
     ):
         super().__init__()
         assert top_k <= num_experts
@@ -177,43 +178,68 @@ class MixtureOfExperts(nn.Module):
         self.num_experts = num_experts
         self.top_k = top_k
         self.loss_coef = loss_coef
+        self.capacity_factor = capacity_factor
+
         self.gate = nn.Linear(embed_dim, num_experts, bias=False)
-        self.experts = nn.ModuleList([
-            torchtune.modules.FeedForward(
-                gate_proj=nn.Linear(embed_dim, hidden_dim, bias=False),
-                down_proj=nn.Linear(hidden_dim, embed_dim, bias=False),
-                up_proj=nn.Linear(embed_dim, hidden_dim, bias=False),
-            ) for _ in range(num_experts)
-        ])
+        E, H, Hh = num_experts, embed_dim, hidden_dim
+        self.W_up   = nn.Parameter(torch.empty(E, H,  Hh))
+        self.W_gate = nn.Parameter(torch.empty(E, H,  Hh))
+        self.W_down = nn.Parameter(torch.empty(E, Hh, H))
 
     def forward(self, x: torch.Tensor):
-        original_shape = x.shape # [B, S, H]
-        num_tokens = original_shape[0] * original_shape[1]
-        x_flat = x.view(num_tokens, self.embed_dim)
+        B, S, H = x.shape
+        N = B * S
+        E = self.num_experts
+        K = self.top_k
+        Hh = self.hidden_dim
+        device = x.device
+        dtype = x.dtype
 
+        x_flat = x.reshape(N, H)
         router_logits = self.gate(x_flat)
-        routing_weights = F.softmax(router_logits, dim=-1, dtype=torch.float32)
-        top_k_weights, top_k_indices = torch.topk(routing_weights, self.top_k, dim=-1)
-        top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)
-        top_k_weights = top_k_weights.to(x.dtype)
+        routing_probs = F.softmax(router_logits, dim=-1, dtype=torch.float32)
+        topk_vals, topk_idx = torch.topk(routing_probs, K, dim=-1)
+        topk_vals = (topk_vals / topk_vals.sum(dim=-1, keepdim=True)).to(dtype)
+        mean_router_probs = routing_probs.mean(dim=0)
+        counts = torch.bincount(topk_idx.reshape(-1), minlength=E)
+        fraction_tokens_per_expert = counts.to(routing_probs.dtype) / float(N)
+        aux_loss = self.loss_coef * E * (fraction_tokens_per_expert * mean_router_probs).sum()
+        token_idx = torch.arange(N, device=device).unsqueeze(1).expand(N, K).reshape(-1)
+        expert_idx = topk_idx.reshape(-1)
+        weights    = topk_vals.reshape(-1)
 
-        mean_router_probs = routing_weights.mean(dim=0)
-        expert_mask = F.one_hot(top_k_indices, num_classes=self.num_experts).sum(dim=1)
-        fraction_tokens_per_expert = expert_mask.float().mean(dim=0)
-        aux_loss = self.loss_coef * self.num_experts * (fraction_tokens_per_expert * mean_router_probs).sum()
+        order = torch.argsort(expert_idx)
+        expert_idx = expert_idx[order]
+        token_idx  = token_idx[order]
+        weights    = weights[order]
+        per_e_counts = torch.bincount(expert_idx, minlength=E)
+        offsets = torch.zeros(E + 1, device=device, dtype=torch.long)
+        offsets[1:] = torch.cumsum(per_e_counts, dim=0)
+        total_assign = int(expert_idx.numel())
+        C = max(1, math.ceil(self.capacity_factor * total_assign / E))
+        starts = offsets[expert_idx]
+        positions = torch.arange(total_assign, device=device, dtype=torch.long)
+        ranks = positions - starts
+        keep = ranks < C
+        expert_idx = expert_idx[keep]
+        token_idx  = token_idx[keep]
+        weights    = weights[keep]
+        ranks      = ranks[keep]
 
-        final_output = torch.zeros_like(x_flat)
-        for i in range(self.num_experts):
-            token_indices, k_choice = torch.where(top_k_indices == i)
-            if token_indices.numel() == 0:
-                continue
-            expert_input = x_flat[token_indices]
-            expert_weights = top_k_weights[token_indices, k_choice]
-            expert_output = self.experts[i](expert_input)
-            weighted_output = expert_output * expert_weights.unsqueeze(-1)
-            final_output.index_add_(0, token_indices, weighted_output)
-        output = final_output.view(original_shape)
-        return output, aux_loss
+        EC = E * C
+        x_pad = x_flat.new_zeros((E, C, H))
+        flat_pos = expert_idx * C + ranks
+        x_pad.view(EC, H).index_copy_(0, flat_pos, x_flat.index_select(0, token_idx))
+        up   = torch.bmm(x_pad, self.W_up)
+        gate = torch.bmm(x_pad, self.W_gate)
+        act  = F.silu(gate) * up
+        y_pad = torch.bmm(act, self.W_down)
+        y_flat = y_pad.view(EC, H).index_select(0, flat_pos)
+        y_flat = y_flat * weights.unsqueeze(-1)
+        out_flat = torch.zeros_like(x_flat)
+        out_flat.scatter_add_(0, token_idx.unsqueeze(-1).expand_as(y_flat), y_flat)
+        out = out_flat.view(B, S, H)
+        return out, aux_loss
 
 class TransformerLayer(nn.Module):
     def __init__(self, attn, mlp, sa_norm, mlp_norm):
@@ -257,20 +283,40 @@ class TransformerStack(nn.Module):
         )
         layers = nn.ModuleList()
         for layer_idx in range(config["num_layers"]):
+            if config["finetune"]:
+                q_proj = torchtune.modules.peft.LoRALinear(
+                    embed_dim,
+                    num_heads * head_dim,
+                    rank=8,
+                    alpha=16,
+                    dropout=0.1
+                )
+                k_proj = nn.Linear(embed_dim, num_kv_heads * head_dim, bias=False)
+                v_proj = torchtune.modules.peft.LoRALinear(
+                    embed_dim,
+                    num_kv_heads * head_dim,
+                    rank=8,
+                    alpha=16,
+                    dropout=0.1
+                )
+            else:
+                q_proj = nn.Linear(embed_dim, num_heads * head_dim, bias=False)
+                k_proj = nn.Linear(embed_dim, num_kv_heads * head_dim, bias=False)
+                v_proj = nn.Linear(embed_dim, num_kv_heads * head_dim, bias=False)
             self_attn = torchtune.modules.MultiHeadAttention(
                 embed_dim=embed_dim,
                 num_heads=num_heads,
                 num_kv_heads=num_kv_heads,
                 head_dim=head_dim,
-                q_proj=nn.Linear(embed_dim, num_heads * head_dim, bias=False),
-                k_proj=nn.Linear(embed_dim, num_kv_heads * head_dim, bias=False),
-                v_proj=nn.Linear(embed_dim, num_kv_heads * head_dim, bias=False),
+                q_proj=q_proj,
+                k_proj=k_proj,
+                v_proj=v_proj,
                 output_proj=nn.Linear(embed_dim, embed_dim, bias=False),
                 pos_embeddings=rope,
                 max_seq_len=max_seq_len,
                 attn_dropout=0,
             )
-            if layer_idx % 2 == 0:
+            if layer_idx < 1:
                 mlp = torchtune.modules.FeedForward(
                     gate_proj=nn.Linear(embed_dim, hidden_dim, bias=False),
                     down_proj=nn.Linear(hidden_dim, embed_dim, bias=False),
@@ -291,8 +337,11 @@ class TransformerStack(nn.Module):
         self.rope = rope
         self.layers = layers
         self.norm = torchtune.modules.RMSNorm(dim=embed_dim, eps=1e-5)
+        if config["finetune"]:
+            set_trainable_params(self.layers, get_adapter_params(self.layers))
 
     def forward(self, x, mask, input_pos):
+        # TODO should we norm x to make resid stream cleaner
         aux_losses = torch.tensor(0.0, device=x.device, dtype=x.dtype)
         for layer in self.layers:
             x, aux_loss = layer(x, mask=mask, input_pos=input_pos)

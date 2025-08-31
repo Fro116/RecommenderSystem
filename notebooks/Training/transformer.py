@@ -3,6 +3,7 @@ import datetime
 import glob
 import json
 import logging
+import math
 import os
 import subprocess
 import time
@@ -484,7 +485,7 @@ def get_training_config():
         "num_kv_heads": 16,
         "embed_dim": 2048,
         "intermediate_dim": 5632,
-        "distinctid_dim": 128,
+        # "distinctid_dim": 128, # deprecated
         "max_sequence_length": 1024,
         "vocab_sizes": {
             "0_matchedid": get_num_items("manga", "matchedid"),
@@ -503,9 +504,16 @@ def get_training_config():
         "learning_rate": 2e-4,
         "causal": args.modeltype == "causal",
         "mask_rate": 0.15,
-        "use_pretrained_embeddings": False, # TODO
+        "use_pretrained_embeddings": True,
         "gpu_config": get_gpu_config(),
     }
+    if args.moe:
+        # TODO make moe the default
+        config["num_layers"] = 14
+        config["num_heads"] = 24
+        config["num_kv_heads"] = 12
+        config["embed_dim"] = 1536
+        config["intermediate_dim"] = 4096
     if args.mini:
         assert config["num_layers"] % 2 == 0
         config["num_layers"] = config["num_layers"] // 2
