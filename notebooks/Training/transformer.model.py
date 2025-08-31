@@ -156,7 +156,8 @@ class Llama3(nn.Module):
         for layer in self.layers:
             x = layer(x, mask=mask, input_pos=input_pos)
         x = self.norm(x)
-        return x
+        aux_losses = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+        return x, aux_losses
 
 class MixtureOfExperts(nn.Module):
     def __init__(
@@ -297,7 +298,7 @@ class TransformerStack(nn.Module):
             x, aux_loss = layer(x, mask=mask, input_pos=input_pos)
             aux_losses += aux_loss
         x = self.norm(x)
-        return x
+        return x, aux_losses
 
 
 class TransformerModel(nn.Module):
@@ -501,8 +502,7 @@ class TransformerModel(nn.Module):
 
             maskfn = and_masks(document_mask, causal_mask, token_mask)
             block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
-            e = self.transformers(e, block_mask, rope_input_pos)
-            return e
+            return self.transformers(e, block_mask, rope_input_pos)
         else:
             userid = d["userid"]
             m, n = userid.shape
@@ -520,8 +520,7 @@ class TransformerModel(nn.Module):
                 self.item_embeddings[1](d["1_matchedid"]),
             )
             e = e_a + e_i
-            e = self.transformers(e, block_mask, None)
-            return e
+            return self.transformers(e, block_mask, None)
 
     def train_forward(self, d, evaluate):
         if not self.config["finetune"]:
@@ -531,7 +530,7 @@ class TransformerModel(nn.Module):
             d = self.split_tokens(d)
         else:
             d = self.mask_tokens(d)
-        e = self.to_embedding(d)
+        e, aux_loss = self.to_embedding(d)
         losses = []
         for medium in ALL_MEDIUMS:
             for metric in ALL_METRICS:
@@ -591,7 +590,7 @@ class TransformerModel(nn.Module):
                         losses.append(self.mse(preds, labels, weights))
                 else:
                     assert False
-        return losses
+        return losses, aux_loss
 
     def inference_forward(self, d, task):
         if self.config["causal"]:

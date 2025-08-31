@@ -202,12 +202,14 @@ def evaluate_metrics(local_rank, model, dataloader):
     weights = [0 for _ in range(len(ALL_MEDIUMS) * len(ALL_METRICS))]
     progress = tqdm(desc="Test batches", mininterval=1, disable=local_rank != 0)
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
+    aux_losses = 0
+    aux_steps = 0
     model.eval()
     for data in dataloader:
         with torch.no_grad():
             with torch.amp.autocast(f"cuda:{local_rank}", dtype=torch.bfloat16):
                 d = to_device(data, local_rank)
-                loss = model(d, True)
+                loss, aux_loss = model(d, True)
             for i in range(len(losses)):
                 w = float(d[f"{names[i]}.weight"].sum())
                 if w == 0:
@@ -218,13 +220,17 @@ def evaluate_metrics(local_rank, model, dataloader):
                 else:
                     losses[i] += float(loss[i]) * w
                 weights[i] += w
+            aux_losses += aux_loss
+            aux_steps += 1
         progress.update()
     progress.close()
     model.train()
     for i in range(len(losses)):
         if isinstance(losses[i], list):
             losses[i] = minimize_quadratic([1, 0, -1], losses[i])
-    return reduce_mean(local_rank, losses, weights)
+    avg_loss = reduce_mean(local_rank, losses, weights)
+    avg_aux_loss = reduce_mean(local_rank, [aux_losses], [aux_steps])[0]
+    return avg_loss, avg_aux_loss
 
 
 def train_epoch(
@@ -244,12 +250,12 @@ def train_epoch(
     for step, data in enumerate(dataloader):
         with torch.amp.autocast(f"cuda:{local_rank}", dtype=torch.bfloat16):
             d = to_device(data, local_rank)
-            tloss = model(d, False)
+            tloss, aux_loss = model(d, False)
             for i in range(len(tloss)):
                 w = float(d[f"{names[i]}.weight"].sum())
                 training_losses[i] += float(tloss[i].detach()) * w
                 training_weights[i] += w
-            loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss))) / grad_accum_steps
+            loss = (sum(tloss[i] * task_weights[i] for i in range(len(tloss))) + aux_loss) / grad_accum_steps
         loss.backward()
         if (step + 1) % grad_accum_steps != 0:
             continue
@@ -507,16 +513,14 @@ def get_training_config():
 
 
 def get_gpu_config():
-    world_size = int(os.environ["WORLD_SIZE"])
-    if world_size == 1:
-        return "local"
-    elif world_size == 8:
-        return "B200"
-    elif world_size == 32:
+    name = torch.cuda.get_device_name(0).lower()
+    if "h100" in name.lower():
         return "H100"
+    elif "b200" in name.lower():
+        return "B200"
     else:
-        assert False
-
+        assert int(os.environ["WORLD_SIZE"]) == 1
+        return "local"
 
 def train():
     init_process_group(backend="nccl")
@@ -634,8 +638,8 @@ def train():
     task_weights = make_task_weights()
     get_loss = lambda x: evaluate_metrics(local_rank, x, dataloaders["test"])
     starting_epoch = 0 if checkpoint is None else checkpoint["epoch"] + 1
-    initial_loss = get_loss(model)
-    logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}")
+    initial_loss, initial_aux_loss = get_loss(model)
+    logger.info(f"Initial Loss: {wsum(initial_loss, task_weights)}, {initial_loss}, {initial_aux_loss}")
     stopper(wsum(initial_loss, task_weights))
     checkpoint_model(
         local_rank,
@@ -664,10 +668,10 @@ def train():
             f"Epoch: {epoch}, Training Loss:"
             f" {wsum(training_loss, task_weights)} {training_loss}"
         )
-        test_loss = get_loss(model)
+        test_loss, aux_loss = get_loss(model)
         logger.info(
             f"Epoch: {epoch}, Test Loss:"
-            f" {wsum(test_loss, task_weights)} {test_loss}"
+            f" {wsum(test_loss, task_weights)} {test_loss} {aux_loss}"
         )
         stopper(wsum(test_loss, task_weights))
         checkpoint_model(
