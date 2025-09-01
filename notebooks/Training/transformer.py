@@ -509,11 +509,11 @@ def get_training_config():
     }
     if args.moe:
         # TODO make moe the default
-        config["num_layers"] = 14
-        config["num_heads"] = 24
-        config["num_kv_heads"] = 12
-        config["embed_dim"] = 1536
-        config["intermediate_dim"] = 4096
+        config["num_layers"] = 8
+        config["num_heads"] = 32
+        config["num_kv_heads"] = 16
+        config["embed_dim"] = 1024
+        config["intermediate_dim"] = 2816
     if args.mini:
         assert config["num_layers"] % 2 == 0
         config["num_layers"] = config["num_layers"] // 2

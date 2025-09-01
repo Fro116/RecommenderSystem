@@ -40,6 +40,6 @@ else
   done
   echo "Master is up. Proceeding..."
 fi
-torchrun --nnodes $NUM_NODES --nproc_per_node=8 --rdzv-backend c10d --rdzv-endpoint $MASTER_ADDR:$MASTER_PORT transformer.py --datadir ../../data/training --modeltype masked --prod
+torchrun --nnodes $NUM_NODES --nproc_per_node=8 --rdzv-backend c10d --rdzv-endpoint $MASTER_ADDR:$MASTER_PORT transformer.py --datadir ../../data/training --modeltype masked --prod --moe
 sleep 60
-torchrun --nnodes $NUM_NODES --nproc_per_node=8 --rdzv-backend c10d --rdzv-endpoint $MASTER_ADDR:$MASTER_PORT transformer.py --datadir ../../data/training --modeltype causal --prod
+torchrun --nnodes $NUM_NODES --nproc_per_node=8 --rdzv-backend c10d --rdzv-endpoint $MASTER_ADDR:$MASTER_PORT transformer.py --datadir ../../data/training --modeltype causal --prod --moe
