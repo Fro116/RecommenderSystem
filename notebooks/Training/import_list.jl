@@ -181,7 +181,9 @@ function import_mal_profile(data, reftime)
         end
         for f in Dates.DateFormat.(["u d, yyyy", "u yyyy", "d, yyyy", "yyyy"])
             try
-                return Dates.datetime2unix(Dates.DateTime(x, f))
+                d = Dates.DateTime(x, f)
+                @assert Dates.year(d) > 1900
+                return Dates.datetime2unix(d)
             catch
                 nothing
             end
@@ -389,7 +391,9 @@ function import_kitsu_profile(data, reftime)
         end
         for f in Dates.DateFormat.(["yyyy-mm-dd"])
             try
-                return Dates.datetime2unix(Dates.DateTime(x, f))
+                d = Dates.DateTime(x, f)
+                @assert Dates.year(d) > 1900
+                return Dates.datetime2unix(d)
             catch
                 nothing
             end
@@ -509,7 +513,11 @@ function import_animeplanet_profile(data, reftime)
         if age == "?"
             return nothing
         end
-        reftime - 86400 * parse(Int, age)
+        age = parse(Int, age)
+        if age <= 0 || age > 128
+            return nothing
+        end
+        reftime - 86400 * 365.25 * age
     end
     function animeplanet_created_at(datestr)
         if isnothing(datestr)
@@ -599,7 +607,7 @@ function annotate_with_last_state!(user)
     items = user["items"]
     while !isempty(items) && items[end]["history_tag"] == "delete"
         items = items[1:end-1]
-    end # TODO gate by reftime
+    end
     # set metrics for custom tags
     deleted_status = 3
     for x in items

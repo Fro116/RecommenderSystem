@@ -3,17 +3,16 @@ include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
 
 
-function write_yaml(;prod::Bool)
+function write_yaml(;prod::Bool, num_nodes::Int)
     if prod
-        nodes = 4
         finalcmds = ["./startup.sh"]
         name = "prod"
     else
-        nodes = 1
         finalcmds = ["apt install tmux -y", "sleep 86400"]
         name = "dev"
     end
-    image = "nvcr.io/nvidia/pytorch:25.08-py3"
+    nodes = num_nodes
+    image = "pytorch/pytorch:2.8.0-cuda12.9-cudnn9-devel"
     envvars = readlines("../../secrets/r2.auth.txt")
     script = [
         "export NUM_NODES=$nodes",
@@ -90,8 +89,7 @@ function start_sfcompute(nodes::Int, gpuhour_price::Real)::Bool
             "sleep 60",
             "kubectl delete job --all --ignore-not-found",
             "cd ../../data/training",
-            "kubectl apply -f causal.yaml",
-            "kubectl apply -f masked.yaml",
+            "kubectl apply -f prod.yaml",
         ]
         cmd = join(cmds, " && ")
         run(`sh -c $cmd`)
@@ -108,36 +106,34 @@ function wait_sfcompute()
     finished = false
     while !finished
         finished = true
-        print("rclone --retries=10 ls r2:rsys/database/training/$list_tag/transformer.$modeltype.finished")
         success = read(
-            `rclone --retries=10 ls r2:rsys/database/training/$list_tag/transformer.$modeltype.finished`,
+            `rclone --retries=10 ls r2:rsys/database/training/$list_tag/transformer.causal.finished`,
             String,
         )
         if isempty(success)
             finished = false
-            break
         end
         if !finished
-            logtag("[RUNGPU]", "waiting for models to finish")
+            logtag("RUNGPU", "waiting for models to finish")
             sleep(600)
-        end        
+        end
     end
     stop_sfcompute()
 end
 
 function pretrain()
-    num_nodes = 4
+    num_nodes = 2
     gpuhour_price = 2.5
-    write_yaml(prod=true)
-    success = start_sfcompute(num_nodes, gpuhour_price)
-    if !sfcompute_success
-        logerror("sfcompute training failed")
-        return
-    end
+     write_yaml(prod=true, num_nodes=num_nodes)
+     success = start_sfcompute(num_nodes, gpuhour_price)
+     if !success
+         logerror("sfcompute training failed")
+         return
+     end
     wait_sfcompute()
     stop_sfcompute()
     run(`rclone --retries=10 copyto ../../data/training/list_tag r2:rsys/database/training/latest`)
 end
 
-write_yaml(prod=false)
+write_yaml(prod=false, num_nodes=1)
 pretrain()

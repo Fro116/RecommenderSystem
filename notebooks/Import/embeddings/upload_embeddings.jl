@@ -220,6 +220,7 @@ function save_embeddings()
                 emb = get_embedding(v)
                 if isnothing(emb)
                     logerror("text embedding failed for $k")
+                    emb = zeros(Float32, 3072)
                 end
                 d_emb[k] = emb
             end

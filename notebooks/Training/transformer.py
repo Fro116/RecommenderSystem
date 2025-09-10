@@ -170,9 +170,6 @@ def to_device(data, local_rank):
     d = {}
     for k in data:
         d[k] = data[k].to(local_rank).to_dense()
-    for m in ALL_MEDIUMS:
-        for metric in ALL_METRICS:
-            d[f"{m}.{metric}.position"] = d[f"{m}_matchedid"].to(torch.int64)
     return d
 
 
@@ -284,8 +281,38 @@ class ConstantScheduler(object):
         return 1
 
 
-def create_learning_rate_schedule(optimizer, tokens_per_batch, epochs):
-    return optim.lr_scheduler.LambdaLR(optimizer, ConstantScheduler())
+class WarmupCosineScheduler(object):
+    def __init__(self, warmup_steps, total_steps, final_ratio):
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self.final_ratio = final_ratio
+
+    def __call__(self, epoch):
+        s = max(0, min(int(epoch), self.total_steps))
+        if s <= self.warmup_steps:
+            return s / max(1, self.warmup_steps)
+        remain = max(1, self.total_steps - self.warmup_steps)
+        progress = (s - self.warmup_steps) / remain
+        cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
+        return self.final_ratio + (1.0 - self.final_ratio) * cosine
+
+
+def create_learning_rate_schedule(optimizer, tokens_per_batch, epochs, logger):
+    if args.finetune:
+        return optim.lr_scheduler.LambdaLR(optimizer, ConstantScheduler())
+    else:
+        return optim.lr_scheduler.LambdaLR(optimizer, ConstantScheduler())
+        # transdir = "transformer_mini" if args.mini else "transformer"
+        # with open(f"{args.datadir}/{transdir}/training/num_tokens.txt", 'r') as file:
+        #     tokens_per_epoch = int(file.read().strip())
+        # total_steps = int(round(tokens_per_epoch * epochs / tokens_per_batch))
+        # logger.info(
+        #     f"Training with {tokens_per_epoch * epochs} tokens,"
+        #     f" {total_steps} steps,"
+        #     f" and {tokens_per_epoch} tokens per epoch"
+        # )
+        # sc = WarmupCosineScheduler(warmup_steps=100, total_steps=total_steps, final_ratio=0.1)
+        # return optim.lr_scheduler.LambdaLR(optimizer, sc)
 
 
 class EarlyStopper:
@@ -385,7 +412,8 @@ def checkpoint_model(
     scheduler,
     config,
     epoch,
-    loss,
+    training_loss,
+    test_loss,
     task_weights,
     save,
     logger,
@@ -405,7 +433,8 @@ def checkpoint_model(
                 "scheduler": scheduler.state_dict(),
                 "config": config,
                 "epoch": epoch,
-                "loss": loss,
+                "training_loss": training_loss,
+                "test_loss": test_loss,
             }
             torch.save(checkpoint, f"{args.datadir}/transformer.{args.modeltype}.pt")
             if global_rank == 0 and args.prod:
@@ -416,7 +445,8 @@ def checkpoint_model(
                 "model": model.module._orig_mod.state_dict(),
                 "config": config,
                 "epoch": epoch,
-                "loss": loss,
+                "training_loss": training_loss,
+                "test_loss": test_loss,
             }
             torch.save(
                 checkpoint,
@@ -432,9 +462,9 @@ def checkpoint_model(
         create_csv = epoch < 0
     if create_csv:
         with open(csv_fn, "w") as f:
-            f.write(",".join(["epoch", "loss"] + names) + "\n")
+            f.write(",".join(["epoch", "training_loss", "test_loss"] + names) + "\n")
     with open(csv_fn, "a") as f:
-        vals = [epoch, wsum(loss, task_weights)] + loss
+        vals = [epoch, wsum(training_loss, task_weights), wsum(test_loss, task_weights)] + test_loss
         f.write(",".join([str(x) for x in vals]) + "\n")
     if global_rank == 0 and args.prod and args.finetune is None:
         cmd = f"rclone --retries=10 copyto {args.datadir}/transformer.{args.modeltype}.csv r2:rsys/database/training/{list_tag}/transformer.{args.modeltype}.csv"
@@ -476,26 +506,24 @@ def get_training_config():
         "num_kv_heads": 16,
         "embed_dim": 2048,
         "intermediate_dim": 5632,
-        # "distinctid_dim": 128, # deprecated
         "max_sequence_length": 1024,
         "vocab_sizes": {
             "0_matchedid": get_num_items("manga", "matchedid"),
             "1_matchedid": get_num_items("anime", "matchedid"),
-            "0_distinctid": get_num_items("manga", "distinctid"),
-            "1_distinctid": get_num_items("anime", "distinctid"),
             "status": 9,
+            "gender": 4,
+            "source": 4,
         },
-        "text_emb_size": 3072,
+        "metadata_emb_size": 3076,
         "min_ts": min_ts,
         "max_ts": max_ts,
         "rating_mean": 7.6287384,
         "rating_std": 1.778219,
         "forward": "train",
         "finetune": False,
-        "learning_rate": 2e-4,
+        "learning_rate": 1e-4,
         "causal": args.modeltype == "causal",
         "mask_rate": 0.15,
-        "use_pretrained_embeddings": True,
         "gpu_config": get_gpu_config(),
     }
     if args.mini:
@@ -526,15 +554,14 @@ def train():
     gpu_config = config["gpu_config"]
     if config["finetune"]:
         num_epochs = 8
-        local_batch_size = 32 if config["causal"] else 64
+        global_batch_size = 256 if config["causal"] else 512
         grad_accum_steps = 1
         assert gpu_config == "local"
         # emulate training on a 8 gpu setup with gradient accumulation
         # TODO check if grad_accum_steps is still useful
-        single_gpu_batch_size = 8 if config["causal"] else 8
-        assert local_batch_size % single_gpu_batch_size == 0
-        grad_accum_steps = (8 * local_batch_size) // single_gpu_batch_size
-        local_batch_size = single_gpu_batch_size
+        local_batch_size = 8 if config["causal"] else 8
+        assert global_batch_size % local_batch_size == 0
+        grad_accum_steps = global_batch_size // local_batch_size
     else:
         num_epochs = 8 if config["causal"] else 64
         global_batch_size = 512 if config["causal"] else 2048
@@ -543,7 +570,7 @@ def train():
         elif gpu_config == "H100":
             local_batch_size = 16 if config["causal"] else 64
         elif gpu_config == "local":
-            local_batch_size = 4 if config["causal"] else 16
+            local_batch_size = 4 if config["causal"] else 8
         else:
             assert False
         assert global_batch_size % (world_size * local_batch_size) == 0
@@ -612,8 +639,9 @@ def train():
     optimizer = create_optimizer(model, config)
     scheduler = create_learning_rate_schedule(
         optimizer,
-        local_batch_size * world_size * config["max_sequence_length"],
+        global_batch_size * config["max_sequence_length"],
         num_epochs,
+        logger,
     )
     if checkpoint is not None:
         logger.info(f"loading optimizer state from epoch {checkpoint['epoch']}")
@@ -621,6 +649,7 @@ def train():
         scheduler.load_state_dict(checkpoint["scheduler"])
         del checkpoint["optimizer"]
         del checkpoint["scheduler"]
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, ConstantScheduler())
 
     stopper = (
         EarlyStopper(patience=1, rtol=0.001)
@@ -642,6 +671,7 @@ def train():
         config,
         starting_epoch - 1,
         initial_loss,
+        initial_loss,
         task_weights,
         config["finetune"],
         logger,
@@ -658,7 +688,8 @@ def train():
         )
         logger.info(
             f"Epoch: {epoch}, Training Loss:"
-            f" {wsum(training_loss, task_weights)} {training_loss}"
+            f" {wsum(training_loss, task_weights)} {training_loss},"
+            f" Learning Rate: {scheduler.get_last_lr()[0]}"
         )
         test_loss = get_loss(model)
         logger.info(
@@ -674,6 +705,7 @@ def train():
             scheduler,
             config,
             epoch,
+            training_loss,
             test_loss,
             task_weights,
             stopper.save_model,
@@ -695,7 +727,7 @@ def download(node, num_nodes):
         ["list_tag"]
         + [f"{transdir}/{x}/num_tokens.txt" for x in ["training", "test"]]
         + [f"{m}.csv" for m in ["manga", "anime"]]
-        + [f"{m}.json" for m in ["manga", "anime"]]
+        + ["media_embeddings.h5"]
     )
     if args.prod:
         files += [
