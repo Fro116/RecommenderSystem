@@ -44,3 +44,32 @@ function project!(user)
     end
     user["items"] = items
 end
+
+function tokenize!(user)
+    function span_to_token(x)
+        token = copy(first(x))
+        for k in ["status", "rating", "progress"]
+            token[k] = last(x)[k]
+        end
+        token
+    end
+    items = []
+    last_mid = nothing
+    span = []
+    for x in user["items"]
+        mid = (x["medium"], x["matchedid"])
+        if mid == last_mid
+            push!(span, x)
+        else
+            if !isempty(span)
+                push!(items, span_to_token(span))
+            end
+            span = [x]
+            last_mid = mid
+        end
+    end
+    if !isempty(span)
+        push!(items, span_to_token(span))
+    end
+    user["items"] = items
+end

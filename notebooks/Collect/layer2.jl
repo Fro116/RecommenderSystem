@@ -2376,7 +2376,7 @@ function animeplanet_get_media(
             logstatus("animeplanet_get_media", text, url)
             return text
         end
-        entries, has_next_page = animeplanet_get_media_recommendations(text, medium, itemid)
+        entries, has_next_page = animeplanet_get_media_recommendations(text, medium, itemid, recommendations_page)
         append!(recommendations, entries)
         recommendations_page += 1
     end
@@ -2392,7 +2392,7 @@ function animeplanet_get_media(
             logstatus("animeplanet_get_media", text, url)
             return text
         end
-        entries, has_next_page = animeplanet_get_media_reviews(text, medium, itemid)
+        entries, has_next_page = animeplanet_get_media_reviews(text, medium, itemid, reviews_page)
         append!(reviews, entries)
         reviews_page += 1
     end
@@ -2401,7 +2401,7 @@ function animeplanet_get_media(
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function animeplanet_get_media_recommendations(text::String, medium::String, itemid::String)
+function animeplanet_get_media_recommendations(text::String, medium::String, itemid::String, page::Int)
     entries = []
     item_chunks = split(text, r"""<h3 class="flipMain">""")
     user_rec_regex =
@@ -2422,11 +2422,11 @@ function animeplanet_get_media_recommendations(text::String, medium::String, ite
             push!(entries, Dict("itemid" => rec_itemid, "username" => username, "text" => final_text))
         end
     end
-    has_next_page = occursin(r"<li class='next'><a href=", text)
+    has_next_page = occursin(Regex("<li class='next'><a href=?page=$page"), text)
     (entries, has_next_page)
 end
 
-function animeplanet_get_media_reviews(text::String, medium::String, itemid::String)
+function animeplanet_get_media_reviews(text::String, medium::String, itemid::String, page::Int)
     entries = []
     review_chunks = split(
         text,
@@ -2489,7 +2489,7 @@ function animeplanet_get_media_reviews(text::String, medium::String, itemid::Str
         )
         push!(entries, entry)
     end
-    has_next_page = occursin(r"<li class='next'><a href=", text)
+    has_next_page = occursin(Regex("<li class='next'><a href=?page=$page"), text)
     (entries, has_next_page)
 end
 

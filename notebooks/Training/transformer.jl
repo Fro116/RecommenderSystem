@@ -2,12 +2,15 @@ import CSV
 import DataFrames
 import Dates
 import Glob
+import JLD2
+import JSON3
 import H5Zblosc
 import HDF5
 import MsgPack
 import Memoize: @memoize
 import ProgressMeter: @showprogress
 import Random
+import SparseArrays
 
 const datadir = "../../data/training"
 const mediums = [0, 1]
@@ -18,6 +21,10 @@ const batch_size = 128 * 1024 # local_batch_size * max_sequence_length
 const num_gpus = 32
 const mini = parse(Bool, ARGS[1]) # if true, subsample to half the data
 const transdir = mini ? "transformer_mini" : "transformer"
+const min_ts = Dates.datetime2unix(Dates.DateTime("2000-01-01"))
+const max_ts = Dates.datetime2unix(
+    Dates.DateTime(read("$datadir/list_tag", String), Dates.dateformat"yyyymmdd"),
+)
 
 include("../julia_utils/stdout.jl")
 include("history_tools.jl")
@@ -27,18 +34,106 @@ include("history_tools.jl")
     maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks = 1).matchedid) + 1
 end
 
+function optdate(x)
+    if ismissing(x) || isnothing(x) || isempty(x)
+        return 0, 0
+    end
+    try
+        ts = Dates.datetime2unix(Dates.DateTime(Dates.Date(x)))
+        y = (ts - min_ts) / (max_ts - min_ts)
+        y = clamp(y, -5, 5)
+        return 1, y
+    catch
+        logerror("could not parse date $x")
+        fields = split(x, "-")
+        if length(fields) > 1
+            return optdate(join(fields[1:end-1], "-"))
+        end
+    end
+    0, 0
+end
+
+function get_media_group_ids()
+    function merge_nodes!(groups, k1, k2)
+        v = union(groups[k1], groups[k2])
+        for k in v
+            groups[k] = v
+        end
+    end
+    groups = Dict()
+    for m in [0, 1]
+        for i = 1:num_items(m)
+            k = (m, i)
+            groups[k] = Set([k])
+        end
+    end
+    for m in [0, 1]
+        M = JLD2.load("$datadir/media_relations.$m.jld2")
+        for (i, j, _) in zip(SparseArrays.findnz(M["$m.related"])...)
+            merge_nodes!(groups, (m, i), (m, j))
+        end
+        for (i, j, _) in zip(SparseArrays.findnz(M["$m.adaptations"])...)
+            merge_nodes!(groups, (m, i), (1 - m, j))
+        end
+    end
+    groupids = Dict()
+    for v in values(groups)
+        if length(v) > 1
+            groupids[v] = length(groupids)
+        end
+    end
+    membership = zeros(Int32, sum(num_items.([0, 1])))
+    for m in [0, 1]
+        for i = 1:num_items(m)
+            idx = i + ((m == 1) ? num_items(0) : 0)
+            k = (m, i)
+            group = groups[k]
+            if length(group) > 1
+                membership[idx] = groupids[group]
+            end
+        end
+    end
+    membership
+end
+
+function save_media_embeddings()
+    d = Dict()
+    W = zeros(Float32, 3072 + 4, sum(num_items.([0, 1])))
+    for medium in [0, 1]
+        m = Dict(0 => "manga", 1 => "anime")[medium]
+        data = JSON3.read("$datadir/$m.json")
+        for x in data
+            embs = sum(values(x[:embedding])) ./ length(x[:embedding])
+            has_sd, sd = optdate(x[:metadata][:dates][:startdate])
+            has_ed, ed = optdate(x[:metadata][:dates][:enddate])
+            idx = x[:matchedid]+1 + ((medium == 1) ? num_items(0) : 0)
+            W[:, idx] = vcat(embs, [has_sd, sd, has_ed, ed])
+        end
+        d["metadata"] = W
+    end
+    d["groupids"] = get_media_group_ids()
+    HDF5.h5open("$datadir/media_embeddings.h5", "w") do file
+        for (k, v) in d
+            file[k, blosc = 3] = v
+        end
+    end
+end
+
 function get_data(data, userid)
-    project!(data)
+    tokenize!(data)
+    project!(data) # TODO test not projecting
+    u = data["user"]
     N = length(data["items"])
     d = Dict(
         # prompt features
         "userid" => Vector{Int32}(undef, N),
         "time" => Vector{Float64}(undef, N),
+        "userage" => Vector{Float64}(undef, N),
+        "acctage" => Vector{Float64}(undef, N),
+        "gender" => Vector{Int32}(undef, N),
+        "source" => Vector{Int32}(undef, N),
         # item features
-        "0_matchedid" => Vector{Int32}(undef, N),
-        "0_distinctid" => Vector{Int32}(undef, N),
-        "1_matchedid" => Vector{Int32}(undef, N),
-        "1_distinctid" => Vector{Int32}(undef, N),
+        "matchedid" => Vector{Int32}(undef, N),
         # action features
         "status" => Vector{Int32}(undef, N),
         "rating" => Vector{Float32}(undef, N),
@@ -49,19 +144,20 @@ function get_data(data, userid)
         for metric in metrics
             d["$m.$metric.label"] = zeros(Float32, N)
             d["$m.$metric.weight"] = zeros(Float32, N)
+            d["$m.$metric.position"] = zeros(Int32, N)
         end
     end
     for (i, x) in Iterators.enumerate(data["items"])
         m = x["medium"]
-        n = 1 - x["medium"]
         # prompt features
         d["userid"][i] = userid
         d["time"][i] = x["history_max_ts"]
+        d["userage"][i] = isnothing(u["birthday"]) ? 0 : x["history_max_ts"] - u["birthday"]
+        d["acctage"][i] = isnothing(u["created_at"]) ? 0 : x["history_max_ts"] - u["created_at"]
+        d["gender"][i] = isnothing(u["gender"]) ? 0 : u["gender"] + 1
+        d["source"][i] = u["source"]
         # item features
-        d["$(m)_matchedid"][i] = x["matchedid"]
-        d["$(m)_distinctid"][i] = x["distinctid"]
-        d["$(n)_matchedid"][i] = -1
-        d["$(n)_distinctid"][i] = -1
+        d["matchedid"][i] = x["matchedid"] + ((m == 1) ? num_items(0) : 0)
         # action features
         d["status"][i] = x["status"]
         d["rating"][i] = x["rating"]
@@ -74,14 +170,17 @@ function get_data(data, userid)
         if inferred_watch || new_watch
             d["$m.watch.label"][i] = 1
             d["$m.watch.weight"][i] = 1
+            d["$m.watch.position"][i] = x["matchedid"]
         end
         if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
             d["$m.rating.label"][i] = x["rating"]
             d["$m.rating.weight"][i] = 1
+            d["$m.rating.position"][i] = x["matchedid"]
         end
         if (x["status"] > 0) && (x["status"] != x["history_status"])
             d["$m.status.label"][i] = x["status"]
             d["$m.status.weight"][i] = 1
+            d["$m.status.position"][i] = x["matchedid"]
         end
     end
     d
@@ -187,12 +286,15 @@ end
 function upload()
     template =
         raw"tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
-    cmd =
-        replace(template, "{INPUT}" => "$datadir/$transdir", "{OUTPUT}" => "$transdir")
-    run(`sh -c $cmd`)
+    for fn in [transdir, "media_embeddings.h5"]
+        cmd =
+            replace(template, "{INPUT}" => "$datadir/$fn", "{OUTPUT}" => fn)
+        run(`sh -c $cmd`)
+    end
 end
 
 rm("$datadir/$transdir", recursive = true, force = true)
+save_media_embeddings()
 save_data("test")
 save_data("training")
 upload()
