@@ -206,7 +206,6 @@ class TransformerModel(nn.Module):
                 nn.Linear(config["embed_dim"], 1),
             )
         self.apply(init_weights)
-        self.load_pretrained_embeddings()
         self.empty_loss = nn.Parameter(torch.tensor(0.0))
         if config["finetune"]:
             for layer in [
@@ -224,8 +223,8 @@ class TransformerModel(nn.Module):
         else:
             assert False
 
-    def load_pretrained_embeddings(self):
-        with h5py.File("../../data/training/media_embeddings.h5") as f:
+    def load_pretrained_embeddings(self, datadir):
+        with h5py.File(f"{datadir}/media_embeddings.h5") as f:
             d = {}
             for k in f:
                 d[k] = f[k][:]

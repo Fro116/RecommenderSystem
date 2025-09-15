@@ -607,6 +607,7 @@ def train():
         for (x, w) in [("training", 8), ("test", 2)]
     }
     model = TransformerModel(config)
+    model.load_pretrained_embeddings(args.datadir)
     logger.info(
         f"Created model with {sum(p.numel() for p in model.parameters())} parameters"
         f" and {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters"

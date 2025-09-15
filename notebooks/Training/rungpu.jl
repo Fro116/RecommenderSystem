@@ -124,12 +124,12 @@ end
 function pretrain()
     num_nodes = 2
     gpuhour_price = 2.5
-     write_yaml(prod=true, num_nodes=num_nodes)
-     success = start_sfcompute(num_nodes, gpuhour_price)
-     if !success
-         logerror("sfcompute training failed")
-         return
-     end
+    write_yaml(prod=true, num_nodes=num_nodes)
+    success = start_sfcompute(num_nodes, gpuhour_price)
+    if !success
+        logerror("sfcompute training failed")
+        return
+    end
     wait_sfcompute()
     stop_sfcompute()
     run(`rclone --retries=10 copyto ../../data/training/list_tag r2:rsys/database/training/latest`)
