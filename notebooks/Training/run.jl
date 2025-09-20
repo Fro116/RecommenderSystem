@@ -7,7 +7,7 @@ function train(datetag::AbstractString)
         run(`julia media_relations.jl $m`)
     end
     for mini in [true, false]
-        run(`julia -t auto transformer.jl $mini`)
+        run(`julia transformer.jl`)
     end
     run(`julia rungpu.jl`)
 end

@@ -92,8 +92,7 @@ function save_users(medium, registry)
         end
         data["last_status"] = last_status
         logp = logsoftmax(
-            registry["transformer.masked.$m.watch.weight"] * data["embeds"]["masked.$m"] +
-            registry["transformer.masked.$m.watch.bias"],
+            registry["transformer.masked.$m.watch.weight"] * data["embeds"]["masked.$m"],
         )
         # apply business rules
         logp[1] = -Inf
@@ -220,8 +219,7 @@ function retrieval_metrics(users, registry, medium::Integer; multithreaded = tru
             continue
         end
         logp = logsoftmax(
-            registry["transformer.masked.$m.watch.weight"] * u["masked.$m"] +
-            registry["transformer.masked.$m.watch.bias"],
+            registry["transformer.masked.$m.watch.weight"] * u["masked.$m"],
         )
         # apply business rules
         logp[1] = -Inf
@@ -257,12 +255,8 @@ function regress_retrieval(users, registry, medium::Integer)
         if skip_user(u, m, "retrieval")
             continue
         end
-        masked_logits =
-            registry["transformer.masked.$m.watch.weight"] * u["masked.$m"] +
-            registry["transformer.masked.$m.watch.bias"]
-        causal_logits =
-            registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"] +
-            registry["transformer.causal.$m.watch.bias"]
+        masked_logits = registry["transformer.masked.$m.watch.weight"] * u["masked.$m"]
+        causal_logits = registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"]
         p_masked[i] = softmax(masked_logits)[u["matchedid"]+1]
         p_causal[i] = softmax(causal_logits)[u["matchedid"]+1]
         y[i] = 1
@@ -324,12 +318,8 @@ function get_ranking_features(users, registry, medium::Integer)
         y[findfirst(==(u["matchedid"]), u["ranking_matchedids"]), i] = 1
         w[i] = u["rating"]
         # watch feature
-        masked_logits =
-            registry["transformer.masked.$m.watch.weight"] * u["masked.$m"] +
-            registry["transformer.masked.$m.watch.bias"]
-        causal_logits =
-            registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"] +
-            registry["transformer.causal.$m.watch.bias"]
+        masked_logits = registry["transformer.masked.$m.watch.weight"] * u["masked.$m"]
+        causal_logits = registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"]
         p_masked = softmax(masked_logits)[idxs]
         p_causal = softmax(causal_logits)[idxs]
         p[:, i] .= sum(registry["$m.retrieval.coefs"] .* [p_masked, p_causal])

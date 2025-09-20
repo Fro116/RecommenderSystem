@@ -10,21 +10,10 @@ import ProgressMeter: @showprogress
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
 include("../Training/import_list.jl")
+include("../Training/history_tools.jl")
 
 const SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
 const datadir = "../../data/finetune"
-
-function blue_green_tag()
-    url = read("../../secrets/url.compute.txt", String)
-    r = HTTP.get("$url/bluegreen", status_exception=false, decompress = false, connect_timeout=1)
-    if HTTP.iserror(r)
-       curtag = "blue"
-    else
-        d = decode(r)
-        curtag = d["bluegreen"]
-    end
-    Dict("blue" => "green", "green" => "blue")[curtag]
-end
 
 function download_data(finetune_tag::AbstractString)
     rm(datadir, force = true, recursive = true)
@@ -35,11 +24,12 @@ function download_data(finetune_tag::AbstractString)
     tag = read("$datadir/training_tag", String)
     files = vcat(
         ["$m.csv" for m in ["manga", "anime"]],
+        ["$m.json" for m in ["manga", "anime"]],
         ["media_relations.$m.jld2" for m in [0, 1]],
         ["watches.$m.jld2" for m in [0, 1]],
         ["transformer.$modeltype.$stem" for modeltype in ["causal", "masked"] for stem in ["csv", "pt"]],
         ["images.csv", "media_relations.csv"],
-        ["item_text_embeddings.$m.json" for m in [0, 1]],
+        ["media_embeddings.h5" ],
     )
     for fn in files
         cmd = "$download/training/$tag/$fn $datadir/$fn"
@@ -56,9 +46,6 @@ function download_data(finetune_tag::AbstractString)
         `mlr --csv split -n 1000000 --prefix $datadir/histories $datadir/histories.csv`,
     )
     rm("$datadir/histories.csv")
-    open("$datadir/bluegreen", "w") do f
-        write(f, blue_green_tag())
-    end
 end
 
 function num_items(m::AbstractString, source::AbstractString)
@@ -75,8 +62,8 @@ function gen_splits()
     min_items = 5
     max_items = Dict(s => num_items.(mediums, s) for s in SOURCES)
     test_perc = 0.1
-    training_recent_days = 4
-    test_recent_days = 4
+    training_recent_days = 365/4
+    test_recent_days = 365/4
     training_tag = read("$datadir/training_tag", String)
     max_ts = -Inf
     @showprogress for f in Glob.glob("$datadir/histories_*.csv")
@@ -90,8 +77,7 @@ function gen_splits()
                       Iterators.enumerate(Glob.glob("$datadir/histories_*.csv"))
         train_dir = "$datadir/users/training/$idx"
         test_dir = "$datadir/users/test/$idx"
-        unused_dir = "$datadir/users/unused/$idx"
-        mkpath.([train_dir, test_dir, unused_dir])
+        mkpath.([train_dir, test_dir])
         df = Random.shuffle(read_csv(f))
         Threads.@threads for i = 1:DataFrames.nrow(df)
             access_ts = parse(Float64, df.db_refreshed_at[i])
@@ -108,10 +94,10 @@ function gen_splits()
                 end
             end
             if n_predict < min_items
-                outdir = unused_dir
+                outdir = nothing
             elseif any(n_items .> max_items[df.source[i]])
                 k = (df.source[i], df.username[i], df.userid[i])
-                outdir = unused_dir
+                outdir = nothing
             elseif rand() < test_perc
                 recent_days = test_recent_days
                 outdir = test_dir
@@ -119,15 +105,19 @@ function gen_splits()
                 recent_days = training_recent_days
                 outdir = train_dir
             end
-            if outdir == unused_dir
+            if isnothing(outdir)
                 continue
             end
+            tokenize!(user)
             recent_ts = max_ts - 86400 * recent_days
             old_items = []
             new_items = []
             for x in reverse(user["items"])
                 if x["history_max_ts"] > recent_ts && length(new_items) < recent_items
-                    if x["history_tag"] in ["infer", "delete"] || x["history_tag"] <= training_tag
+                    if x["history_tag"] in ["infer", "delete"]
+                        continue # filter to recorded events
+                    end
+                    if x["history_tag"] <= training_tag
                         continue # filter to items that are out-of-sample from pretraining
                     end
                     if isnothing(x["history_min_ts"]) || (x["history_max_ts"] - x["history_min_ts"] > 86400)
@@ -159,7 +149,7 @@ function count_test_items(datasplit)
     n_rating = [0, 0]
     n_status = [0, 0]
     planned_status = 5
-    for fn in Glob.glob("../../data/finetune/users/$datasplit/*/*.msgpack")
+    @showprogress for fn in Glob.glob("../../data/finetune/users/$datasplit/*/*.msgpack")
         data = open(fn) do f
             MsgPack.unpack(read(f))
         end
@@ -183,6 +173,6 @@ function count_test_items(datasplit)
     logtag("TRANSFORMER", "$datasplit has $n_watch watch, $n_rating rating, and $n_status status entries")
 end
 
-download_data(ARGS[1])
-gen_splits()
+# download_data(ARGS[1])
+# gen_splits()
 count_test_items.(["training", "test"])

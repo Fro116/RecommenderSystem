@@ -27,16 +27,38 @@ def make_masked_item(ts):
         "medium": 0,
         "history_max_ts": ts,
         "matchedid": -1,
-        "distinctid": -1,
         "status": -1,
         "rating": 0,
         "progress": 0,
     }
 
 
-def project(user):
+def tokenize(user_items):
+    def span_to_token(x):
+        token = x[0].copy()
+        for k in ["status", "rating", "progress"]:
+            token[k] = x[-1][k]
+        return token
     items = []
-    for x in user["items"]:
+    last_mid = None
+    span = []
+    for x in user_items:
+        mid = (x["medium"], x["matchedid"])
+        if mid == last_mid:
+            span.append(x)
+        else:
+            if span:
+                items.append(span_to_token(span))
+            span = [x]
+            last_mid = mid
+    if span:
+        items.append(span_to_token(span))
+    return items
+
+
+def project(user_items):
+    items = []
+    for x in user_items:
         if (x["history_status"] == x["status"]) and (
             x["history_rating"] == x["rating"]
         ):
@@ -56,17 +78,19 @@ def predict(users, task, medium):
         max_seq_len = max_user_len + max_ranking_items
     else:
         assert False
+    num_items_0 = models[f"transformer.masked.{medium}"].config["vocab_sizes"]["0_matchedid"]
     d = {
         # prompt features
         "userid": np.zeros((len(users), max_seq_len), dtype=np.int32),
         "time": np.zeros((len(users), max_seq_len), dtype=np.float64),
         "rope_input_pos": np.zeros((len(users), max_seq_len), dtype=np.int32),
         "token_mask_ids": np.zeros((len(users), max_seq_len), dtype=np.int32),
+        "userage": np.zeros((len(users), max_seq_len), dtype=np.float64),
+        "acctage": np.zeros((len(users), max_seq_len), dtype=np.float64),
+        "gender": np.zeros((len(users), max_seq_len), dtype=np.int32),
+        "source": np.zeros((len(users), max_seq_len), dtype=np.int32),
         # item features
-        "0_matchedid": np.zeros((len(users), max_seq_len), dtype=np.int32),
-        "0_distinctid": np.zeros((len(users), max_seq_len), dtype=np.int32),
-        "1_matchedid": np.zeros((len(users), max_seq_len), dtype=np.int32),
-        "1_distinctid": np.zeros((len(users), max_seq_len), dtype=np.int32),
+        "matchedid": np.zeros((len(users), max_seq_len), dtype=np.int32),
         # action features
         "status": np.zeros((len(users), max_seq_len), dtype=np.int32),
         "rating": np.zeros((len(users), max_seq_len), dtype=np.float32),
@@ -78,7 +102,8 @@ def predict(users, task, medium):
         masked_pos = np.zeros((len(users), max_ranking_items), dtype=np.int32)
     for u in range(len(users)):
         userid = u + 1
-        items = project(users[u])
+        user = users[u]["user"]
+        items = project(tokenize(users[u]["items"]))
         extra_tokens = 1
         if len(items) > max_user_len - extra_tokens:
             items = items[-(max_user_len - extra_tokens) :]
@@ -88,18 +113,18 @@ def predict(users, task, medium):
             test_items = [make_masked_item(users[u]["timestamp"])]
         for i, x in enumerate(items + test_items):
             m = x["medium"]
-            n = 1 - x["medium"]
             # prompt features
             d["userid"][u, i] = userid
             d["time"][u, i] = x["history_max_ts"]
+            d["userage"][u, i] = 0 if user["birthday"] is None else x["history_max_ts"] - user["birthday"]
+            d["acctage"][u, i] = 0 if user["created_at"] is None else x["history_max_ts"] - user["created_at"]
+            d["gender"][u, i] = 0 if user["gender"] is None else user["gender"] + 1
+            d["source"][u, i] = user["source"]
             if modeltype == "causal":
                 d["rope_input_pos"][u, i] = i if i < len(items) else len(items)
                 d["token_mask_ids"][u, i] = 0 if i < len(items) else i
             # item features
-            d[f"{m}_matchedid"][u, i] = x["matchedid"]
-            d[f"{m}_distinctid"][u, i] = x["distinctid"]
-            d[f"{n}_matchedid"][u, i] = -1
-            d[f"{n}_distinctid"][u, i] = -1
+            d["matchedid"][u, i] = x["matchedid"] + (num_items_0 if m == 1 else 0)
             # action features
             if modeltype == "causal" and i >= len(items) and len(items) > 0:
                 d["status"][u, i] = items[-1]["status"]
@@ -111,7 +136,7 @@ def predict(users, task, medium):
                 d["progress"][u, i] = x["progress"]
         if modeltype == "causal":
             masked_embs[u, :] = users[u]["embeds"][f"masked.{medium}"]
-            masked_pos[u, :] = [x["matchedid"] for x in users[u]["test_items"]]
+            masked_pos[u, :] = [x["matchedid"] + (num_items_0 if medium == 1 else 0) for x in users[u]["test_items"]]
     e = {}
     with gpu_lock:
         for k in d:
@@ -129,7 +154,7 @@ def predict(users, task, medium):
                     X = torch.cat(
                         (
                             masked_embs.unsqueeze(1).repeat(1, max_ranking_items, 1),
-                            m.item_embedding.matchedid_embeddings[medium](masked_pos),
+                            m.item_embedding(masked_pos),
                         ),
                         dim=-1,
                     )
@@ -148,7 +173,7 @@ def predict(users, task, medium):
         ret = []
         for i, u in enumerate(users):
             d = {}
-            N = min(len(project(u)), max_user_len - 1)
+            N = min(len(project(tokenize(u["items"]))), max_user_len - 1)
             d[f"masked.{medium}"] = e["retrieval"][i, N, :].tolist()
             ret.append(d)
         return ret
@@ -156,7 +181,7 @@ def predict(users, task, medium):
         ret = []
         for i, u in enumerate(users):
             d = {}
-            N = min(len(project(u)), max_user_len - 1)
+            N = min(len(project(tokenize(u["items"]))), max_user_len - 1)
             causal_idxs = []
             for j in range(len(u["test_items"])):
                 causal_idxs.append(2 * (N + j) + 1)
@@ -235,7 +260,7 @@ for modeltype in ["causal", "masked"]:
 for task in ["retrieval", "ranking"]:
     for medium in [0, 1]:
         test_user = {
-            "user": {"source": "mal"},
+            "user": {"source": "mal", "birthday": None, "created_at": None, "gender": None, "source": 0},
             "items": [],
             "timestamp": time.time(),
         }

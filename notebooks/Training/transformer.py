@@ -115,6 +115,7 @@ class FinetuneDataset(IterableDataset):
         for i, x in enumerate(shards):
             if i % local_world_size == local_rank:
                 self.fns.extend(glob.glob(f"{x}/*.h5"))
+        self.partition = [0, 4]
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -125,8 +126,6 @@ class FinetuneDataset(IterableDataset):
             worker_id = worker_info.id
             num_workers = worker_info.num_workers
         fns = [x for i, x in enumerate(self.fns) if i % num_workers == worker_id]
-        if self.shuffle:
-            np.random.shuffle(fns)
         for fn in fns:
             with h5py.File(fn, "r") as f:
                 d = {}
@@ -139,6 +138,7 @@ class FinetuneDataset(IterableDataset):
                 if any(d[f"{args.finetune_medium}.{metric}.weight"][i, :].sum() > 0 for metric in ["watch", "rating"]):
                     idxs.append(i)
             if self.shuffle:
+                idxs = [x for (i, x) in enumerate(idxs) if i % self.partition[1] == self.partition[0]]
                 np.random.shuffle(idxs)
                 while len(idxs) % self.batch_size != 0:
                     idxs.append(np.random.choice(idxs))
@@ -149,6 +149,7 @@ class FinetuneDataset(IterableDataset):
             for idx in idxs:
                 ret = {k: v[idx, :] for k, v in d.items()}
                 yield ret
+        self.partition[0] = (self.partition[0] + 1) % self.partition[1]
 
 
 def worker_init_fn(worker_id):

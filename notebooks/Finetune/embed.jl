@@ -95,30 +95,11 @@ end
     for i = 1:num_items(medium)
         info[i-1] = Dict{String,Any}(
             "medium" => medium,
-            "matchedid" => -1,
-            "distinctid" => -1,
+            "matchedid" => i-1,
             "status" => 0,
             "rating" => 0,
             "progress" => 0,
         )
-    end
-    m = Dict(0 => "manga", 1 => "anime")[medium]
-    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String, ntasks = 1)
-    for match_source in [true, false]
-        for i = 1:DataFrames.nrow(df)
-            if (df.source[i] != source && match_source) ||
-               info[df.matchedid[i]]["matchedid"] != -1
-                continue
-            end
-            info[df.matchedid[i]] = Dict{String,Any}(
-                "medium" => medium,
-                "matchedid" => df.matchedid[i],
-                "distinctid" => df.distinctid[i],
-                "status" => 0,
-                "rating" => 0,
-                "progress" => 0,
-            )
-        end
     end
     info
 end

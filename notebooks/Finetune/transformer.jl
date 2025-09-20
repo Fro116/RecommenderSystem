@@ -50,6 +50,7 @@ end
 end
 
 function get_data(data, userid)
+    tokenize!(data)
     project!(data)
     num_test_items = 1
     @assert length(data["test_items"]) <= num_test_items
@@ -58,11 +59,12 @@ function get_data(data, userid)
         # prompt features
         "userid" => zeros(Int32, N),
         "time" => zeros(Float64, N),
+        "userage" => zeros(Float64, N),
+        "acctage" => zeros(Float64, N),
+        "gender" => zeros(Int32, N),
+        "source" => zeros(Int32, N),
         # item features
-        "0_matchedid" => zeros(Int32, N),
-        "0_distinctid" => zeros(Int32, N),
-        "1_matchedid" => zeros(Int32, N),
-        "1_distinctid" => zeros(Int32, N),
+        "matchedid" => zeros(Int32, N),
         # action features
         "status" => zeros(Int32, N),
         "rating" => zeros(Float32, N),
@@ -73,25 +75,27 @@ function get_data(data, userid)
         for metric in metrics
             d["$m.$metric.label"] = zeros(Float32, N)
             d["$m.$metric.weight"] = zeros(Float32, N)
+            d["$m.$metric.position"] = zeros(Int32, N)
         end
     end
     items = data["items"]
     if length(items) > max_seq_len - num_test_items
         items = items[length(items) - (max_seq_len-num_test_items) + 1:end]
     end
+    u = data["user"]
     i = 1
     for (item_source, istest) in [(items, false), (data["test_items"], true)]
         for x in item_source
             m = x["medium"]
-            n = 1 - x["medium"]
             # prompt features
             d["userid"][i] = userid
             d["time"][i] = x["history_max_ts"]
+            d["userage"][i] = isnothing(u["birthday"]) ? 0 : x["history_max_ts"] - u["birthday"]
+            d["acctage"][i] = isnothing(u["created_at"]) ? 0 : x["history_max_ts"] - u["created_at"]
+            d["gender"][i] = isnothing(u["gender"]) ? 0 : u["gender"] + 1
+            d["source"][i] = u["source"]
             # item features
-            d["$(m)_matchedid"][i] = x["matchedid"]
-            d["$(m)_distinctid"][i] = x["distinctid"]
-            d["$(n)_matchedid"][i] = -1
-            d["$(n)_distinctid"][i] = -1
+            d["matchedid"][i] = x["matchedid"] + ((m == 1) ? num_items(0) : 0)
             # action features
             d["status"][i] = x["status"]
             d["rating"][i] = x["rating"]
@@ -103,14 +107,17 @@ function get_data(data, userid)
                 if inferred_watch || new_watch
                     d["$m.watch.label"][i] = 1
                     d["$m.watch.weight"][i] = 1
+                    d["$m.watch.position"][i] = x["matchedid"]
                 end
                 if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
                     d["$m.rating.label"][i] = x["rating"]
                     d["$m.rating.weight"][i] = 1
+                    d["$m.rating.position"][i] = x["matchedid"]
                 end
                 if (x["status"] > 0) && (x["status"] != x["history_status"])
                     d["$m.status.label"][i] = x["status"]
                     d["$m.status.weight"][i] = 1
+                    d["$m.status.position"][i] = x["matchedid"]
                 end
             end
             i += 1
