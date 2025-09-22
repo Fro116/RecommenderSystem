@@ -133,6 +133,10 @@ function pretrain()
     wait_sfcompute()
     stop_sfcompute()
     run(`rclone --retries=10 copyto ../../data/training/list_tag r2:rsys/database/training/latest`)
+    tag = read("../../data/training/list_tag", String)
+    for modeltype in ["masked", "causal"]
+        run(`rclone --retries=10 copyto r2:rsys/database/training/$tag/transformer.$modeltype.pt ../../data/training/transformer.$modeltype.pt`)
+    end
 end
 
 write_yaml(prod=false, num_nodes=1)

@@ -10,6 +10,8 @@ function train(datetag::AbstractString)
         run(`julia transformer.jl`)
     end
     run(`julia rungpu.jl`)
+    cmd = "cd item_similarity && julia run.jl")
+    run(`sh -c $cmd`)
 end
 
 train(ARGS[1])
