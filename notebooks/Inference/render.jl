@@ -9,7 +9,7 @@ const datadir = "../../data/finetune";
 
 const registry = JLD2.load("$datadir/model.registry.jld2")
 const relations = merge([JLD2.load("$datadir/media_relations.$m.jld2") for m in [0, 1]]...)
-const item_similarity = JLD2.load("$datadir/clip.jld2")
+const item_similarity = JLD2.load("$datadir/item_similarity.jld2")
 const status_map = Dict(
     "none" => 0,
     "wont_watch" => 1,
@@ -82,15 +82,15 @@ end
     collect(values(groups))
 end
 
-function get_item_url(source, medium, itemid)
-    medium_map = Dict(0 => "manga", 1 => "anime")
+function get_item_url(source::String, medium::String, itemid::String)
+    @assert medium in ["manga", "anime"]
     source_map = Dict(
         "mal" => "https://myanimelist.net",
         "anilist" => "https://anilist.co",
         "kitsu" => "https://kitsu.app",
         "animeplanet" => "https://anime-planet.com",
     )
-    join([source_map[source], medium_map[medium], itemid], "/")
+    join([source_map[source], medium, itemid], "/")
 end
 
 function get_images(source, medium, itemid)
@@ -129,16 +129,28 @@ end
 @memoize function get_media_info(medium)
     info = Dict()
     m = Dict(0 => "manga", 1 => "anime")[medium]
-    df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String, ntasks = 1)
+    df = open("$datadir/$m.json") do f
+        JSON3.read(f)
+    end
     optint(x) = x != 0 ? x : missing
+    optval(x) = isnothing(x) ? missing : x
+    optdate(x) = isnothing(x) || isempty(x) ? missing : x
     function jsonlist(x)
-        if ismissing(x) || isempty(x)
+        if isnothing(x) || isempty(x)
             return missing
         end
-        join(JSON3.read(x), ", ")
+        valset = Set()
+        vals = []
+        for y in x
+            if y ∉ valset
+                push!(valset, y)
+                push!(vals, y)
+            end
+        end
+        join(vals, ", ")
     end
     function duration(x)
-        if ismissing(x) || round(x) == 0
+        if isnothing(x) || round(x) == 0
             return missing
         end
         d = []
@@ -159,40 +171,38 @@ end
         join(d, " ")
     end
     function season(x)
-        if ismissing(x)
+        if isnothing(x)
             return missing
         end
         season_str, year = split(x, "-")
         uppercasefirst(season_str) * " " * year
     end
     function english_title(title, engtitle)
-        if ismissing(engtitle) || lowercase(title) == lowercase(engtitle)
+        if isnothing(engtitle) || lowercase(title) == lowercase(engtitle)
             return missing
         end
         engtitle
     end
-    for i = 1:DataFrames.nrow(df)
-        if df.matchedid[i] == 0 || df.matchedid[i] in keys(info)
-            continue
-        end
-        info[df.matchedid[i]] = Dict{String,Any}(
-            "title" => df.title[i],
-            "english_title" => english_title(df.title[i], df.english_title[i]),
-            "url" => get_item_url(df.source[i], medium, df.itemid[i]),
-            "type" => df.mediatype[i],
-            "startdate" => df.startdate[i],
-            "enddate" => df.enddate[i],
-            "episodes" => optint(df.episodes[i]),
-            "duration" => duration(df.duration[i]),
-            "chapters" => optint(df.chapters[i]),
-            "volumes" => optint(df.volumes[i]),
-            "status" => df.status[i],
-            "season" => season.(df.season[i]),
-            "studios" => jsonlist(df.studios[i]),
-            "source" => df.source_material[i],
-            "genres" => jsonlist(df.genres[i]),
-            "synopsis" => df.synopsis[i],
-            "images" => get_images(df.source[i], medium, df.itemid[i]),
+    for x in df
+        key = first(x[:keys])
+        info[x[:matchedid]] = Dict{String,Any}(
+            "title" => x[:title],
+            "english_title" => english_title(x[:title], x[:english_title]),
+            "url" => get_item_url(key[2], key[1], key[3]),
+            "type" => optval(x[:metadata][:mediatype]),
+            "startdate" => optdate(x[:metadata][:dates][:startdate]),
+            "enddate" => optdate(x[:metadata][:dates][:enddate]),
+            "episodes" => optint(x[:metadata][:length][:episodes]),
+            "duration" => duration(x[:metadata][:length][:duration]),
+            "chapters" => optint(x[:metadata][:length][:chapters]),
+            "volumes" => optint(x[:metadata][:length][:volumes]),
+            "status" => optval(x[:metadata][:status]),
+            "season" => season.(x[:metadata][:dates][:season]),
+            "studios" => jsonlist(x[:metadata][:studios]),
+            "source" => optval(x[:metadata][:source_material]),
+            "genres" => jsonlist(x[:genres]),
+            "synopsis" => first(x[:synopsis]),
+            "images" => get_images(key[2], medium, key[3]),
             "missing_images" => get_missing_images(),
         )
     end
@@ -219,8 +229,7 @@ function retrieval(state)
     end
     for u in state["users"]
         p += logsoftmax(
-            registry["transformer.masked.$m.watch.weight"] * u["embeds"]["masked.$m"] +
-            registry["transformer.masked.$m.watch.bias"],
+            registry["transformer.masked.$m.watch.weight"] * u["embeds"]["masked.$m"],
         )[1:num_items(m)]
         # TODO incorporate other retrieval sources like ptw items or sequels
     end
@@ -322,12 +331,8 @@ function ranking(state, idxs, speedscope)
     for user in state["users"]
         u = user["embeds"]
         # watch feature
-        masked_logits =
-            registry["transformer.masked.$m.watch.weight"] * u["masked.$m"] +
-            registry["transformer.masked.$m.watch.bias"]
-        causal_logits =
-            registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"] +
-            registry["transformer.causal.$m.watch.bias"]
+        masked_logits = registry["transformer.masked.$m.watch.weight"] * u["masked.$m"]
+        causal_logits = registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"]
         p_masked = softmax(masked_logits)[idxs]
         p_causal = softmax(causal_logits)[idxs]
         p = sum(registry["$m.retrieval.coefs"] .* [p_masked, p_causal])

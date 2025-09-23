@@ -28,7 +28,7 @@ function download_data(finetune_tag::AbstractString)
         ["media_relations.$m.jld2" for m in [0, 1]],
         ["watches.$m.jld2" for m in [0, 1]],
         ["transformer.$modeltype.$stem" for modeltype in ["causal", "masked"] for stem in ["csv", "pt"]],
-        ["pairwise.model.$m.$stem" for m in [0, 1] for stem in ["csv", "pt"]],
+        ["pairwise.embeddings.$stem" for stem in [".jld2", ".csv"]],
         ["images.csv", "media_relations.csv"],
         ["media_embeddings.h5" ],
     )
@@ -174,6 +174,6 @@ function count_test_items(datasplit)
     logtag("TRANSFORMER", "$datasplit has $n_watch watch, $n_rating rating, and $n_status status entries")
 end
 
-# download_data(ARGS[1])
-# gen_splits()
+download_data(ARGS[1])
+gen_splits()
 count_test_items.(["training", "test"])

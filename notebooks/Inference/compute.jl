@@ -460,6 +460,7 @@ Oxygen.@post "/add_item" function add_item_endpoint(r::HTTP.Request)::HTTP.Respo
     state, action, pagination, encoding, speedscope = decode_state(r)
     source = action["source"]
     medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
+    state["medium"] = medium
     itemid = action["itemid"]
     matchedid = get(get_matchedid_map(medium), (source, itemid), nothing)
     if isnothing(matchedid)

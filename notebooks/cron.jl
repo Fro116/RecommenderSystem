@@ -26,28 +26,53 @@ function import_lists()
     end
 end
 
-function import_dbs()
+function import_db(name::String)
     logdir = "../logs/import"
-    mkpath(logdir)
-    for x in ["media", "images", "autocomplete", "autocomplete_items", "embeddings"]
-        runcmd(teecmd("cd Import/$x && julia save_$(x).jl", "$logdir/$x.log"))
+    if !ispath(logdir)
+        mkpath(logdir)
     end
+    runcmd(teecmd("cd Import/$name && julia save_$(name).jl", "$logdir/$name.log"))
 end
 
-function train_models()
-    today = Dates.today()
-    if Dates.dayofweek(today) == 3
-        import_dbs()
+function import_dbs()
+    dbs = Dict(
+        1 => ["media"],
+        2 => ["images"], # 9h
+        3 => ["autocomplete"],
+        4 => ["autocomplete_items"],
+    )
+    dow = Dates.dayofweek(Dates.today())
+    if dow ∉ keys(dbs)
+        return
     end
-    if Dates.day(today) in [15]
-        runcmd("cd Training && julia run.jl")
+    import_db.(dbs[dow])
+end
+
+function run_training()
+    import_db("embeddings")
+    datetag = Dates.format(Dates.today(), "yyyymmdd")
+    latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
+    if datetag != latest
+        logtag("TRAIN_MODELS", "list $datetag is not ready, using $latest")
     end
-    datetag = Dates.format(today, "yyyymmdd")
+    runcmd("cd Training && julia run.jl $latest")
+end
+
+function run_finetune()
+    datetag = Dates.format(Dates.today(), "yyyymmdd")
     latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
     if datetag != latest
         logtag("TRAIN_MODELS", "list $datetag is not ready, using $latest")
     end
     runcmd("cd Finetune && julia run.jl $latest")
+end
+
+function train_models()
+    # if Dates.day(Dates.today()) == 15
+    #     run_training()
+    # end
+    import_dbs()
+    run_finetune()
 end
 
 Threads.@spawn @scheduled "IMPORT_LISTS" "2:30" @handle_errors import_lists()

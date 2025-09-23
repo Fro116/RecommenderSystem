@@ -275,56 +275,21 @@ function save_similar_pairs()
         sdf = reduce(vcat, [get_similar_pairs(s, medium) for s in sources])
         all = aggragate_by_matchedid(sdf, medium)
         CSV.write("$datadir/pairs.$medium.csv", all)
-        M = rand(num_items(medium), num_items(medium)) .< 0.1
+        M = Matrix{Float32}(undef, num_items(medium), num_items(medium))
+        for i in 1:size(M)[1]
+            for j in i:size(M)[2]
+                val = rand()
+                M[i, j] = val
+                M[j, i] = val
+            end
+        end
+        M = M .< 0.02 # TODO gridsearch
         HDF5.h5open("$datadir/pairs.$medium.h5", "w") do file
             file["testmask", blosc = 3] = convert.(Int8, M)
         end
     end
 end
 
-function get_adaptations(medium::Int)
-    df = CSV.read("$datadir/../media_relations.csv", DataFrames.DataFrame)
-    filter!(
-        x ->
-            x.source_medium == medium &&
-                x.target_medium != medium &&
-                x.relation in ["adaptation", "source"],
-        df,
-    )
-    df = DataFrames.DataFrame(
-        cliptype = "adaptation$medium",
-        source_matchedid = df.source_matchedid,
-        target_matchedid = df.target_matchedid,
-    )
-    df = DataFrames.filter(x -> x.source_matchedid != 0 && x.target_matchedid != 0, df)
-    df
-end
-
-function save_adaptations(test_frac::Float64)
-    df = reduce(vcat, [get_adaptations.([0, 1])...])
-    function reflect(x)
-        cliptype, sourceid, targetid = x
-        reflect_type = Dict("adaptation0" => "adaptation1", "adaptation1" => "adaptation0")
-        (reflect_type[cliptype], targetid, sourceid)
-    end
-    ids = Set()
-    for i = 1:DataFrames.nrow(df)
-        k = (df.cliptype[i], df.source_matchedid[i], df.target_matchedid[i])
-        push!(ids, min(k, reflect(k)))
-    end
-    test_ids = Set(x for x in ids if rand() < test_frac)
-    test_ids = union(test_ids, Set(reflect.(test_ids)))
-    test_mask = [
-        (x.cliptype, x.source_matchedid, x.target_matchedid) in test_ids for
-        x in eachrow(df)
-    ]
-    training_df = df[.!test_mask, :]
-    test_df = df[test_mask, :]
-    CSV.write("$datadir/training.adaptations.csv", training_df)
-    CSV.write("$datadir/test.adaptations.csv", test_df)
-end
-
 logtag("ITEM_SIMILARITY", "downloading datasets")
 download_media()
 save_similar_pairs()
-save_adaptations(0.01)

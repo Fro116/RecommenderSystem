@@ -26,7 +26,7 @@ def register_transformer(modeltype):
     model.eval()
     n_0 = model.config["vocab_sizes"]["0_matchedid"]
     n_1 = model.config["vocab_sizes"]["1_matchedid"]
-    embs = model.item_embedding(torch.arange(0, n_0 + n_1 - 1))
+    embs = model.item_embedding(torch.arange(0, n_0 + n_1))
     return {
         f"transformer.{modeltype}.0.watch.weight": embs[:n_0, :].detach().numpy(),
         f"transformer.{modeltype}.1.watch.weight": embs[n_0:(n_0 + n_1), :].detach().numpy(),

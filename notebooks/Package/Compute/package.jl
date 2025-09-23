@@ -1,6 +1,24 @@
+import JSON3
+
 function copy(file::String, dst::String)
     mkpath(joinpath(dst, dirname(file)))
     cp(file, joinpath(dst, file))
+end
+
+function compress_media_json(app, medium)
+    fn = "$app/data/finetune/$medium.json"
+    json = open(fn) do f
+        JSON3.read(f)
+    end
+    json = Base.copy(json)
+    for x in json
+        for k in [:recommendations, :reviews, :embedding]
+            delete!(x, k)
+        end
+    end
+    open(fn, "w") do f
+        write(f, JSON3.write(json))
+    end
 end
 
 function compute(basedir::String)
@@ -15,15 +33,16 @@ function compute(basedir::String)
     mediums = ["manga", "anime"]
     sources = ["mal", "anilist", "kitsu", "animeplanet"]
     files = vcat(
-        ["$m.csv" for m in mediums],
+        ["$m.$stem" for m in mediums for stem in ["csv", "json"]],
         ["media_relations.$m.jld2" for m in [0, 1]],
-        ["training_tag", "finetune_tag", "model.registry.jld2", "images.csv", "clip.jld2"],
+        ["training_tag", "finetune_tag", "model.registry.jld2", "images.csv", "item_similarity.jld2"],
     )
     for f in files
         copy("data/finetune/$f", app)
     end
     copy("notebooks/julia_utils", app)
     copy("secrets", app)
+    compress_media_json.(app, mediums)
 end
 
 function build(basedir::String, name::String, tag::String)
