@@ -171,6 +171,8 @@ def to_device(data, local_rank):
     d = {}
     for k in data:
         d[k] = data[k].to(local_rank).to_dense()
+        if args.finetune and k.endswith(".position"):
+            d[k] = d[k].to(torch.int64)
     return d
 
 

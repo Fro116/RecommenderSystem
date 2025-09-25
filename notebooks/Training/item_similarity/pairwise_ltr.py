@@ -394,7 +394,7 @@ def training_config():
         "embed_dim": 1024,
         "learning_rate": 3e-4,
         "batch_size": 128,
-        "items_per_query": 2048,
+        "items_per_query": 2048, # TODO lower for test because we only sample 2%
     }
     return config
 

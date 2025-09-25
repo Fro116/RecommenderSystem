@@ -150,6 +150,7 @@ end
 @memoize function get_autocomplete_items_map(medium::Integer)
     m = Dict(0 => "manga", 1 => "anime")[medium]
     df = CSV.read("$datadir/$m.csv", DataFrames.DataFrame; stringtype = String, ntasks = 1)
+    sort!(df, :count, rev=true)
     seen = Set()
     records = []
     for i = 1:DataFrames.nrow(df)
@@ -314,13 +315,14 @@ function read_user_history(data::Dict)
     d, true
 end
 
-function add_user(d::Dict, medium::Int, speedscope)::HTTP.Response
+function add_user(d::Dict, medium::Int, speedscope)
     d_read, ok = read_user_history(Dict("source" => d["source"], "username" => d["username"]))
     if !ok
-        return d_read
+        return d_read, false
     end
     push!(speedscope, ("dbread", time()))
     data = decompress(d_read["data"])
+    push!(speedscope, ("decompress", time()))
     u = import_user(d_read["source"], data, d_read["db_refreshed_at"])
     u["timestamp"] = time()
     usermap = data["usermap"]
@@ -336,11 +338,11 @@ function add_user(d::Dict, medium::Int, speedscope)::HTTP.Response
     push!(speedscope, ("import", time()))
     d_embed = query_model(u, medium, nothing)
     if isnothing(d_embed)
-        return HTTP.Response(500, [])
+        return HTTP.Response(500, []), false
     end
     push!(speedscope, ("retrieval_model", time()))
     ret["embeds"] = d_embed
-    HTTP.Response(200, encode(ret, :msgpack)...)
+    ret, true
 end
 
 function refresh_user(source, username)
@@ -376,7 +378,32 @@ function decode_state(r::HTTP.Request)
     d = decode(r)
     state = d["state"]
     if isempty(d["state"])
-        state = Dict("medium" => 1, "users" => [], "items" => [])
+        state = Dict(
+            "medium" => 1,
+            "users" => [],
+            "items" => [],
+            "penalties" => Dict(
+                "same_series_penalty" => 0,
+                "related_penalty" => 0,
+                "mmr_penalty" => 0,
+            )
+        )
+        uri = HTTP.URI(r.target)
+        if uri.path == "/add_user"
+            state["penalties"] = Dict(
+                "same_series_penalty" => 1,
+                "related_penalty" => 1,
+                "mmr_penalty" => 1,
+            )
+        elseif uri.path == "/add_item"
+            state["penalties"] = Dict(
+                "same_series_penalty" => 0,
+                "related_penalty" => 0,
+                "mmr_penalty" => 0,
+            )
+        else
+            logerror("decode_state: unknown path $(uri.path)")
+        end
     else
         state = Serialization.deserialize(IOBuffer(Base64.base64decode(d["state"])))
     end
@@ -417,18 +444,17 @@ Oxygen.@post "/add_user" function add_user_endpoint(r::HTTP.Request)::HTTP.Respo
     source = action["source"]
     followup_action =
         Dict("endpoint" => "/refresh_user", "source" => source, "username" => username)
-    r_embed =
+    r_embed, ok =
         add_user(Dict("source" => source, "username" => username), state["medium"], speedscope)
-    if r_embed.status == 404 && refresh_user(source, username)
-        r_embed =
+    if !ok && r_embed.status == 404 && refresh_user(source, username)
+        r_embed, ok =
             add_user(Dict("source" => source, "username" => username), state["medium"], speedscope)
         followup_action = nothing
     end
-    if HTTP.iserror(r_embed)
+    if !ok
         return HTTP.Response(r_embed.status)
     end
-    d_embed = decode(r_embed)
-    push!(state["users"], d_embed)
+    push!(state["users"], r_embed)
     render_state(state, pagination, encoding, followup_action, speedscope)
 end
 
@@ -446,13 +472,12 @@ Oxygen.@post "/refresh_user" function refresh_user_endpoint(r::HTTP.Request)::HT
     if isnothing(idx) || !refresh_user(source, username)
         return HTTP.Response(200, encode(Dict(), :json, encoding)...)
     end
-    r_embed =
+    r_embed, ok =
         add_user(Dict("source" => source, "username" => username), state["medium"], speedscope)
-    if HTTP.iserror(r_embed)
+    if !ok
         return HTTP.Response(r_embed.status)
     end
-    d_embed = decode(r_embed)
-    state["users"][idx] = d_embed
+    state["users"][idx] = r_embed
     render_state(state, pagination, encoding, nothing, speedscope)
 end
 

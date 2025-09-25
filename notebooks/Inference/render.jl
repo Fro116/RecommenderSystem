@@ -207,7 +207,7 @@ end
         )
     end
     for (k, v) in collect(info)
-         if is_unreleased(v["status"], v["startdate"])
+        if is_unreleased(v["status"], v["startdate"])
             delete!(info, k)
         end
     end
@@ -332,7 +332,8 @@ function ranking(state, idxs, speedscope)
         u = user["embeds"]
         # watch feature
         masked_logits = registry["transformer.masked.$m.watch.weight"] * u["masked.$m"]
-        causal_logits = registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"]
+        causal_logits =
+            registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"]
         p_masked = softmax(masked_logits)[idxs]
         p_causal = softmax(causal_logits)[idxs]
         p = sum(registry["$m.retrieval.coefs"] .* [p_masked, p_causal])
@@ -345,6 +346,67 @@ function ranking(state, idxs, speedscope)
     end
     push!(speedscope, ("ranking_sort", time()))
     score, true
+end
+
+function reranking!(state, idxs, r, partialk, speedscope)
+    medium = state["medium"]
+    ids = Dict(x => i for (i, x) in Iterators.enumerate(idxs))
+    mmr_penalties = zeros(Float32, length(idxs))
+    embs = item_similarity["embeddings.$medium"][:, idxs]
+    pairwise_similarity = embs' * embs
+    related_idx = Set()
+    for u in state["users"]
+        for x in u["user"]["items"]
+            if x["medium"] != medium ||
+               x["status"] in [status_map["deleted"], status_map["planned"]]
+                continue
+            end
+            for (i, v) in zip(
+                SparseArrays.findnz(relations["$(medium).related"][:, x["matchedid"]+1])...,
+            )
+                if v != 0
+                    push!(related_idx, i)
+                end
+            end
+        end
+    end
+    function apply_same_series_penalty!(r, id)
+        for (i, v) in
+            zip(SparseArrays.findnz(relations["$(medium).related"][:, idxs[id]])...)
+            if v != 0 && i in keys(ids)
+                r[ids[i]] -= state["penalties"]["same_series_penalty"]
+            end
+        end
+    end
+    function apply_related_penalty!(r, id)
+        if idxs[id] in related_idx
+            for i in related_idx
+                if i in keys(ids)
+                    r[ids[i]] -= state["penalties"]["related_penalty"]
+                end
+            end
+        end
+    end
+    function apply_mmr_penalty!(mmr_penalties, id)
+        mmr_penalties .=
+            max.(
+                mmr_penalties,
+                pairwise_similarity[:, id] .*
+                state["penalties"]["mmr_penalty"],
+            )
+    end
+    selected_ids = []
+    for _ = 1:partialk
+        score = r - mmr_penalties
+        bestid = argmax(score)
+        push!(selected_ids, bestid)
+        r[bestid] = -Inf
+        apply_same_series_penalty!(r, bestid)
+        apply_related_penalty!(r, bestid)
+        apply_mmr_penalty!(mmr_penalties, bestid)
+    end
+    push!(speedscope, ("reranking", time()))
+    idxs[selected_ids]
 end
 
 function render(state, pagination, speedscope)
@@ -380,7 +442,7 @@ function render(state, pagination, speedscope)
     if !ok
         return r, false
     end
-    ids = idxs[sortperm(r, rev = true)] .- 1
+    ids = reranking!(state, idxs, r, eidx, speedscope) .- 1
     info = get_media_info(state["medium"])
     view = [render_card(info[i]) for i in ids[sidx:eidx]]
     (view, total), true

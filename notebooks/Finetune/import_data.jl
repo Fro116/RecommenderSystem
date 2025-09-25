@@ -145,35 +145,5 @@ function gen_splits()
     end
 end
 
-function count_test_items(datasplit)
-    n_watch = [0, 0]
-    n_rating = [0, 0]
-    n_status = [0, 0]
-    planned_status = 5
-    @showprogress for fn in Glob.glob("../../data/finetune/users/$datasplit/*/*.msgpack")
-        data = open(fn) do f
-            MsgPack.unpack(read(f))
-        end
-        for x in data["test_items"]
-            m = x["medium"]
-            inferred_watch = x["status"] == 0 && isnothing(x["history_status"])
-            new_watch =
-                (x["status"] > planned_status) &&
-                (isnothing(x["history_status"]) || x["history_status"] <= planned_status)
-            if inferred_watch || new_watch
-                n_watch[m+1] += 1
-            end
-            if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
-                n_rating[m+1] += 1
-            end
-            if (x["status"] > 0) && (x["status"] != x["history_status"])
-                n_status[m+1] += 1
-            end
-        end
-    end
-    logtag("TRANSFORMER", "$datasplit has $n_watch watch, $n_rating rating, and $n_status status entries")
-end
-
 download_data(ARGS[1])
 gen_splits()
-count_test_items.(["training", "test"])

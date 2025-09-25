@@ -244,6 +244,10 @@ function save_related(medium)
         "full_story",
         "adaptation",
         "alternative_setting",
+        "spin_off",
+        "compilation",
+        "contains",
+        "other",
     ])
     M = get_matrix(medium, relations; symmetric = true, transitive = true)
 end

@@ -9,6 +9,7 @@ connstr=`head -n 1 $secretdir/db.inference.txt | tr -d '\n'`
 
 tail -n +2 $df > $df.headerless
 mv $df.headerless $df
+rclone copyto -Pv $df r2:rsys/database/import/histories.csv
 
 gcloud auth login --quiet --cred-file=$secretdir/gcp.auth.json
 gcloud storage cp $df $bucket/
