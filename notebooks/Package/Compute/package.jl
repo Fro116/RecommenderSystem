@@ -5,6 +5,47 @@ function copy(file::String, dst::String)
     cp(file, joinpath(dst, file))
 end
 
+function layer1(basedir::String)
+    app = "$basedir/layer1"
+    if ispath(app)
+        rm(app; recursive = true)
+    end
+    copy("notebooks/Collect/layer1.py", app)
+    copy("secrets", app)
+end
+
+function layer2(basedir::String)
+    app = "$basedir/layer2"
+    if ispath(app)
+        rm(app; recursive = true)
+    end
+    copy("notebooks/Collect/layer2.jl", app)
+    copy("notebooks/Collect/entities.json", app)
+    copy("notebooks/julia_utils", app)
+    copy("secrets", app)
+end
+
+function layer3(basedir::String)
+    app = "$basedir/layer3"
+    if ispath(app)
+        rm(app; recursive = true)
+    end
+    copy("notebooks/Collect/layer3.jl", app)
+    copy("notebooks/julia_utils", app)
+    copy("secrets", app)
+end
+
+function database(basedir::String)
+    app = "$basedir/database"
+    if ispath(app)
+        rm(app; recursive = true)
+    end
+    copy("notebooks/Inference/database.jl", app)
+    copy("notebooks/Import/lists/import_history.jl", app)
+    copy("notebooks/julia_utils", app)
+    copy("secrets", app)
+end
+
 function compress_media_json(app, medium)
     fn = "$app/data/finetune/$medium.json"
     json = open(fn) do f
@@ -50,20 +91,20 @@ function build(basedir::String, name::String, tag::String)
     run(`docker container run --rm --runtime=nvidia --gpus all -p 5000:8080 --name embed embed`, wait = false)
     run(`docker build --network host -t $name $basedir`)
     run(`docker container stop embed`)
-    run(`docker tag $name $repo/$name:$tag`)
-    run(`docker push $repo/$name:$tag`)
-    run(`docker system prune -af --filter until=24h`)
-    project = read("secrets/gcp.project.txt", String)
-    region = read("secrets/gcp.region.txt", String)
-    group = read("secrets/gcp.igname.txt", String)
-    template = read("secrets/gcp.igtemplate.txt", String)
-    t = Int(round(time()))
-    cmds = [
-        "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet",
-        "gcloud beta compute instance-groups managed rolling-action start-update $group --project=$project --region=$region --type=proactive --max-unavailable=0 --min-ready=0 --minimal-action=replace --replacement-method=substitute --max-surge=3 --version=template=$template,name=0-$t",
-    ]
-    deploy = replace(join(cmds, " && "))
-    run(`sh -c $deploy`)
+    # run(`docker tag $name $repo/$name:$tag`)
+    # run(`docker push $repo/$name:$tag`)
+    # run(`docker system prune -af --filter until=24h`)
+    # project = read("secrets/gcp.project.txt", String)
+    # region = read("secrets/gcp.region.txt", String)
+    # group = read("secrets/gcp.igname.txt", String)
+    # template = read("secrets/gcp.igtemplate.txt", String)
+    # t = Int(round(time()))
+    # cmds = [
+    #     "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet",
+    #     "gcloud beta compute instance-groups managed rolling-action start-update $group --project=$project --region=$region --type=proactive --max-unavailable=0 --min-ready=0 --minimal-action=replace --replacement-method=substitute --max-surge=3 --version=template=$template,name=0-$t",
+    # ]
+    # deploy = replace(join(cmds, " && "))
+    # run(`sh -c $deploy`)
 end
 
 cd("../../..")
@@ -73,5 +114,9 @@ if ispath(basedir)
 end
 mkpath(basedir)
 cp("notebooks/Package/Compute/app", basedir, force = true)
+layer1(basedir)
+layer2(basedir)
+layer3(basedir)
+database(basedir)
 compute(basedir)
 build(basedir, "compute", "latest")
