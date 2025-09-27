@@ -9,7 +9,8 @@ connstr=`head -n 1 $secretdir/db.inference.txt | tr -d '\n'`
 
 mlr --csv cat $df.*.csv > $df.csv
 rm $df.*.csv
-rclone copyto -Pv $df.csv r2:rsys/database/import/$df.csv
+zstd $df.csv -o $df.csv.zstd
+rclone copyto -Pv $df.csv.zstd r2:rsys/database/import/$df.csv.zstd
 gcloud auth login --quiet --cred-file=$secretdir/gcp.auth.json
 gcloud storage cp $df.csv $bucket/
 
