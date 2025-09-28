@@ -5,6 +5,23 @@ function copy(file::String, dst::String)
     cp(file, joinpath(dst, file))
 end
 
+function embed_py(basedir::String)
+    app = "$basedir/embed_py"
+    if ispath(app)
+        rm(app; recursive = true)
+    end
+    copy("notebooks/Training/transformer.model.py", app)
+    copy("notebooks/Finetune/embed.py", app)
+    mediums = [0, 1]
+    files = vcat(
+        ["manga.csv", "anime.csv", "finetune_tag", "training_tag"],
+        ["transformer.$modeltype.$m.finetune.pt" for modeltype in ["causal", "masked"] for m in mediums],
+    )
+    for f in files
+        copy("data/finetune/$f", app)
+    end
+end
+
 function layer1(basedir::String)
     app = "$basedir/layer1"
     if ispath(app)
@@ -87,36 +104,32 @@ function compute(basedir::String)
 end
 
 function build(basedir::String, name::String, tag::String)
-    repo = read("secrets/gcp.docker.txt", String)
-    run(`docker container run --rm --runtime=nvidia --gpus all -p 5000:8080 --name embed embed`, wait = false)
     run(`docker build --network host -t $name $basedir`)
-    run(`docker container stop embed`)
-    # run(`docker tag $name $repo/$name:$tag`)
-    # run(`docker push $repo/$name:$tag`)
-    # run(`docker system prune -af --filter until=24h`)
-    # project = read("secrets/gcp.project.txt", String)
-    # region = read("secrets/gcp.region.txt", String)
-    # group = read("secrets/gcp.igname.txt", String)
-    # template = read("secrets/gcp.igtemplate.txt", String)
-    # t = Int(round(time()))
-    # cmds = [
-    #     "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet",
-    #     "gcloud beta compute instance-groups managed rolling-action start-update $group --project=$project --region=$region --type=proactive --max-unavailable=0 --min-ready=0 --minimal-action=replace --replacement-method=substitute --max-surge=3 --version=template=$template,name=0-$t",
-    # ]
-    # deploy = replace(join(cmds, " && "))
-    # run(`sh -c $deploy`)
+    username, password, project = split(read("secrets/docker.auth.txt", String), "\n")
+    cmds = [
+        "docker login -u $username -p '$password'",
+        "docker tag $name $username/$project-$name:$tag",
+        "docker push $username/$project-$name:$tag"
+    ]
+    cmd = join(cmds, " && ")
+    run(`sh -c $cmd`)
+    repo = read("secrets/gcp.docker.txt", String)
+    run(`docker tag $name $repo/$name:$tag`)
+    run(`docker push $repo/$name:$tag`)
+    run(`docker system prune -af --filter until=24h`)
 end
 
 cd("../../..")
-basedir = "data/package/compute"
+basedir = "data/package/server"
 if ispath(basedir)
     rm(basedir; recursive = true)
 end
 mkpath(basedir)
-cp("notebooks/Package/Compute/app", basedir, force = true)
+cp("notebooks/Package/Server/app", basedir, force = true)
+embed_py(basedir)
 layer1(basedir)
 layer2(basedir)
 layer3(basedir)
 database(basedir)
 compute(basedir)
-build(basedir, "compute", "latest")
+build(basedir, "server", "latest")

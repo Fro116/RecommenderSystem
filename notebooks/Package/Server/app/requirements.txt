@@ -1,3 +1,4 @@
+curl_cffi==0.10.0
 fastapi==0.115.12
 msgpack==1.1.0
 torchao==0.10.0

@@ -136,6 +136,7 @@ function upload_histories(datetag::AbstractString)
         "zstd $datadir/new_histories.csv -o $datadir/new_histories.csv.zstd",
         "rm $datadir/new_histories.*.csv",
         "rclone --retries=10 copyto $datadir/new_histories.csv.zstd r2:rsys/database/lists/$datetag/histories.csv.zstd",
+        "rclone --retries=10 copyto $datadir/new_histories.csv.zstd r2:rsys/database/import/user_histories.csv.zstd",
     ]
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)

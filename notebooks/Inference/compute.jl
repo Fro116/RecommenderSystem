@@ -13,10 +13,11 @@ include("../julia_utils/multithreading.jl")
 include("../Finetune/embed.jl")
 
 const secretdir = "../../secrets"
-const PORT = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 8080
-const DATABASE_WRITE_URL = length(ARGS) >= 2 ? ARGS[2] : read("$secretdir/url.database.txt", String)
+const TUNNEL = length(ARGS) >= 1 ? parse(Bool, ARGS[1]) : false
+const PORT = 8080
+const DATABASE_WRITE_URL = read("$secretdir/url.database.txt", String)
 const datadir = "../../data/finetune"
-const MODEL_URL = (length(ARGS) >= 3) ? ARGS[3] : read("$secretdir/url.embed.txt", String)
+const MODEL_URL = read("$secretdir/url.embed.txt", String)
 include("render.jl")
 
 sanitize(x) = strip(x)
@@ -628,6 +629,10 @@ function compile(port::Integer)
     get_media_info.([0, 1])
     Threads.@threads for source in ["mal", "anilist", "kitsu", "animeplanet"]
         compile_source(port, source)
+    end
+    if TUNNEL
+        token = read("$secretdir/cf.tunnel.txt", String)
+        Threads.@spawn @handle_errors run(`cloudflared tunnel run --token $token`)
     end
 end
 
