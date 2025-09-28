@@ -375,7 +375,7 @@ function db_prioritize_junction_table(
             """
             SELECT $(join(idcols, ", ")) FROM $primary_table
             WHERE db_consecutive_failures >= \$1
-            AND \$2 - db_last_success_at >= \$3
+            AND (db_last_success_at IS NULL OR \$2 - db_last_success_at >= \$3)
             AND \$2 - db_refreshed_at > \$4
             ORDER BY db_refreshed_at ASC LIMIT \$5;
             """,
@@ -470,7 +470,7 @@ function db_monitor_junction_table(primary_table::String, tscol::String)
             """
             SELECT COUNT(*) AS value FROM $primary_table
             WHERE db_consecutive_failures >= \$1
-            AND \$2 - db_last_success_at >= \$3;
+            AND (db_last_success_at IS NULL OR \$2 - db_last_success_at >= \$3);
             """,
             tuple(3, curtime, month),
         )

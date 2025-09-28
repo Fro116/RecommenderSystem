@@ -1,7 +1,8 @@
 import Dates
-include("julia_utils/multithreading.jl")
-include("julia_utils/scheduling.jl")
-include("julia_utils/stdout.jl")
+include("../notebooks/julia_utils/multithreading.jl")
+include("../notebooks/julia_utils/scheduling.jl")
+include("../notebooks/julia_utils/stdout.jl")
+cd("../notebooks")
 
 function runcmd(x)
     logtag("CRON", "running $x")
@@ -75,8 +76,4 @@ function train_models()
     run_finetune()
 end
 
-Threads.@spawn @scheduled "IMPORT_LISTS" "2:30" @handle_errors import_lists()
-Threads.@spawn @scheduled "TRAIN_MODELS" "10:00" @handle_errors train_models()
-while true
-    sleep(86400)
-end
+@scheduled "TRAIN_MODELS" "10:00" @handle_errors train_models()

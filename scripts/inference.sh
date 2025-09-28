@@ -7,12 +7,12 @@ kill_bg_processes() {
 trap kill_bg_processes INT
 cd ../../
 workdir=`pwd`
-logs="$workdir/RecommenderSystem/logs/training"
+logs="$workdir/RecommenderSystem/logs/inference"
 mkdir -p $logs && rm -f $logs/*.log
 source venv/bin/activate
 export JULIA_PROJECT="$workdir/juliaenv"
 export JULIA_NUM_THREADS="16"
 logjl="$workdir/RecommenderSystem/notebooks/Collect/logrotate.jl"
 cd $workdir/RecommenderSystem/scripts
-(julia training.jl |& julia -t 1 $logjl $logs/training.log 1000000) &
-tail -F $logs/training.log
+(julia inference.jl |& julia -t 1 $logjl $logs/inference.log 1000000) &
+tail -F $logs/inference.log

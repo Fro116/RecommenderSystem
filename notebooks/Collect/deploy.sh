@@ -33,6 +33,7 @@ mkdir -p $logs && rm $logs/*.log
 (julia -t 1 collect_external.jl |& julia -t 1 logrotate.jl $logs/external.log) &
 (julia -t 1 collect_images.jl "http://localhost:4003" |& julia -t 1 logrotate.jl $logs/images.log) &
 
-(julia backup.jl |& julia -t 1 logrotate.jl $logs/backup.log) &
+(julia -t 1 backup.jl |& julia -t 1 logrotate.jl $logs/backup.log) &
+(julia -t 1 import_lists.jl |& julia -t 1 logrotate.jl $logs/import_lists.log) &
 
 tail -F $logs/layer1.1.log $logs/layer1.2.log $logs/layer1.3.log $logs/layer1.4.log $logs/layer2.log $logs/layer3.log $logs/mal_userids.log $logs/animeplanet_userids.log $logs/mal_users.log $logs/animeplanet_users.log $logs/anilist_users.log $logs/kitsu_users.log $logs/mal_media.log $logs/anilist_media.log $logs/kitsu_media.log $logs/animeplanet_media.log $logs/backup.log $logs/external.log $logs/images.log
