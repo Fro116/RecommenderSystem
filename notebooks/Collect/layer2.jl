@@ -72,7 +72,7 @@ function load_resources()::Vector{Resource}
         [Dict("location" => "malweb", "proxyurl" => x, "ratelimit" => 8) for x in shared]
 
     anilist_resources =
-        [Dict("location" => "anilist", "proxyurl" => x, "ratelimit" => 4) for x in shared]
+        [Dict("location" => "anilist", "proxyurl" => x, "ratelimit" => 8) for x in shared]
 
     (username, password) = readlines("../../secrets/kitsu.auth.txt")
     kitsu_credentials = [Dict("username" => username, "password" => password)]

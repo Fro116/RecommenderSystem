@@ -5,7 +5,7 @@ df="item_autocomplete"
 db="autocomplete_items"
 secretdir="../../../secrets"
 bucket=`cat $secretdir/gcp.bucket.txt`
-connstr=`head -n 1 $secretdir/db.inference.txt | tr -d '\n'`
+connstr=`tail -n 1 $secretdir/db.inference.txt | tr -d '\n'`
 
 tail -n +2 $df.csv > $df.csv.headerless
 mv $df.csv.headerless $df.csv

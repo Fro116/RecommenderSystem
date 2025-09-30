@@ -57,6 +57,7 @@ function get_media_groups(medium::AbstractString)
     min_count = 100
     distinctid = 0
     groupmap = Dict()
+    # TODO dedup source
     for x in media
         if x[:count] < min_count
             x[:distinctid] = 0

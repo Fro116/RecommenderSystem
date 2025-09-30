@@ -379,7 +379,7 @@ function db_prioritize_junction_table(
             AND \$2 - db_refreshed_at > \$4
             ORDER BY db_refreshed_at ASC LIMIT \$5;
             """,
-            tuple(3, curtime, month, quarter, N),
+            tuple(3, curtime, month, quarter*2, Int(round(N*0.1))),
         )
         unique(vcat(entries...))
     end
@@ -457,20 +457,21 @@ function db_monitor_junction_table(primary_table::String, tscol::String)
         run("monthly_refresh_items", time_query, tuple(quarter, curtime, month))
         run("quarterly_refresh_items", time_query, tuple(year, curtime, quarter))
         run(
+            "invalid_refresh_items",
+            """
+            SELECT COUNT(*) AS value FROM $primary_table
+            WHERE db_consecutive_failures >= \$1
+            AND (db_last_success_at IS NULL OR \$2 - db_last_success_at >= \$3)
+            AND \$2 - db_refreshed_at > \$4;
+            """,
+            tuple(3, curtime, month, 2*quarter),
+        )
+        run(
             "valid_items",
             """
             SELECT COUNT(*) AS value FROM $primary_table
             WHERE db_consecutive_failures < \$1
             OR \$2 - db_last_success_at < \$3;
-            """,
-            tuple(3, curtime, month),
-        )
-        run(
-            "invalid_items",
-            """
-            SELECT COUNT(*) AS value FROM $primary_table
-            WHERE db_consecutive_failures >= \$1
-            AND (db_last_success_at IS NULL OR \$2 - db_last_success_at >= \$3);
             """,
             tuple(3, curtime, month),
         )

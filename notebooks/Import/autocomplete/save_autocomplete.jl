@@ -189,6 +189,7 @@ end
 function upload_autocompletes()
     logtag("SAVE_AUTOCOMPLETE", "uploading autocompletes")
     qrun(`./save_autocomplete.sh`)
+    rm(datadir, recursive = true, force = true)
 end
 
 import_data()

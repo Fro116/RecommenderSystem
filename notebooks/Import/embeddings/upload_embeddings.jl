@@ -232,6 +232,7 @@ function save_embeddings()
     end
     cmd = "rclone --retries=10 copyto $datadir/embeddings.json r2:rsys/database/import/embeddings.json"
     run(`sh -c $cmd`)
+    rm("../../../data/import/embeddings", recursive=true, force=true)
 end
 
 save_embeddings()

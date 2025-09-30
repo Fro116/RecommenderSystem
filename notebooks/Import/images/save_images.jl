@@ -230,6 +230,7 @@ function encode_images()
     sr_images(to_add)
     save_image_metadata(to_delete)
     upload_images(to_add, to_delete)
+    rm(datadir, recursive = true, force = true)
 end
 
 encode_images()
