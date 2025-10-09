@@ -439,7 +439,7 @@ def train():
     logger.info(f"Epoch: -1, Training Loss: {training_loss}")
     test_loss = get_loss(model, "test")
     logger.info(f"Epoch: -1, Test Loss: {test_loss}")
-    early_stopper(training_loss)
+    early_stopper(test_loss)
     checkpoint_model(model, -1, training_loss, test_loss, True)
     best_losses = (training_loss, test_loss)
     for epoch in range(num_epochs):

@@ -32,7 +32,7 @@ function download_data(datetag::AbstractString)
         ["$m.groups.csv" for m in MEDIUMS],
         ["$(s)_media_relations.csv" for s in SOURCES],
         ["images.csv"],
-        ["embeddings.json" for m in [0, 1]],
+        ["embeddings.json", "search_embeddings.jld2"]],
     )
     for fn in files
         cmd = "$retrieval/$fn $datadir/$fn"
