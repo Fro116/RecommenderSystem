@@ -74,16 +74,27 @@ function load_resources()::Vector{Resource}
     anilist_resources =
         [Dict("location" => "anilist", "proxyurl" => x, "ratelimit" => 8) for x in shared]
 
-    (username, password) = readlines("../../secrets/kitsu.auth.txt")
-    kitsu_credentials = [Dict("username" => username, "password" => password)]
+    kitsu_credentials = []
+    for x in readlines("../../secrets/kitsu.auth.txt")
+        username, password = split(x, ",")
+        push!(kitsu_credentials, Dict("username" => username, "password" => password))
+    end
     kitsu_resources = [
         Dict(
             "location" => "kitsu",
-            "proxyurl" => x,
-            "credentials" => kitsu_credentials,
+            "credentials" => x,
+            "proxyurls" => [],
             "ratelimit" => 8,
-        ) for x in shared
+        ) for x in kitsu_credentials
     ]
+    i = 1
+    for proxy in shared
+        if length(kitsu_resources[i]["proxyurls"]) < 10
+            push!(kitsu_resources[i]["proxyurls"], proxy)
+        end
+        i = (i % length(kitsu_resources)) + 1
+    end
+    kitsu_resources = [x for x in kitsu_resources if !isempty(x["proxyurls"])]
 
     animeplanet_credentials = []
     for x in readlines("../../secrets/animeplanet.auth.txt")
@@ -1755,7 +1766,7 @@ Oxygen.@post "/kitsu" function kitsu_api(r::HTTP.Request)::HTTP.Response
 end
 
 function kitsu_get_token(resource::Resource)
-    credentials = rand(resource["credentials"])
+    credentials = resource["credentials"]
     username = credentials["username"]
     password = credentials["password"]
     url = "https://kitsu.app/api/oauth/token"
@@ -1765,7 +1776,7 @@ function kitsu_get_token(resource::Resource)
     headers["impersonate"] = true
     r = request(resource, "POST", url, headers, content)
     if r.status >= 400
-        logstatus("kitsu_get_token", r, url)
+        logerror("kitsu_get_token failed for $username")
         return HTTP.Response(r)
     end
     data = JSON3.read(r.body)

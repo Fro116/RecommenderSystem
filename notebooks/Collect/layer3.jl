@@ -91,8 +91,7 @@ function get_session(token)
     if token["resource"]["location"] == "kitsu"
         r = request("kitsu", Dict("token" => token, "endpoint" => "token"))
         if r.status >= 400
-            logerror("kitsu login failed, sleeping for 10s")
-            sleep(9 + rand())
+            logerror("kitsu login failed with $token")
             return TOKEN_UNAVAILABLE::Errors
         end
         data = decode(r)

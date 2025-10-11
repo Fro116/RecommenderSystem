@@ -188,7 +188,17 @@ end
 
 function upload_autocompletes()
     logtag("SAVE_AUTOCOMPLETE", "uploading autocompletes")
-    qrun(`./save_autocomplete.sh`)
+    cmds = [
+        "cd ../../../data/import/autocomplete",
+        "df=user_autocomplete",
+        "db=autocomplete_users",
+        raw"mlr --csv cat $df.*.csv > $df.csv",
+        raw"rm $df.*.csv",
+        raw"zstd $df.csv -o $df.csv.zstd",
+        raw"rclone copyto -Pv $df.csv.zstd r2:rsys/database/import/$df.csv.zstd",
+    ]
+    cmd = join(cmds, " && ")
+    run(`sh -c $cmd`)
     rm(datadir, recursive = true, force = true)
 end
 

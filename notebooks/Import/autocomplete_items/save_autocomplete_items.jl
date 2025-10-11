@@ -248,8 +248,22 @@ function save_autcompletes()
     CSV.write("$datadir/item_autocomplete.csv", df, quotestrings=true)
 end
 
+function upload_autocompletes()
+    cmds = [
+        "cd ../../../data/import/autocomplete_items",
+        "df=item_autocomplete",
+        "db=autocomplete_items",
+        raw"tail -n +2 $df.csv > $df.csv.headerless",
+        raw"mv $df.csv.headerless $df.csv",
+        raw"zstd $df.csv -o $df.csv.zstd",
+        raw"rclone copyto -Pv $df.csv.zstd r2:rsys/database/import/$df.csv.zstd",
+    ]
+    cmd = join(cmds, " && ")
+    run(`sh -c $cmd`)
+end
+
 download_data()
 save_autcompletes()
 logtag("SAVE_AUTOCOMPLETE_ITEMS", "uploading autocompletes")
-qrun(`./autocomplete.sh`)
+upload_autocompletes()
 rm(datadir, recursive = true, force = true)
