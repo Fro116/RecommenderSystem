@@ -296,10 +296,12 @@ function update_history(
         end
         duplicate_item = false
         for y in snapshots[k]
-            if y["history_tag"] ∉ ["infer", "delete"] && is_duplicate_item(x, y, source)
-                y["history_tag"] = datetag
+            if !duplicate_item && y["history_tag"] ∉ ["infer", "delete"] && is_duplicate_item(x, y, source)
                 duplicate_item = true
-                break
+                continue
+            end
+            if duplicate_item
+                y["history_tag"] = "remove"
             end
         end
         if duplicate_item
@@ -314,8 +316,7 @@ function update_history(
             if is_consistent_item(x, y, source)
                 x["history_min_ts"] = max(x["history_min_ts"], y["history_min_ts"])
                 x["history_max_ts"] = min(x["history_max_ts"], y["history_max_ts"])
-                y["history_max_ts"] = Inf # set to Inf to remove y
-                y["history_min_ts"] = Inf
+                y["history_tag"] = "remove"
             else
                 x["history_min_ts"] = max(x["history_min_ts"], hist["user"]["history_ts"])
             end
@@ -326,10 +327,7 @@ function update_history(
     for k in collect(keys(snapshots))
         v = snapshots[k]
         sort!(v, by = x -> (x["history_max_ts"], x["history_min_ts"]))
-        idx = findfirst(==(datetag), [x["history_tag"] for x in v])
-        if !isnothing(idx)
-            v = v[1:idx]
-        end
+        filter!(x -> x["history_tag"] != "remove", v)
         snapshots[k] = v
     end
     merged_items = []

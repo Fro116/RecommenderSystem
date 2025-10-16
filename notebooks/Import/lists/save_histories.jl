@@ -169,7 +169,6 @@ function save_histories(startdate::AbstractString, enddate::AbstractString)
         rm("$datadir/lists", recursive = true, force = true)
     end
     upload_histories(enddate)
-    run(`./save_histories.sh`)
     rm(datadir, recursive = true, force = true)
 end
 
