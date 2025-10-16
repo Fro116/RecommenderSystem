@@ -80,7 +80,7 @@ function query_model(
     end
     data = Dict()
     for (k, v) in ret
-        data[k] = k == "version" ? v : Float32.(v)
+        data[k] = Float32.(v)
     end
     data
 end

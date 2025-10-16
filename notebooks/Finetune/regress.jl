@@ -59,10 +59,10 @@ end
 function save_users(medium, registry)
     logtag("REGRESS", "saving users for medium $medium")
     fns = Glob.glob("$datadir/users/test/*/*.msgpack")
-    users = Vector{Any}(undef, length(fns))
+    records = Vector{Any}(undef, length(fns))
     m = medium
     Threads.@threads for i = 1:length(fns)
-        users[i] = nothing
+        records[i] = nothing
         fn = fns[i]
         # load user
         data = open(fn) do f
@@ -116,11 +116,7 @@ function save_users(medium, registry)
         @assert !isnothing(r_ranking)
         merge!(data["embeds"], r_ranking)
         data["ranking_matchedids"] = idxs
-        users[i] = data
-    end
-    rets = [x for x in users if !isnothing(x)]
-    records = []
-    for u in rets
+        u = data
         project!(u)
         record = Dict()
         for (k, v) in u["embeds"]
@@ -143,8 +139,9 @@ function save_users(medium, registry)
         record["status"] = item["status"]
         record["last_status"] = u["last_status"]
         record["num_tokens"] = length(u["items"])
-        push!(records, record)
+        records[i] = record
     end
+    filter!(x -> !isnothing(x), records)
     JLD2.save("$datadir/regress.$medium.jld2", Dict("users" => records))
 end
 

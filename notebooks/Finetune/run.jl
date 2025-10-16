@@ -14,10 +14,8 @@ function finetune(list_tag::AbstractString)
     run(`python register.py`)
     run(`julia regress.jl`)
     run(`julia pairwise.jl`)
-    for app in ["Embed", "Compute"]
-        cmd = "cd ../Package/$app && julia package.jl"
-        run(`sh -c $cmd`)
-    end
+    cmd = "cd ../Package/Server && julia package.jl"
+    run(`sh -c $cmd`)
 end
 
 finetune(ARGS[1])
