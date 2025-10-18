@@ -2271,7 +2271,7 @@ function animeplanet_get_media(
 )
     url = "https://www.anime-planet.com/$medium/$itemid"
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-    text = parse_animeplanet_response(resource, r, x -> !occursin("<h1>You searched for $itemid</h1>", x))
+    text = parse_animeplanet_response(resource, r, x -> !occursin("<h1>You searched for $itemid", x))
     if text isa HTTP.Response
         logstatus("animeplanet_get_media", text, url)
         return text

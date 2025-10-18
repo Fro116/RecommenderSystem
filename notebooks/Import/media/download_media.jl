@@ -817,7 +817,7 @@ end
 function import_animeplanet(medium)
     source = "animeplanet"
     df = read_csv("$datadir/$source/$(source)_media.csv")
-    df = filter(x -> x.medium == medium && !ismissing(x.db_last_success_at), df)
+    df = filter(x -> x.medium == medium && !ismissing(x.db_last_success_at) && !ismissing(x.title), df)
     function alternative_titles(x)
         if ismissing(x)
             return []
