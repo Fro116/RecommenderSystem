@@ -562,7 +562,7 @@ def train():
         assert gpu_config == "local"
         # emulate training on a 8 gpu setup with gradient accumulation
         # TODO check if grad_accum_steps is still useful
-        local_batch_size = 8 if config["causal"] else 8
+        local_batch_size = 16 if config["causal"] else 16
         assert global_batch_size % local_batch_size == 0
         grad_accum_steps = global_batch_size // local_batch_size
     else:

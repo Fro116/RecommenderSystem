@@ -114,9 +114,14 @@ function build(basedir::String, name::String, tag::String)
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)
     repo = read("secrets/gcp.docker.txt", String)
-    run(`docker tag $name $repo/$name:$tag`)
-    run(`docker push $repo/$name:$tag`)
-    run(`docker system prune -af --filter until=24h`)
+    cmds = [
+        "gcloud auth login --quiet --cred-file=secrets/gcp.auth.json",
+        "docker tag $name $repo/$name:$tag",
+        "docker push $repo/$name:$tag",
+        "docker system prune -af --filter until=24h",
+    ]
+    cmd = join(cmds, " && ")
+    run(`sh -c $cmd`)
 end
 
 cd("../../..")
