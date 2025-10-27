@@ -20,10 +20,10 @@ mkdir -p $logs && rm $logs/*.log
 (julia -t 32 collect_junction.jl mal_users user mal_user_items items mal_userids userid username db_junction_last_changed_at "http://localhost:4003/mal_user" 100 |& julia -t 1 logrotate.jl $logs/mal_users.log) &
 (julia -t 1 collect_junction.jl mal_media details mal_media_relations relations mal_user_items nothing medium,itemid db_primary_last_changed_at "http://localhost:4003/mal_media" 1 |& julia -t 1 logrotate.jl $logs/mal_media.log) &
 
-(julia -t 16 collect_junction.jl anilist_users user anilist_user_items items nothing nothing userid db_junction_last_changed_at "http://localhost:4003/anilist_user" 16 |& julia -t 1 logrotate.jl $logs/anilist_users.log) &
+(julia -t 24 collect_junction.jl anilist_users user anilist_user_items items nothing nothing userid db_junction_last_changed_at "http://localhost:4003/anilist_user" 24 |& julia -t 1 logrotate.jl $logs/anilist_users.log) &
 (julia -t 1 collect_junction.jl anilist_media details anilist_media_relations relations anilist_user_items nothing medium,itemid db_primary_last_changed_at "http://localhost:4003/anilist_media" 1 |& julia -t 1 logrotate.jl $logs/anilist_media.log) &
 
-(julia -t 4 collect_junction.jl kitsu_users user kitsu_user_items items nothing nothing userid db_junction_last_changed_at "http://localhost:4003/kitsu_user" 6 |& julia -t 1 logrotate.jl $logs/kitsu_users.log) &
+(julia -t 8 collect_junction.jl kitsu_users user kitsu_user_items items nothing nothing userid db_junction_last_changed_at "http://localhost:4003/kitsu_user" 9 |& julia -t 1 logrotate.jl $logs/kitsu_users.log) &
 (julia -t 1 collect_junction.jl kitsu_media details kitsu_media_relations relations kitsu_user_items nothing medium,itemid db_primary_last_changed_at "http://localhost:4003/kitsu_media" 1 |& julia -t 1 logrotate.jl $logs/kitsu_media.log) &
 
 (julia -t 1 collect_single.jl animeplanet_userids userid "http://localhost:4003/animeplanet_username" 1 |& julia -t 1 logrotate.jl $logs/animeplanet_userids.log) &
