@@ -59,8 +59,6 @@ function get_data(data, userid)
         # prompt features
         "userid" => zeros(Int32, N),
         "time" => zeros(Float64, N),
-        "userage" => zeros(Float64, N),
-        "acctage" => zeros(Float64, N),
         "gender" => zeros(Int32, N),
         "source" => zeros(Int32, N),
         # item features
@@ -90,8 +88,6 @@ function get_data(data, userid)
             # prompt features
             d["userid"][i] = userid
             d["time"][i] = x["history_max_ts"]
-            d["userage"][i] = isnothing(u["birthday"]) ? 0 : x["history_max_ts"] - u["birthday"]
-            d["acctage"][i] = isnothing(u["created_at"]) ? 0 : x["history_max_ts"] - u["created_at"]
             d["gender"][i] = isnothing(u["gender"]) ? 0 : u["gender"] + 1
             d["source"][i] = u["source"]
             # item features

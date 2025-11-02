@@ -18,9 +18,7 @@ const metrics = ["watch", "rating", "status"]
 const planned_status = 5
 const medium_map = Dict(0 => "manga", 1 => "anime")
 const batch_size = 128 * 1024 # local_batch_size * max_sequence_length
-const num_gpus = 32
-const mini = parse(Bool, ARGS[1]) # if true, subsample to half the data
-const transdir = mini ? "transformer_mini" : "transformer"
+const num_gpus = 8
 const min_ts = Dates.datetime2unix(Dates.DateTime("2000-01-01"))
 const max_ts = Dates.datetime2unix(
     Dates.DateTime(read("$datadir/list_tag", String), Dates.dateformat"yyyymmdd"),
@@ -28,6 +26,8 @@ const max_ts = Dates.datetime2unix(
 
 include("../julia_utils/stdout.jl")
 include("history_tools.jl")
+
+get_transdir(mini) = mini ? "transformer_mini" : "transformer"
 
 @memoize function num_items(medium::Int)
     m = medium_map[medium]
@@ -53,49 +53,6 @@ function optdate(x)
     0, 0
 end
 
-function get_media_group_ids()
-    function merge_nodes!(groups, k1, k2)
-        v = union(groups[k1], groups[k2])
-        for k in v
-            groups[k] = v
-        end
-    end
-    groups = Dict()
-    for m in [0, 1]
-        for i = 1:num_items(m)
-            k = (m, i)
-            groups[k] = Set([k])
-        end
-    end
-    for m in [0, 1]
-        M = JLD2.load("$datadir/media_relations.$m.jld2")
-        for (i, j, _) in zip(SparseArrays.findnz(M["$m.related"])...)
-            merge_nodes!(groups, (m, i), (m, j))
-        end
-        for (i, j, _) in zip(SparseArrays.findnz(M["$m.adaptations"])...)
-            merge_nodes!(groups, (m, i), (1 - m, j))
-        end
-    end
-    groupids = Dict()
-    for v in values(groups)
-        if length(v) > 1
-            groupids[v] = length(groupids)
-        end
-    end
-    membership = zeros(Int32, sum(num_items.([0, 1])))
-    for m in [0, 1]
-        for i = 1:num_items(m)
-            idx = i + ((m == 1) ? num_items(0) : 0)
-            k = (m, i)
-            group = groups[k]
-            if length(group) > 1
-                membership[idx] = groupids[group]
-            end
-        end
-    end
-    membership
-end
-
 function save_media_embeddings()
     d = Dict()
     W = zeros(Float32, 3072 + 4, sum(num_items.([0, 1])))
@@ -111,7 +68,6 @@ function save_media_embeddings()
         end
         d["metadata"] = W
     end
-    d["groupids"] = get_media_group_ids()
     HDF5.h5open("$datadir/media_embeddings.h5", "w") do file
         for (k, v) in d
             file[k, blosc = 3] = v
@@ -121,15 +77,13 @@ end
 
 function get_data(data, userid)
     tokenize!(data)
-    project!(data) # TODO test not projecting
+    project!(data)
     u = data["user"]
     N = length(data["items"])
     d = Dict(
         # prompt features
         "userid" => Vector{Int32}(undef, N),
         "time" => Vector{Float64}(undef, N),
-        "userage" => Vector{Float64}(undef, N),
-        "acctage" => Vector{Float64}(undef, N),
         "gender" => Vector{Int32}(undef, N),
         "source" => Vector{Int32}(undef, N),
         # item features
@@ -152,8 +106,6 @@ function get_data(data, userid)
         # prompt features
         d["userid"][i] = userid
         d["time"][i] = x["history_max_ts"]
-        d["userage"][i] = isnothing(u["birthday"]) ? 0 : x["history_max_ts"] - u["birthday"]
-        d["acctage"][i] = isnothing(u["created_at"]) ? 0 : x["history_max_ts"] - u["created_at"]
         d["gender"][i] = isnothing(u["gender"]) ? 0 : u["gender"] + 1
         d["source"][i] = u["source"]
         # item features
@@ -207,7 +159,7 @@ function concat(d)
     r
 end
 
-function get_num_tokens(datasplit, shard)
+function get_num_tokens(datasplit, shard, transdir::String)
     tokens = 0
     fns = Glob.glob("$datadir/$transdir/$datasplit/$shard/*.h5")
     for fn in fns
@@ -218,10 +170,10 @@ function get_num_tokens(datasplit, shard)
     tokens
 end
 
-function pad_splits(datasplit, num_shards)
-    max_num_tokens = maximum(get_num_tokens(datasplit, x) for x = 1:num_shards)
+function pad_splits(datasplit, num_shards, transdir::String)
+    max_num_tokens = maximum(get_num_tokens(datasplit, x, transdir) for x = 1:num_shards)
     for x = 1:num_shards
-        num_padding = max_num_tokens - get_num_tokens(datasplit, x)
+        num_padding = max_num_tokens - get_num_tokens(datasplit, x, transdir)
         if num_padding == 0
             continue
         end
@@ -244,7 +196,8 @@ function pad_splits(datasplit, num_shards)
     end
 end
 
-function save_data(datasplit)
+function save_data(datasplit, mini::Bool)
+    transdir = get_transdir(mini)
     num_shards = num_gpus
     users = sort(Glob.glob("$datadir/users/$datasplit/*/*.msgpack"))
     if mini
@@ -276,8 +229,8 @@ function save_data(datasplit)
             end
         end
     end
-    pad_splits(datasplit, num_shards)
-    total_tokens = sum(get_num_tokens.(datasplit, 1:num_shards))
+    pad_splits(datasplit, num_shards, transdir)
+    total_tokens = sum(get_num_tokens.(datasplit, 1:num_shards, transdir))
     open("$datadir/$transdir/$datasplit/num_tokens.txt", "w") do f
         write(f, "$total_tokens")
     end
@@ -286,15 +239,17 @@ end
 function upload()
     template =
         raw"tag=`rclone lsd r2:rsys/database/training/ | sort | tail -n 1 | awk '{print $NF}'`; rclone --retries=10 copyto {INPUT} r2:rsys/database/training/$tag/{OUTPUT}"
-    for fn in [transdir, "media_embeddings.h5"]
+    for fn in [get_transdir.([true, false]); ["media_embeddings.h5"]]
         cmd =
             replace(template, "{INPUT}" => "$datadir/$fn", "{OUTPUT}" => fn)
         run(`sh -c $cmd`)
     end
 end
 
-rm("$datadir/$transdir", recursive = true, force = true)
 save_media_embeddings()
-save_data("test")
-save_data("training")
+for mini in [true, false]
+    rm("$datadir/$(get_transdir(mini))", recursive = true, force = true)
+    save_data("test", mini)
+    save_data("training", mini)
+end
 upload()

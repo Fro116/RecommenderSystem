@@ -75,10 +75,8 @@ function generate_input_json(system_prompt::String, user_prompt::String, filenam
                     ],
                 ),
             ],
-            "systemInstruction" => Dict(
-                "role" => "system",
-                "parts" => [Dict("text" => system_prompt)]
-            ),
+            "systemInstruction" =>
+                Dict("role" => "system", "parts" => [Dict("text" => system_prompt)]),
         ),
     )
 end
@@ -91,6 +89,8 @@ function sanitize_key(json)
         end
         x[k] = Set(x[k])
     end
+    x[:tags] = Set(x[:tags])
+    delete!(x, :count)
     x
 end
 
@@ -227,8 +227,7 @@ function save_generations()
             try
                 text = only(only(json[:response][:candidates])[:content][:parts])[:text]
                 modelname = json[:response][:modelVersion]
-                generations_cache[input_json] =
-                    Dict(:text => text, :modelname => modelname)
+                generations_cache[input_json] = Dict(:text => text, :modelname => modelname)
             catch
                 generations_cache[input_json] = nothing
                 fails += 1
@@ -242,11 +241,12 @@ function save_generations()
             @assert failure_perc < 0.1
         end
     end
+    generations_cache = Dict(sanitize_key(k) => v for (k, v) in generations_cache)
     jsons = []
     for medium in ["manga", "anime"]
         for fn in readdir("$datadir/$medium")
             json = copy(JSON3.read("$datadir/$medium/$fn"))
-            json[:llm_summary] = generations_cache[json]
+            json[:llm_summary] = generations_cache[sanitize_key(json)]
             push!(jsons, json)
         end
     end
@@ -266,4 +266,4 @@ function summarize_documents()
     save_generations()
 end
 
-summarize_documents()
+save_generations()

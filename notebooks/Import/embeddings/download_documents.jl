@@ -57,7 +57,6 @@ function get_media_groups(medium::AbstractString)
     min_count = 100
     distinctid = 0
     groupmap = Dict()
-    # TODO dedup source
     for x in media
         if x[:count] < min_count
             x[:distinctid] = 0
@@ -116,6 +115,7 @@ function create_document(item, matchedids)
         :reviews => item[:reviews],
         :recommendations => recommendation.(item[:recommendations]),
         :keys => [(item[:medium], item[:itemsource], item[:itemid])],
+        :count => Dict(item[:itemsource] => item[:count]),
     )
 end
 
@@ -133,6 +133,11 @@ function merge_documents(x, y)
     for k in
         [:synopsis, :characters, :genres, :tags, :background, :reviews, :recommendations, :keys]
         ret[k] = merge_entry(x[k], y[k])
+    end
+    for k in keys(y[:count])
+        if k ∉ keys(ret[:count])
+            ret[:count][k] = y[:count][k]
+        end
     end
     ret
 end

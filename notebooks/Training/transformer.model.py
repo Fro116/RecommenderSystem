@@ -38,8 +38,6 @@ class ActionEmbedding(nn.Module):
                 1,  # time
                 2,  # periodic time cos
                 2,  # periodic time sin
-                1,  # user age
-                1,  # account age
                 4,  # gender
                 4,  # source
                 1,  # has_rating
@@ -69,10 +67,6 @@ class ActionEmbedding(nn.Module):
         periodic_time_cos_emb = torch.cos(periodic_ts + self.periodic_time_cos)
         periodic_time_sin_emb = torch.sin(periodic_ts + self.periodic_time_sin)
         # user features
-        userage_emb = (d["userage"] / (max_ts - min_ts)).to(torch.float32).reshape(*d["userage"].shape, 1).clip(0, 5)
-        acctage_emb = (d["acctage"] / (max_ts - min_ts)).to(torch.float32).reshape(*d["acctage"].shape, 1).clip(0, 5)
-        userage_emb = userage_emb * 0
-        acctage_emb = acctage_emb * 0 # TODO reenable once stable
         gender_emb = self.gender_embedding(d["gender"])
         source_emb = self.source_embedding(d["source"])
         # actions
@@ -88,8 +82,6 @@ class ActionEmbedding(nn.Module):
                 time_emb,
                 periodic_time_cos_emb,
                 periodic_time_sin_emb,
-                userage_emb,
-                acctage_emb,
                 gender_emb,
                 source_emb,
                 has_rating_emb,
@@ -312,7 +304,7 @@ class TransformerModel(nn.Module):
         for k in d:
             if k.endswith(".position") or k.endswith(".label") or k.endswith(".weight"):
                 d[k][~mask] = 0
-            elif k in ["userid", "time", "userage", "acctage", "gender", "source"]:
+            elif k in ["userid", "time", "gender", "source"]:
                 pass  # don't mask
             elif k in [
                 "matchedid",

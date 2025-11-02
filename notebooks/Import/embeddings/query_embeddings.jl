@@ -130,18 +130,19 @@ function embed_queries()
         `rclone copyto -Pv r2:rsys/database/import/search_embeddings.jld2 $datadir/search_embeddings.jld2`,
     )
     if ispath("$datadir/search_embeddings.jld2")
-        d = JLD2.load("$datadir/search_embeddings.jld2")["queries"]
+        existing_queries = JLD2.load("$datadir/search_embeddings.jld2")["queries"]
     else
-        d = Dict()
+        existing_queries = Dict()
     end
+    d = Dict()
     @showprogress for q in queries
-        if q in keys(d)
-            continue
-        end
-        @assert false
-        emb, ok = get_text_embedding(q)
-        if ok
-            d[q] = emb
+        if q in keys(existing_queries)
+            d[q] = existing_queries[q]
+        else
+            emb, ok = get_text_embedding(q)
+            if ok
+                d[q] = emb
+            end
         end
     end
     JLD2.save("$datadir/search_embeddings.jld2", Dict("queries" => d))

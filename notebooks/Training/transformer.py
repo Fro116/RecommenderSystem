@@ -87,6 +87,8 @@ class PretrainDataset(IterableDataset):
                 d = {}
                 for k in f:
                     d[k] = f[k][:]
+                del d['acctage'] # TODO remove on next version
+                del d['userage']
                 self.block_shuffle(d)
             assert len(d["userid"]) % self.batch_size == 0
             idxs = list(range(len(d["userid"])))
@@ -539,6 +541,8 @@ def get_gpu_config():
     name = torch.cuda.get_device_name(0).lower()
     if "h100" in name.lower():
         return "H100"
+    elif "h200" in name.lower():
+        return "H200"
     elif "b200" in name.lower():
         return "B200"
     else:
@@ -570,6 +574,8 @@ def train():
         global_batch_size = 512 if config["causal"] else 2048
         if gpu_config == "B200":
             local_batch_size = 64 if config["causal"] else 128
+        elif gpu_config == "H200":
+            local_batch_size = 32 if config["causal"] else 64
         elif gpu_config == "H100":
             local_batch_size = 16 if config["causal"] else 64
         elif gpu_config == "local":

@@ -55,8 +55,7 @@ function json_to_document(x)
     - **Season:** $(x[:metadata][:dates][:season])
     - **Studios:** $studio_str
     - **Genres:** $genre_str
-    - **Alternative Titles:** $alttitle_str
-    - *Type: $(x[:metadata][:mediatype])"""
+    - **Alternative Titles:** $alttitle_str"""
     push!(doc_parts, metadata_str)
     premise_str = something(x[:synopsis]..., "")
     push!(doc_parts, "# Premise\n$(premise_str)")

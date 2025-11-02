@@ -16,9 +16,7 @@ function train(datetag::AbstractString)
     for m in [0, 1]
         run(`julia media_relations.jl $m`)
     end
-    for mini in [true, false]
-        run(`julia transformer.jl`)
-    end
+    run(`julia transformer.jl`)
     run(`julia rungpu.jl`)
     cmd = "cd item_similarity && julia run.jl")
     run(`sh -c $cmd`)

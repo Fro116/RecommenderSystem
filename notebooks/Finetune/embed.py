@@ -85,8 +85,6 @@ def predict(users, task, medium):
         "time": np.zeros((len(users), max_seq_len), dtype=np.float64),
         "rope_input_pos": np.zeros((len(users), max_seq_len), dtype=np.int32),
         "token_mask_ids": np.zeros((len(users), max_seq_len), dtype=np.int32),
-        "userage": np.zeros((len(users), max_seq_len), dtype=np.float64),
-        "acctage": np.zeros((len(users), max_seq_len), dtype=np.float64),
         "gender": np.zeros((len(users), max_seq_len), dtype=np.int32),
         "source": np.zeros((len(users), max_seq_len), dtype=np.int32),
         # item features
@@ -116,8 +114,6 @@ def predict(users, task, medium):
             # prompt features
             d["userid"][u, i] = userid
             d["time"][u, i] = x["history_max_ts"]
-            d["userage"][u, i] = 0 if user["birthday"] is None else x["history_max_ts"] - user["birthday"]
-            d["acctage"][u, i] = 0 if user["created_at"] is None else x["history_max_ts"] - user["created_at"]
             d["gender"][u, i] = 0 if user["gender"] is None else user["gender"] + 1
             d["source"][u, i] = user["source"]
             if modeltype == "causal":
