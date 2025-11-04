@@ -1,142 +1,84 @@
 import JSON3
 include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
+const datadir = "../../data/training"
 
-
-function write_yaml(;prod::Bool, num_nodes::Int)
-    if prod
-        finalcmds = ["./startup.sh"]
-        name = "prod"
-    else
-        finalcmds = ["apt install tmux -y", "sleep 86400"]
-        name = "dev"
-    end
-    nodes = num_nodes
-    image = "pytorch/pytorch:2.8.0-cuda12.9-cudnn9-devel"
-    envvars = readlines("../../secrets/r2.auth.txt")
-    script = [
-        "export NUM_NODES=$nodes",
-        "apt update",
-        "apt install wget -y",
-        "wget https://github.com/Fro116/RecommenderSystem/raw/main/notebooks/Training/entrypoint.sh -O startup.sh",
-        "chmod +x startup.sh",
-        finalcmds...,
-    ]
-    entrypoint = join(vcat(envvars, script), " && ")
-    yaml = read("entrypoint.yaml", String)
-    yaml = replace(yaml, "{IMAGE}" => image, "{ENTRYPOINT}" => entrypoint, "{NODES}" => nodes)
-    fn = "../../data/training/$name.yaml"
+function write_entrypoint()
+    envvars = read("../../secrets/r2.auth.txt", String)
+    script = read("entrypoint.sh", String)
+    script = replace(script, "{{ENVVARS}}" => envvars)
+    fn = "$datadir/entrypoint.vastai.sh"
     open(fn, "w") do f
-        write(f, yaml)
+        write(f, script)
     end
 end
 
-function read_json(cmd::Cmd)
-    text = try
-        read(cmd, String)
-    catch
-        logerror("read_json: could not run $cmd")
-        return nothing
-    end
+function get_balance()
     try
-        return JSON3.read(replace(text, r"(\w+): " => s"\"\1\": "))
-    catch
-        logerror("read_json: could not parse $text")
-        return nothing
-    end
-end
-
-function get_active_sf_cluster()
-    clusters = read_json(`sf clusters list --json`)
-    if isnothing(clusters)
-        return nothing
-    end
-    for x in clusters
-        if x["contract"]["status"] == "active"
-            return x["name"]
-        end
-    end
-end
-
-function stop_sfcompute()
-    scaleid = read("../../secrets/sfcompute.scale.txt", String)
-    while true
-        try
-            run(`sf scale update $scaleid -n 0 -y`)
-            return
-        catch e
-            logerror("failed to stop sfcompute $e")
-            sleep(60)
-        end
-    end
-end
-
-function start_sfcompute(nodes::Int, gpuhour_price::Real)::Bool
-    @assert nodes <= 4 && gpuhour_price <= 3
-    scaleid = read("../../secrets/sfcompute.scale.txt", String)
-    gpuhour_price = string(round(gpuhour_price, digits=2))
-    ngpus = nodes * 8
-    run(`sf scale update $scaleid -p $gpuhour_price -n $ngpus -d 30m -y`)
-    cluster = get_active_sf_cluster()
-    while isnothing(cluster)
-        logerror("wating for cluster to startup")
-        sleep(60)
-        cluster = get_active_sf_cluster()
-    end
-    try
-        cmds = [
-            "sf clusters users add --cluster $cluster --user myuser",
-            "sleep 60",
-            "kubectl delete job --all --ignore-not-found",
-            "cd ../../data/training",
-            "kubectl apply -f prod.yaml",
-        ]
-        cmd = join(cmds, " && ")
-        run(`sh -c $cmd`)
+        json = read(`vastai show user --raw`, String)
+        return JSON3.parse(json)[:credit]
     catch e
-        logerror("start_sfcompute: recieved error $e when connecting to cluster")
-        stop_sfcompute()
+        logerror("$e")
+        return 0
+    end
+end
+
+function run_vast_instance(instance_id::String, duration::Real)
+    run(`vastai start instance $instance_id`)
+    println("Waiting for instance to reach 'running' state ...")
+    started = false
+    for _ = 1:10
+        output = read(`vastai show instance $instance_id`, String)
+        if occursin("running", lowercase(output))
+            println("Instance is running.")
+            started = true
+            break
+        end
+        sleep(30)
+    end
+    if !started
+        logerror("vastai failed to start $instance_id")
+        run(`vastai stop instance $instance_id`)
         return false
     end
+    ssh_url = strip(read(`vastai ssh-url $instance_id`, String))
+    s = replace(ssh_url, r"^ssh://" => "")
+    host, port = split(s, ":", limit = 2)
+    scp_command = `scp -P $port -o StrictHostKeyChecking=accept-new $datadir/entrypoint.vastai.sh $host:/root/startup.sh`
+    ssh_command = `ssh -o StrictHostKeyChecking=accept-new -p $port $host 'tmux new -s startup -d "cd /root && chmod +x startup.sh && ./startup.sh"'`
+    logtag("RUNGPU", "running $scp_command")
+    run(scp_command)
+    logtag("RUNGPU", "running $ssh_command")
+    run(ssh_command)
+    logtag("RUNGPU", "waiting for job completion")
+    sleep(duration * 3600)
+    run(`vastai stop instance $instance_id`)
     true
 end
 
-function wait_sfcompute()
-    list_tag = read("../../data/training/list_tag", String)
-    finished = false
-    while !finished
-        finished = true
-        success = read(
-            `rclone --retries=10 ls r2:rsys/database/training/$list_tag/transformer.causal.finished`,
-            String,
-        )
-        if isempty(success)
-            finished = false
+function launch_job()
+    write_entrypoint()
+    duration = 25
+    node_price = 30
+    balance = get_balance()
+    if balance < node_price * duration
+        logerror("insufficient funds")
+        return false
+    end
+    instances = copy(JSON3.parse(read(`vastai show instances --raw`, String)))
+    sort!(instances, by = x -> x[:dph_total])
+    for x in instances
+        instance_id = string(x[:id])
+        if x[:dph_total] > node_price
+            logerror("skipping $instance_id because price $(x[:dph_total]) > $node_price")
+            continue
         end
-        if !finished
-            logtag("RUNGPU", "waiting for models to finish")
-            sleep(600)
+        success = run_vast_instance(instance_id, duration)
+        if success
+            return true
         end
     end
-    stop_sfcompute()
+    false
 end
 
-function pretrain()
-    num_nodes = 2
-    gpuhour_price = 2.5
-    write_yaml(prod=true, num_nodes=num_nodes)
-    success = start_sfcompute(num_nodes, gpuhour_price)
-    if !success
-        logerror("sfcompute training failed")
-        return
-    end
-    wait_sfcompute()
-    stop_sfcompute()
-    tag = read("../../data/training/list_tag", String)
-    for modeltype in ["masked", "causal"]
-        run(`rclone --retries=10 copyto r2:rsys/database/training/$tag/transformer.$modeltype.pt ../../data/training/transformer.$modeltype.pt`)
-    end
-end
-
-write_yaml(prod=false, num_nodes=1)
-pretrain()
+launch_job()

@@ -19,7 +19,7 @@ const max_ts = Dates.datetime2unix(
     Dates.DateTime(read("$datadir/finetune_tag", String), Dates.dateformat"yyyymmdd"),
 ) + 86400
 const max_seq_len = 1024
-const num_gpus = 8
+const num_gpus = 1
 
 include("../Training/history_tools.jl")
 

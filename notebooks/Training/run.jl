@@ -9,6 +9,20 @@ function prune_directories(db::String, keep::Int)
     end
 end
 
+function check_gpu_success()
+    list_tag = read("../../data/training/list_tag", String)
+    finished_file = read(
+        `rclone --retries=10 ls r2:rsys/database/training/$list_tag/transformer.causal.finished`,
+        String,
+    )
+    success = !isempty(finished_file)
+    if success
+        for fn in ["transformer.$modeltype.$stem" for modeltype in ["causal", "masked"] for stem in ["csv", "pt"]]
+            run(`rclone --retries=10 copyto r2:rsys/database/training/$list_tag/$fn ../../data/training/$fn`)
+        end
+    end
+    success
+end
 
 function train(datetag::AbstractString)
     logtag("TRAIN", "running on $datetag")
@@ -18,6 +32,10 @@ function train(datetag::AbstractString)
     end
     run(`julia transformer.jl`)
     run(`julia rungpu.jl`)
+    if !check_gpu_success()
+        logerror("rungpu failed")
+        exit(1)
+    end
     cmd = "cd item_similarity && julia run.jl")
     run(`sh -c $cmd`)
     run(`rclone --retries=10 copyto ../../data/training/list_tag r2:rsys/database/training/latest`)

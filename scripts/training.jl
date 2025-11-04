@@ -27,37 +27,42 @@ function import_dbs()
     if Dates.dayofweek(Dates.today()) != Dates.Monday
         return
     end
-    for x in ["images", "media", "autocomplete", "autocomplete_items"]
-        if x == "images"
-            lock(gpulock) do
-                import_db(x)
-            end
-        else
-            import_db(x)
-        end
+    if Dates.dayofmonth(Dates.today()) <= 7
+        import_db("embeddings")
+    end
+    lock(gpulock) do
+        import_db("images")
+    end
+    for x in ["media", "autocomplete", "autocomplete_items"]
+        import_db(x)
     end
 end
 
 function run_training()
-    import_db("embeddings")
-    datetag = Dates.format(Dates.today(), "yyyymmdd")
-    latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
-    if datetag != latest
-        logtag("TRAIN_MODELS", "list $datetag is not ready, using $latest")
+    if Dates.dayofmonth(Dates.today()) ∉ [8, 23]
+        return
     end
-    runcmd("cd Training && julia run.jl $latest")
+    lock(gpulock) do
+        datetag = Dates.format(Dates.today(), "yyyymmdd")
+        latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
+        if datetag != latest
+            logtag("TRAIN_MODELS", "list $datetag is not ready, using $latest")
+        end
+        runcmd("cd Training && julia run.jl $latest")
+    end
 end
 
 function run_finetune()
-    datetag = Dates.format(Dates.today(), "yyyymmdd")
-    latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
-    if datetag != latest
-        logtag("TRAIN_MODELS", "list $datetag is not ready, using $latest")
-    end
     lock(gpulock) do
+        datetag = Dates.format(Dates.today(), "yyyymmdd")
+        latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
+        if datetag != latest
+            logtag("TRAIN_MODELS", "list $datetag is not ready, using $latest")
+        end
         runcmd("cd Finetune && julia run.jl $latest")
     end
 end
 
 Threads.@spawn @scheduled "IMPORT_DBS" "01:00" @handle_errors import_dbs()
+Threads.@spawn @scheduled "RUN_TRAINING" "09:59" @handle_errors run_training()
 @scheduled "RUN_FINETUNE" "10:00" @handle_errors run_finetune()

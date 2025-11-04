@@ -560,7 +560,7 @@ def train():
     config = get_training_config()
     gpu_config = config["gpu_config"]
     if config["finetune"]:
-        num_epochs = 8
+        num_epochs = 16
         global_batch_size = 256 if config["causal"] else 512
         grad_accum_steps = 1
         assert gpu_config == "local"
