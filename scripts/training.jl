@@ -27,9 +27,6 @@ function import_dbs()
     if Dates.dayofweek(Dates.today()) != Dates.Monday
         return
     end
-    if Dates.dayofmonth(Dates.today()) <= 7
-        import_db("embeddings")
-    end
     lock(gpulock) do
         import_db("images")
     end
@@ -42,6 +39,7 @@ function run_training()
     if Dates.dayofmonth(Dates.today()) ∉ [8, 23]
         return
     end
+    import_db("embeddings")
     lock(gpulock) do
         datetag = Dates.format(Dates.today(), "yyyymmdd")
         latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
@@ -64,5 +62,5 @@ function run_finetune()
 end
 
 Threads.@spawn @scheduled "IMPORT_DBS" "01:00" @handle_errors import_dbs()
-Threads.@spawn @scheduled "RUN_TRAINING" "09:59" @handle_errors run_training()
-@scheduled "RUN_FINETUNE" "10:00" @handle_errors run_finetune()
+Threads.@spawn @scheduled "RUN_TRAINING" "02:00" @handle_errors run_training()
+@scheduled "RUN_FINETUNE" "09:00" @handle_errors run_finetune()

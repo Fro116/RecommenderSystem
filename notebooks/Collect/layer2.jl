@@ -47,20 +47,16 @@ function load_resources()::Vector{Resource}
         end
         Random.shuffle(proxies)
     end
-    dedicated = get_proxies("../../secrets/ips.dedicated.txt")
-    if USE_SHARED_IPS
-        shared = get_proxies("../../secrets/ips.shared.txt")
-        mal_tokens = readlines("../../secrets/mal.auth.shared.txt")
-    else
-        shared = dedicated
-        mal_tokens = readlines("../../secrets/mal.auth.dedicated.txt")
-    end
+    dedicated_ips = get_proxies("../../secrets/ips.dedicated.txt")
+    shared_ips = get_proxies("../../secrets/ips.shared.txt")
+    ips = USE_SHARED_IPS ? shared_ips : dedicated_ips
+    mal_tokens = readlines("../../secrets/mal.auth.txt")
     mal_resources = [
         Dict("location" => "mal", "token" => x, "proxyurls" => [], "ratelimit" => 8) for
         x in mal_tokens
     ]
     i = 1
-    for proxy in shared
+    for proxy in ips
         if length(mal_resources[i]["proxyurls"]) < 10
             push!(mal_resources[i]["proxyurls"], proxy)
         end
@@ -69,10 +65,10 @@ function load_resources()::Vector{Resource}
     mal_resources = [x for x in mal_resources if !isempty(x["proxyurls"])]
 
     malweb_resources =
-        [Dict("location" => "malweb", "proxyurl" => x, "ratelimit" => 8) for x in shared]
+        [Dict("location" => "malweb", "proxyurl" => x, "ratelimit" => 8) for x in ips]
 
     anilist_resources =
-        [Dict("location" => "anilist", "proxyurl" => x, "ratelimit" => 8) for x in shared]
+        [Dict("location" => "anilist", "proxyurl" => x, "ratelimit" => 8) for x in ips]
 
     kitsu_credentials = []
     for x in readlines("../../secrets/kitsu.auth.txt")
@@ -88,7 +84,7 @@ function load_resources()::Vector{Resource}
         ) for x in kitsu_credentials
     ]
     i = 1
-    for proxy in shared
+    for proxy in ips
         if length(kitsu_resources[i]["proxyurls"]) < 10
             push!(kitsu_resources[i]["proxyurls"], proxy)
         end
@@ -107,7 +103,7 @@ function load_resources()::Vector{Resource}
             "proxyurl" => x,
             "ratelimit" => 8,
             "credentials" => animeplanet_credentials[(i % length(animeplanet_credentials))+1],
-        ) for (i, x) in Iterators.enumerate(dedicated)
+        ) for (i, x) in Iterators.enumerate(dedicated_ips)
     ]
 
     resources = vcat(

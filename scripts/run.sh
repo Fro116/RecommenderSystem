@@ -26,5 +26,5 @@ if [ "$name" = "database" ]; then
     (cloud-sql-proxy $project:$region:inference -p 6543 --credentials-file $auth |& julia -t 1 $logjl $logs/cloudsql.log) &
 fi
 cd $workdir/RecommenderSystem/scripts
-(julia $name.jl |& julia -t 1 $logjl $logs/$name.log 1000000) &
+(julia $name.jl |& julia -t 1 $logjl $logs/$name.log) &
 tail -F $logs/$name.log

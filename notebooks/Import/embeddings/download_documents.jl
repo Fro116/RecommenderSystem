@@ -82,6 +82,7 @@ function create_document(item, matchedids)
         y = copy(x)
         delete!(y, :itemid)
         y[:matchedid] = get(matchedids, k, 0)
+        y[:itemsource] = item[:itemsource]
         y
     end
     Dict(
@@ -173,15 +174,19 @@ function format_documents!(documents)
             if k ∉ keys(recs)
                 recs[k] = Dict(
                     :title => documents[k][:title],
+                    :matchedid => k,
                     :synopsis => first(documents[k][:synopsis], 1),
-                    :count => 0,
+                    :count => Dict(),
                     :reasons => [],
                 )
             end
-            recs[k][:count] += r[:count]
+            recs[k][:count][r[:itemsource]] = max(get(recs[k][:count], r[:itemsource], 0), r[:count])
             if !isempty(r[:text])
                 push!(recs[k][:reasons], r[:text])
             end
+        end
+        for x in values(recs)
+            x[:count] = isempty(x[:count]) ? 0 : sum(values(x[:count]))
         end
         v[:recommendations] = sort(collect(values(recs)), by = x -> x[:count], rev = true)
     end

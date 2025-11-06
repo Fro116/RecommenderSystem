@@ -86,6 +86,9 @@ function sanitize_key(json)
     for k in [:reviews, :recommendations]
         for y in x[k]
             delete!(y, :count)
+            if k == :recommendations
+                delete!(y, :matchedid)
+            end
         end
         x[k] = Set(x[k])
     end
@@ -259,6 +262,7 @@ function summarize_documents()
     upload_documents()
     num_jobs = upload_batch_job()
     logtag("[SUMMARIZE_DOCUMENTS]", "running batch job on $num_jobs documents")
+    exit(1)
     if num_jobs > 0
         batch_job_id = queue_batch_job()
         wait_on_batch_job(batch_job_id)
@@ -266,4 +270,4 @@ function summarize_documents()
     save_generations()
 end
 
-save_generations()
+summarize_documents()

@@ -73,6 +73,7 @@ function update()
     update_local_server("run")
     logtag("INFERENCE", "server started in $(time() - ts) seconds")
     resize_remote_server(0)
+    run(`docker system prune -af --filter until=24h`)
     first_run = false
 end
 

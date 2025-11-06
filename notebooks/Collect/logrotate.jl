@@ -19,4 +19,4 @@ function writelogs(filename, lines_per_file)
     end
 end
 
-writelogs(ARGS[1], get(ARGS, 2, 10000))
+writelogs(ARGS[1], get(ARGS, 2, 1_000_000))
