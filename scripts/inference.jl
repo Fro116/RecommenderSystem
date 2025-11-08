@@ -1,24 +1,47 @@
 import Dates
 import HTTP
 include("../notebooks/julia_utils/multithreading.jl")
-include("../notebooks/julia_utils/scheduling.jl")
 include("../notebooks/julia_utils/stdout.jl")
 cd("../notebooks")
 first_run::Bool = true
 
-function update_local_server(task)
+function docker_login()
     username, password, project = split(read("../secrets/docker.auth.txt", String), "\n")
     name = "server"
     tag = "latest"
-    cmds = ["(echo '$password' | docker login -u $username --password-stdin)"]
+    run(
+        pipeline(
+            `docker login --username $username --password-stdin`,
+            stdin = IOBuffer(password),
+            stdout = devnull,
+            stderr = devnull,
+        ),
+    )
+    "$username/$project-$name:$tag"
+end
+
+function is_image_up_to_date()
+    function get_digest(output)
+        try
+            match(r"sha256:[0-9a-f]{64}", output).match
+        catch e
+            logerror(e)
+            ""
+        end
+    end
+    name = docker_login()
+    fmt = "'{{index .RepoDigests 0}}'"
+    local_digest = get_digest(read(`docker inspect --format=$fmt $name`, String))
+    remote_digest = get_digest(read(`docker buildx imagetools inspect $name`, String))
+    local_digest == remote_digest
+end
+
+function update_local_server(task)
+    name = docker_login()
     if task == "pull"
-        push!(cmds, "docker pull $username/$project-$name:$tag")
-        cmd = join(cmds, " && ")
-        run(`sh -c $cmd`)
+        run(`docker pull $name`)
     elseif task == "run"
-        push!(cmds, "docker run --rm --runtime=nvidia --gpus=all --network=host --name $name $username/$project-$name:$tag")
-        cmd = join(cmds, " && ")
-        Threads.@spawn @handle_errors run(`sh -c $cmd`)
+        Threads.@spawn @handle_errors run(`docker run --rm --runtime=nvidia --gpus=all --network=host --name inference-server $name`)
         ready = false
         while !ready
             try
@@ -35,9 +58,8 @@ function update_local_server(task)
 end
 
 function stop_local_server()
-    name = "server"
     try
-        run(`docker stop $name`)
+        run(`docker stop inference-server`)
     catch e
         if !first_run
             logerror("could not stop $name: $e")
@@ -77,5 +99,9 @@ function update()
     first_run = false
 end
 
-update()
-@scheduled "INFERENCE" "05:00" @handle_errors update()
+while true
+    if !is_image_up_to_date()
+        update()
+    end
+    sleep(3600)
+end

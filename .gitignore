@@ -1,7 +1,6 @@
 data/
 logs/
 secrets/
-scripts/
 /coverage
 /build
 .ipynb_checkpoints/

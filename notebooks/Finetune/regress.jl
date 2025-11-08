@@ -385,6 +385,21 @@ function make_metric_dataframe(dict)
     df
 end
 
+function upload_metrics()
+    name = "finetune.usermodel.csv"
+    run(`rclone --retries=10 copyto r2:rsys/database/import/metrics.$name $datadir/metrics.$name`)
+    df = CSV.read("$datadir/$name", DataFrames.DataFrame)
+    if ispath("$datadir/metrics.$name")
+        historical_df = CSV.read("$datadir/metrics.$name", DataFrames.DataFrame)
+        finetune_tag = only(Set(df[:, :finetune_tag]))
+        filter!(x -> x[:finetune_tag] != finetune_tag, historical_df)
+        df = DataFrames.vcat(historical_df, df)
+        sort!(df, by=x->x[:finetune_tag])
+    end
+    CSV.write("$datadir/metrics.$name", df)
+    run(`rclone --retries=10 copyto $datadir/metrics.$name r2:rsys/database/import/metrics.$name`)
+end
+
 function save_weights()
     registry = get_registry()
     metrics = Dict()
@@ -405,8 +420,14 @@ function save_weights()
     end
     df =
         make_metric_dataframe(Dict(k => v for (k, v) in registry if first(k) in ['0', '1']))
-    CSV.write("../../data/finetune/regress.csv", df)
-    JLD2.save("../../data/finetune/model.registry.jld2", merge(registry, metrics))
+    cols = DataFrames.names(df)
+    df[!, "training_tag"] .= read("$datadir/training_tag", String)
+    df[!, "finetune_tag"] .= read("$datadir/finetune_tag", String)
+    df[!, "updated_at"] .= time()
+    df = df[:, [["training_tag", "finetune_tag"]; cols; ["updated_at"]]]
+    CSV.write("$datadir/finetune.usermodel.csv", df)
+    JLD2.save("$datadir/model.registry.jld2", merge(registry, metrics))
+    upload_metrics()
 end
 
 save_weights()
