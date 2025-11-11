@@ -14,7 +14,7 @@ mkdir -p $logs && rm $logs/*.log
 (uvicorn layer1:app --host 0.0.0.0 --port 4103 --log-level warning |& julia -t 1 logrotate.jl $logs/layer1.3.log) &
 (uvicorn layer1:app --host 0.0.0.0 --port 4104 --log-level warning |& julia -t 1 logrotate.jl $logs/layer1.4.log) &
 (julia layer2.jl 4002 1 "http://localhost:4101/proxy,http://localhost:4102/proxy,http://localhost:4103/proxy,http://localhost:4104/proxy" true 10 true |& julia -t 1 logrotate.jl $logs/layer2.log) &
-(julia layer3.jl 4003 "http://localhost:4002" 1000 5 |& julia -t 1 logrotate.jl $logs/layer3.log) &
+(julia layer3.jl 4003 "http://localhost:4002" 1000 10 |& julia -t 1 logrotate.jl $logs/layer3.log) &
 
 (julia -t 1 collect_single.jl mal_userids userid "http://localhost:4003/mal_username" 1 |& julia -t 1 logrotate.jl $logs/mal_userids.log) &
 (julia -t 32 collect_junction.jl mal_users user mal_user_items items mal_userids userid username db_junction_last_changed_at "http://localhost:4003/mal_user" 120 |& julia -t 1 logrotate.jl $logs/mal_users.log) &

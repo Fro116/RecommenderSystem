@@ -17,8 +17,8 @@ function request(url::String, query::String, params::Dict)
     delays = ExponentialBackOff(;
         n = RETRIES+1,
         first_delay = 1,
-        max_delay = 1000,
-        factor = 2.0,
+        max_delay = 3600,
+        factor = 3.0,
         jitter = 0.1,
     )
     for delay in delays

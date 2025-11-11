@@ -99,9 +99,10 @@ function update()
     first_run = false
 end
 
+update()
 while true
+    sleep(3600)
     if !is_image_up_to_date()
         update()
     end
-    sleep(3600)
 end
