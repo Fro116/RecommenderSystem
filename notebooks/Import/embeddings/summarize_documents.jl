@@ -144,8 +144,7 @@ function upload_batch_job()
     end
     cmds = [
         "gcloud auth login --quiet --cred-file=$secretdir/gcp.auth.json",
-        "gcloud storage rm --recursive $bucket/embeddings/documents/batch",
-        "gcloud storage rsync --quiet $datadir/batch $bucket/embeddings/documents/batch",
+        "gcloud storage rsync --quiet --delete-unmatched-destination-objects $datadir/batch $bucket/embeddings/documents/batch",
     ]
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)
@@ -211,6 +210,7 @@ function wait_on_batch_job(batch_job_id)
     cmds = [
         "gcloud auth login --quiet --cred-file=$secretdir/gcp.auth.json",
         "gcloud storage rsync -r --quiet --exclude \".*incremental_predictions.*\" $bucket/embeddings/documents/batch $datadir/batch",
+        "gcloud storage rm --quiet --recursive $bucket/embeddings",
     ]
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)
@@ -261,8 +261,7 @@ end
 function summarize_documents()
     upload_documents()
     num_jobs = upload_batch_job()
-    logtag("[SUMMARIZE_DOCUMENTS]", "running batch job on $num_jobs documents")
-    exit(1)
+    logtag("SUMMARIZE_DOCUMENTS", "running batch job on $num_jobs documents")
     if num_jobs > 0
         batch_job_id = queue_batch_job()
         wait_on_batch_job(batch_job_id)

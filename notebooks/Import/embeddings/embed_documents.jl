@@ -14,7 +14,7 @@ function get_embeddings_cache()
     end
     cache = Dict()
     for x in embeddings
-        v = x[:embedding]
+        v = copy(x[:embedding])
         k = copy(x)
         delete!(k, :embedding)
         cache[k] = v
@@ -208,9 +208,12 @@ end
 function save_embeddings()
     emb_cache = get_embeddings_cache()
     jsons = copy(JSON3.read("$datadir/summaries.json"))
+    cache_hits = 0
+    cache_misses = 0
     @showprogress for json in jsons
         if json in keys(emb_cache)
-            emb = emb_cache[json]
+            json[:embedding] = emb_cache[json]
+            cache_hits += 1
         else
             text = json_to_document(json)
             chunks = document_to_chunks(text)
@@ -224,13 +227,20 @@ function save_embeddings()
                 d_emb[k] = emb
             end
             json[:embedding] = d_emb
+            cache_misses += 1
         end
     end
+    cache_hitrate = cache_hits / (cache_hits + cache_misses)
+    logtag(
+        "EMBED_DOCUMENTS",
+        "cache hitrate: $cache_hitrate, hits: $cache_hits, misses: $cache_misses",
+    )
     open("$datadir/embeddings.json", "w") do f
         JSON3.write(f, jsons)
     end
     cmd = "rclone --retries=10 copyto $datadir/embeddings.json r2:rsys/database/import/embeddings.json"
     run(`sh -c $cmd`)
+
 end
 
 save_embeddings()

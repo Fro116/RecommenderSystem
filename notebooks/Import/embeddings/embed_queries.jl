@@ -134,17 +134,26 @@ function embed_queries()
     else
         existing_queries = Dict()
     end
+    cache_hits = 0
+    cache_misses = 0
     d = Dict()
     @showprogress for q in queries
         if q in keys(existing_queries)
             d[q] = existing_queries[q]
+            cache_hits += 1
         else
             emb, ok = get_text_embedding(q)
             if ok
                 d[q] = emb
             end
+            cache_misses += 1
         end
     end
+    cache_hitrate = cache_hits / (cache_hits + cache_misses)
+    logtag(
+        "EMBED_QUERIES",
+        "cache hitrate: $cache_hitrate, hits: $cache_hits, misses: $cache_misses",
+    )
     JLD2.save("$datadir/search_embeddings.jld2", Dict("queries" => d))
     run(
         `rclone copyto -Pv $datadir/search_embeddings.jld2 r2:rsys/database/import/search_embeddings.jld2`,

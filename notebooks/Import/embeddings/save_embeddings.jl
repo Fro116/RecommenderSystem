@@ -1,5 +1,4 @@
 run(`julia download_documents.jl`)
 run(`julia summarize_documents.jl`)
-run(`julia upload_embeddings.jl`)
-run(`julia query_embeddings.jl`)
-rm("../../../data/import/embeddings", recursive=true, force=true)
+run(`julia embed_documents.jl`)
+run(`julia embed_queries.jl`)
