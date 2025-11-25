@@ -72,7 +72,7 @@ function train(datetag::AbstractString)
         logerror("rungpu failed")
         exit(1)
     end
-    cmd = "cd item_similarity && julia run.jl")
+    cmd = "cd item_similarity && julia run.jl"
     run(`sh -c $cmd`)
     run(`rclone --retries=10 copyto $datadir/list_tag r2:rsys/database/training/latest`)
     prune_directories("training", 2)

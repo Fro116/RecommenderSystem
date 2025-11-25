@@ -87,8 +87,6 @@ class PretrainDataset(IterableDataset):
                 d = {}
                 for k in f:
                     d[k] = f[k][:]
-                del d['acctage'] # TODO remove on next version
-                del d['userage']
                 self.block_shuffle(d)
             assert len(d["userid"]) % self.batch_size == 0
             idxs = list(range(len(d["userid"])))

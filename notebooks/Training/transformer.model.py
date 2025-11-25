@@ -267,7 +267,7 @@ class TransformerModel(nn.Module):
             if k in ["userid", "rope_input_pos", "token_mask_ids"]:
                 item_tokens[k] = v
                 action_tokens[k] = v
-            elif k in ["time", "userage", "acctage", "gender", "source"] or k.startswith("0.watch") or k.startswith("1.watch"):
+            elif k in ["time", "gender", "source"] or k.startswith("0.watch") or k.startswith("1.watch"):
                 action_tokens[k] = v
             elif (
                 k

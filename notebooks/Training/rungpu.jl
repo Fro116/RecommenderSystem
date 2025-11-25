@@ -45,7 +45,7 @@ function run_vast_instance(instance_id::String, duration::Real)
     s = replace(ssh_url, r"^ssh://" => "")
     host, port = split(s, ":", limit = 2)
     scp_command = `scp -P $port -o StrictHostKeyChecking=accept-new $datadir/entrypoint.vastai.sh $host:/root/startup.sh`
-    ssh_command = `ssh -o StrictHostKeyChecking=accept-new -p $port $host 'tmux new -s startup -d "cd /root && chmod +x startup.sh && ./startup.sh"'`
+    ssh_command = `ssh -o StrictHostKeyChecking=accept-new -p $port $host 'tmux new -s startup -d "cd /root && chmod +x startup.sh && ./startup.sh &> log"'`
     logtag("RUNGPU", "running $scp_command")
     run(scp_command)
     logtag("RUNGPU", "running $ssh_command")
