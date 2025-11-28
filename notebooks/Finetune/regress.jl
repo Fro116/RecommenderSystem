@@ -394,7 +394,7 @@ function upload_metrics()
         finetune_tag = only(Set(df[:, :finetune_tag]))
         filter!(x -> x[:finetune_tag] != finetune_tag, historical_df)
         df = DataFrames.vcat(historical_df, df)
-        sort!(df, by=x->x[:finetune_tag])
+        sort!(df, by=:finetune_tag)
     end
     CSV.write("$datadir/metrics.$name", df)
     run(`rclone --retries=10 copyto $datadir/metrics.$name r2:rsys/database/import/metrics.$name`)

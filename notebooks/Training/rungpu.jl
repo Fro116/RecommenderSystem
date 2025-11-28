@@ -44,14 +44,14 @@ function run_vast_instance(instance_id::String, duration::Real)
     ssh_url = strip(read(`vastai ssh-url $instance_id`, String))
     s = replace(ssh_url, r"^ssh://" => "")
     host, port = split(s, ":", limit = 2)
-    scp_command = `scp -P $port -o StrictHostKeyChecking=accept-new $datadir/entrypoint.vastai.sh $host:/root/startup.sh`
-    ssh_command = `ssh -o StrictHostKeyChecking=accept-new -p $port $host 'tmux new -s startup -d "cd /root && chmod +x startup.sh && ./startup.sh &> log"'`
+    scp_command = `scp -P $port -o StrictHostKeyChecking=accept-new $datadir/entrypoint.vastai.sh $host:/workspace/startup.sh`
+    ssh_command = `ssh -o StrictHostKeyChecking=accept-new -p $port $host 'tmux new -s startup -d "cd /workspace && chmod +x startup.sh && ./startup.sh &> log"'`
     logtag("RUNGPU", "running $scp_command")
     run(scp_command)
     logtag("RUNGPU", "running $ssh_command")
     run(ssh_command)
     logtag("RUNGPU", "waiting for job completion")
-    sleep(duration * 3600)
+    sleep(duration * 3600) # TODO intelligent sleep where we early stop if instance is dead
     run(`vastai stop instance $instance_id`)
     true
 end
@@ -61,16 +61,16 @@ function launch_job()
     duration = 25
     node_price = 30
     balance = get_balance()
-    if balance < node_price * duration
-        logerror("insufficient funds")
-        return false
-    end
     instances = copy(JSON3.parse(read(`vastai show instances --raw`, String)))
     sort!(instances, by = x -> x[:dph_total])
     for x in instances
         instance_id = string(x[:id])
         if x[:dph_total] > node_price
             logerror("skipping $instance_id because price $(x[:dph_total]) > $node_price")
+            continue
+        end
+        if balance < x[:dph_total] * duration
+            logerror("insufficient funds: $balance < $(x[:dph_total]) * $duration")
             continue
         end
         success = run_vast_instance(instance_id, duration)

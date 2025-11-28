@@ -20,7 +20,7 @@ function upload_metrics()
     ts = time()
     dfs = []
     for modeltype in ["masked", "causal"]
-        df = CSV.read("$datadir/transformer.$modeltype.csv")
+        df = CSV.read("$datadir/transformer.$modeltype.csv", DataFrames.DataFrame)
         cols = DataFrames.names(df)
         df[!, "training_tag"] .= training_tag
         df[!, "modeltype"] .= modeltype
@@ -38,7 +38,7 @@ function upload_metrics()
         training_tag = only(Set(df[:, :training_tag]))
         filter!(x -> x[:training_tag] != training_tag, historical_df)
         df = DataFrames.vcat(historical_df, df)
-        sort!(df, by=x->x[:training_tag])
+        sort!(df, by=:training_tag)
     end
     CSV.write("$datadir/metrics.$name", df)
     run(`rclone --retries=10 copyto $datadir/metrics.$name r2:rsys/database/import/metrics.$name`)
@@ -61,13 +61,13 @@ function check_gpu_success()
 end
 
 function train(datetag::AbstractString)
-    logtag("TRAIN", "running on $datetag")
-    run(`julia import_data.jl $datetag`)
-    for m in [0, 1]
-        run(`julia media_relations.jl $m`)
-    end
-    run(`julia transformer.jl`)
-    run(`julia rungpu.jl`)
+   logtag("TRAIN", "running on $datetag")
+   run(`julia import_data.jl $datetag`)
+   for m in [0, 1]
+       run(`julia media_relations.jl $m`)
+   end
+   run(`julia transformer.jl`)
+   run(`julia rungpu.jl`)
     if !check_gpu_success()
         logerror("rungpu failed")
         exit(1)

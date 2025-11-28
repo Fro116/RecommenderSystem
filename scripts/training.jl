@@ -23,23 +23,16 @@ function import_db(name::String)
     runcmd(teecmd("cd Import/$name && julia save_$(name).jl", "$logdir/$name.log"))
 end
 
-function import_dbs()
-    if Dates.dayofweek(Dates.today()) != Dates.Monday
-        return
-    end
-    lock(gpulock) do
-        import_db("images")
-    end
-    for x in ["media", "autocomplete", "autocomplete_items"]
-        import_db(x)
-    end
-end
-
 function run_training()
     if Dates.dayofmonth(Dates.today()) ∉ [8, 23]
         return
     end
-    import_db("embeddings")
+    for x in ["media", "autocomplete", "autocomplete_items", "embeddings"]
+        import_db(x)
+    end
+    lock(gpulock) do
+        import_db("images")
+    end
     lock(gpulock) do
         datetag = Dates.format(Dates.today(), "yyyymmdd")
         latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
@@ -51,16 +44,19 @@ function run_training()
 end
 
 function run_finetune()
-    lock(gpulock) do
-        datetag = Dates.format(Dates.today(), "yyyymmdd")
-        latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
-        if datetag != latest
-            logtag("TRAIN_MODELS", "list $datetag is not ready, using $latest")
+    last_date = read(`rclone cat r2:rsys/database/lists/latest`, String)
+    while true
+        lock(gpulock) do
+            latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
+            if latest == last_date
+                return
+            end
+            runcmd("cd Finetune && julia run.jl $latest")
+            last_date = latest
         end
-        runcmd("cd Finetune && julia run.jl $latest")
+        sleep(3600)
     end
 end
 
-Threads.@spawn @scheduled "IMPORT_DBS" "01:00" @handle_errors import_dbs()
-Threads.@spawn @scheduled "RUN_TRAINING" "02:00" @handle_errors run_training()
-@scheduled "RUN_FINETUNE" "09:00" @handle_errors run_finetune()
+Threads.@spawn @handle_errors run_finetune()
+@scheduled "RUN_TRAINING" "02:00" @handle_errors run_training()
