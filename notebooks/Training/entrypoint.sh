@@ -16,7 +16,10 @@ endpoint = https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com
 rclone --retries=10 -Pv copy r2:rsys/secrets secrets
 mv secrets RecommenderSystem/
 # cuda 12.8 packages
-python3 -m venv venv
+if [ ! -f "venv" ]; then
+    python3 -m venv venv
+fi
+deactivate
 source venv/bin/activate
 pip install torch==2.8.0 pandas==2.3.2 scipy==1.16.2 h5py==3.14.0 hdf5plugin==5.1.0 msgpack==1.1.1 torchao==0.13.0 torchtune==0.6.1
 cd RecommenderSystem/notebooks/Training/
