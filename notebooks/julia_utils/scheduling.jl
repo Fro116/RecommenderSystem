@@ -24,7 +24,9 @@ macro scheduled(tag::AbstractString, time_str::AbstractString, expr)
             if target_time < now
                 target_time += Dates.Day(1)
             end
-            sleep(target_time - now)
+            while Dates.now() < target_time
+                sleep(max(target_time - Dates.now(), Dates.Second(0)))
+            end
             logtag($(esc(tag)), "START")
             $(esc(expr))
             logtag($(esc(tag)), "END")
