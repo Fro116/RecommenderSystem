@@ -204,7 +204,7 @@ function wait_on_batch_job(batch_job_id)
         url = "https://$(region)-aiplatform.googleapis.com/v1/projects/$project/locations/$region/batchPredictionJobs/$batch_job_id"
         ret = HTTP.get(url, headers, status_exception = false)
         resp = JSON3.parse(String(copy(ret.body)))
-        is_finished = resp["state"] == "JOB_STATE_SUCCEEDED"
+        is_finished = resp["state"] in ["JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED"]
     end
     bucket = read("$secretdir/gcp.bucket.txt", String)
     cmds = [
