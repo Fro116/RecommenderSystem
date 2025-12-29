@@ -1,4 +1,6 @@
+import CSV
 import Dates
+import DataFrames
 include("../notebooks/julia_utils/multithreading.jl")
 include("../notebooks/julia_utils/scheduling.jl")
 include("../notebooks/julia_utils/stdout.jl")
@@ -43,8 +45,17 @@ function run_training()
     end
 end
 
+function get_last_finetune_date()
+    text = read(`rclone cat r2:rsys/database/import/metrics.finetune.usermodel.csv`, String)
+    if isempty(text)
+        return nothing
+    end
+    df = CSV.read(IOBuffer(text), DataFrames.DataFrame)
+    string(maximum(df.finetune_tag))
+end
+
 function run_finetune()
-    last_date = read(`rclone cat r2:rsys/database/lists/latest`, String)
+    last_date = get_last_finetune_date()
     while true
         lock(gpulock) do
             latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
