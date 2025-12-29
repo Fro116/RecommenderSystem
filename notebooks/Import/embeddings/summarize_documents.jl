@@ -6,6 +6,8 @@ include("../../julia_utils/stdout.jl")
 
 const datadir = "../../../data/import/embeddings/documents"
 const secretdir = "../../../secrets"
+const model_id = "gemini-3-flash-preview"
+const region = "global" # necessary to use preview models
 
 function truncate_array(arr, p)
     n = Int(round(length(arr) * p))
@@ -104,6 +106,18 @@ function get_generations_cache()
         generations = []
     end
     cached_generations = Dict()
+    cached_model_id = only(
+        Set(
+            x[:llm_summary][:modelname] for x in generations if !isnothing(x[:llm_summary])
+        ),
+    )
+    if model_id != cached_model_id
+        logtag(
+            "SUMMARIZE_DOCUMENTS",
+            "using new model $model_id to replace $cached_model_id",
+        )
+        return cached_generations
+    end
     for x in generations
         v = x[:llm_summary]
         k = copy(x)
@@ -113,6 +127,7 @@ function get_generations_cache()
     end
     cached_generations
 end
+
 
 function upload_batch_job()
     bucket = read("$secretdir/gcp.bucket.txt", String)
@@ -153,20 +168,18 @@ end
 
 function get_gcp_access_token()
     run(`gcloud auth login --quiet --cred-file=$secretdir/gcp.auth.json`)
-    gcp_project = read("$secretdir/gcp.project.txt", String)
-    read("$secretdir/gcp.region.txt", String)
     strip(read(`gcloud auth print-access-token`, String))
 end
 
 function queue_batch_job()
-    region = read("$secretdir/gcp.region.txt", String)
     project = read("$secretdir/gcp.project.txt", String)
-    url = "https://$(region)-aiplatform.googleapis.com/v1/projects/$project/locations/$region/batchPredictionJobs"
+    endpoint_prefix = region == "global" ? "" : "$(region)-"
+    url = "https://$(endpoint_prefix)aiplatform.googleapis.com/v1/projects/$project/locations/$region/batchPredictionJobs"
     bucket = read("$secretdir/gcp.bucket.txt", String)
     t = Int(round(time()))
     payload = Dict(
         "displayName" => "batch_job_$t",
-        "model" => "publishers/google/models/gemini-2.5-flash",
+        "model" => "publishers/google/models/$model_id",
         "inputConfig" => Dict(
             "instancesFormat" => "jsonl",
             "gcsSource" =>
@@ -190,7 +203,6 @@ function queue_batch_job()
 end
 
 function wait_on_batch_job(batch_job_id)
-    region = read("$secretdir/gcp.region.txt", String)
     project = read("$secretdir/gcp.project.txt", String)
     is_finished = false
     while !is_finished
@@ -201,7 +213,8 @@ function wait_on_batch_job(batch_job_id)
             "Authorization" => "Bearer $gcp_access_token",
             "Content-Type" => "application/json",
         )
-        url = "https://$(region)-aiplatform.googleapis.com/v1/projects/$project/locations/$region/batchPredictionJobs/$batch_job_id"
+        endpoint_prefix = region == "global" ? "" : "$(region)-"
+        url = "https://$(endpoint_prefix)aiplatform.googleapis.com/v1/projects/$project/locations/$region/batchPredictionJobs/$batch_job_id"
         ret = HTTP.get(url, headers, status_exception = false)
         resp = JSON3.parse(String(copy(ret.body)))
         is_finished = resp["state"] in ["JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED"]

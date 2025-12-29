@@ -29,7 +29,6 @@ function backup()
         cmd = replace(save_template, "{INPUT}" => "$datadir/$fn", "{OUTPUT}" => fn)
         run(`sh -c $cmd`)
     end
-    rm(datadir, recursive=true, force=true)
 end
 
 backup()

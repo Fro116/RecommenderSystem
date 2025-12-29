@@ -85,6 +85,7 @@ function document_to_sections(x::String)
         "Reviews",
         "Keywords",
         "Synopsis",
+        "Queries",
     ])
     data_dict = Dict{String,String}()
     content_buffer = IOBuffer()

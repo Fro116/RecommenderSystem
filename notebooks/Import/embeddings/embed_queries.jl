@@ -127,7 +127,7 @@ end
 function embed_queries()
     queries = get_queries()
     run(
-        `rclone copyto -Pv r2:rsys/database/import/search_embeddings.jld2 $datadir/search_embeddings.jld2`,
+        `rclone --retries=10 copyto -Pv r2:rsys/database/import/search_embeddings.jld2 $datadir/search_embeddings.jld2`,
     )
     if ispath("$datadir/search_embeddings.jld2")
         existing_queries = JLD2.load("$datadir/search_embeddings.jld2")["queries"]

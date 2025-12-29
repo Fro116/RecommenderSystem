@@ -128,7 +128,7 @@ function merge_documents(x, y)
         if ismissing(b)
             return a
         end
-        vcat(a, b)
+        vcat(a, [x for x in b if x ∉ a])
     end
     ret = copy(x)
     for k in
