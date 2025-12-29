@@ -115,7 +115,7 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
         setError("");
       }
 
-      const limit = isMobile ? 8 : 16;
+      const limit = isMobile ? 8 : 32;
       const extendedPayload = { ...payload, pagination: { offset, limit } };
       const payloadString = JSON.stringify(extendedPayload);
       const compressedPayload = pako.gzip(payloadString);
@@ -476,7 +476,11 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
 
       {/* Results Grid/List */}
       {results.length > 0 ? (
-        <div className="grid-container" ref={gridViewRef}>
+        <div
+          className="grid-container"
+          ref={gridViewRef}
+          style={{ overflowAnchor: "none" }}
+        >
           <div className={viewType === "grid" ? "grid-view" : "list-view"}>
             {viewType === "list" && listViewHeader}
             {results.map((item, index) => {
@@ -740,17 +744,6 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
                 visibility: "hidden",
               }}
             ></div>
-            {loadingMore && (
-              <div
-                style={{
-                  textAlign: "center",
-                  gridColumn: "1 / -1",
-                  padding: "20px",
-                }}
-              >
-                Loading More...
-              </div>
-            )}
             {!loadingMore &&
               results.length > 0 &&
               results.length >= totalResults && (
