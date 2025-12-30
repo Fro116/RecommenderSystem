@@ -115,7 +115,8 @@ class FinetuneDataset(IterableDataset):
         for i, x in enumerate(shards):
             if i % local_world_size == local_rank:
                 self.fns.extend(glob.glob(f"{x}/*.h5"))
-        self.partition = [0, 4]
+        checkpoints_per_epoch = 4
+        self.partition = [0, checkpoints_per_epoch]
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -135,10 +136,17 @@ class FinetuneDataset(IterableDataset):
             N = d["userid"].shape[0]
             idxs = []
             for i in range(N):
-                if any(d[f"{args.finetune_medium}.{metric}.weight"][i, :].sum() > 0 for metric in ["watch", "rating"]):
+                if any(
+                    d[f"{args.finetune_medium}.{metric}.weight"][i, :].sum() > 0
+                    for metric in ["watch", "rating"]
+                ):
                     idxs.append(i)
             if self.shuffle:
-                idxs = [x for (i, x) in enumerate(idxs) if i % self.partition[1] == self.partition[0]]
+                idxs = [
+                    x
+                    for (i, x) in enumerate(idxs)
+                    if i % self.partition[1] == self.partition[0]
+                ]
                 np.random.shuffle(idxs)
                 while len(idxs) % self.batch_size != 0:
                     idxs.append(np.random.choice(idxs))
@@ -247,7 +255,10 @@ def train_epoch(
                 w = float(d[f"{names[i]}.weight"].sum())
                 training_losses[i] += float(tloss[i].detach()) * w
                 training_weights[i] += w
-            loss = sum(tloss[i] * task_weights[i] for i in range(len(tloss))) / grad_accum_steps
+            loss = (
+                sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
+                / grad_accum_steps
+            )
         loss.backward()
         if (step + 1) % grad_accum_steps != 0:
             continue
@@ -284,38 +295,44 @@ class ConstantScheduler(object):
         return 1
 
 
-class WarmupCosineScheduler(object):
-    def __init__(self, warmup_steps, total_steps, final_ratio):
+class WSDScheduler(object):
+    def __init__(self, warmup_steps, total_steps, decay_ratio, final_ratio):
         self.warmup_steps = warmup_steps
         self.total_steps = total_steps
         self.final_ratio = final_ratio
+        self.decay_steps = int(total_steps * decay_ratio)
+        self.stable_steps = total_steps - warmup_steps - self.decay_steps
+        assert self.stable_steps >= 0
 
-    def __call__(self, epoch):
-        s = max(0, min(int(epoch), self.total_steps))
+    def __call__(self, step):
+        s = max(0, min(int(step), self.total_steps))
         if s <= self.warmup_steps:
             return s / max(1, self.warmup_steps)
-        remain = max(1, self.total_steps - self.warmup_steps)
-        progress = (s - self.warmup_steps) / remain
-        cosine = 0.5 * (1.0 + np.cos(np.pi * progress))
-        return self.final_ratio + (1.0 - self.final_ratio) * cosine
+        if s <= (self.warmup_steps + self.stable_steps):
+            return 1.0
+        decay_progress = (s - self.warmup_steps - self.stable_steps) / max(
+            1, self.decay_steps
+        )
+        return 1.0 - (1.0 - self.final_ratio) * decay_progress
 
 
 def create_learning_rate_schedule(optimizer, tokens_per_batch, epochs, logger):
-    if args.finetune:
+    if args.finetune or args.modeltype == "causal":
         return optim.lr_scheduler.LambdaLR(optimizer, ConstantScheduler())
     else:
-        return optim.lr_scheduler.LambdaLR(optimizer, ConstantScheduler())
-        # transdir = "transformer_mini" if args.mini else "transformer"
-        # with open(f"{args.datadir}/{transdir}/training/num_tokens.txt", 'r') as file:
-        #     tokens_per_epoch = int(file.read().strip())
-        # total_steps = int(round(tokens_per_epoch * epochs / tokens_per_batch))
-        # logger.info(
-        #     f"Training with {tokens_per_epoch * epochs} tokens,"
-        #     f" {total_steps} steps,"
-        #     f" and {tokens_per_epoch} tokens per epoch"
-        # )
-        # sc = WarmupCosineScheduler(warmup_steps=100, total_steps=total_steps, final_ratio=0.1)
-        # return optim.lr_scheduler.LambdaLR(optimizer, sc)
+        transdir = "transformer_mini" if args.mini else "transformer"
+        with open(f"{args.datadir}/{transdir}/training/num_tokens.txt", "r") as file:
+            tokens_per_epoch = int(file.read().strip())
+        total_steps = int(round(tokens_per_epoch * epochs / tokens_per_batch))
+        logger.info(
+            f"Training with {tokens_per_epoch * epochs} tokens,"
+            f" {total_steps} steps,"
+            f" and {tokens_per_epoch} tokens per epoch"
+        )
+        sc = WSDScheduler(
+            warmup_steps=2000, total_steps=total_steps, decay_ratio=0.1, final_ratio=0.1
+        )
+        return optim.lr_scheduler.LambdaLR(optimizer, sc)
 
 
 class EarlyStopper:
@@ -392,6 +409,15 @@ def make_task_weights():
     return [(w / s) for (w, s) in zip(weights, scale)]
 
 
+def make_early_stopper(config):
+    if config["finetune"]:
+        return EarlyStopper(patience=1, rtol=0.001)
+    if args.modeltype == "causal":
+        return EarlyStopper(patience=1, rtol=0)
+    else:
+        return EarlyStopper(patience=float("inf"), rtol=0)
+
+
 def get_logger(local_rank, name):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
@@ -459,15 +485,17 @@ def checkpoint_model(
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
     if args.finetune is None:
         csv_fn = f"{args.datadir}/transformer.{args.modeltype}.csv"
-        create_csv = not os.path.exists(csv_fn) and args.prod
     else:
         csv_fn = f"{args.datadir}/transformer.{args.modeltype}.{args.finetune_medium}.finetune.csv"
-        create_csv = epoch < 0
-    if create_csv:
+    if epoch < 0:
         with open(csv_fn, "w") as f:
             f.write(",".join(["epoch", "training_loss", "test_loss"] + names) + "\n")
     with open(csv_fn, "a") as f:
-        vals = [epoch, wsum(training_loss, task_weights), wsum(test_loss, task_weights)] + test_loss
+        vals = [
+            epoch,
+            wsum(training_loss, task_weights),
+            wsum(test_loss, task_weights),
+        ] + test_loss
         f.write(",".join([str(x) for x in vals]) + "\n")
     if global_rank == 0 and args.prod and args.finetune is None:
         cmd = f"rclone --retries=10 copyto {args.datadir}/transformer.{args.modeltype}.csv r2:rsys/database/training/{list_tag}/transformer.{args.modeltype}.csv"
@@ -490,16 +518,20 @@ def upload(global_rank, logger):
 def get_training_config():
     if args.finetune is not None:
         checkpoint = torch.load(
-            f"{args.datadir}/transformer.{args.modeltype}.pt", weights_only=False, map_location="cpu"
+            f"{args.datadir}/transformer.{args.modeltype}.pt",
+            weights_only=False,
+            map_location="cpu",
         )
         config = checkpoint["config"]
         config["learning_rate"] = 2e-4
         config["finetune"] = True
         config["gpu_config"] = get_gpu_config()
         return config
+
     def get_num_items(medium, col):
         df = pd.read_csv(f"{args.datadir}/{medium}.csv", low_memory=False)
         return int(df[col].max()) + 1
+
     min_ts = datetime.datetime.strptime("20000101", "%Y%m%d").timestamp()
     with open(os.path.join(args.datadir, "list_tag"), "r") as f:
         max_ts = datetime.datetime.strptime(f.read().strip(), "%Y%m%d").timestamp()
@@ -524,7 +556,7 @@ def get_training_config():
         "rating_std": 1.778219,
         "forward": "train",
         "finetune": False,
-        "learning_rate": 1e-4,
+        "learning_rate": 3e-4 if args.modeltype == "masked" else 1e-4,
         "causal": args.modeltype == "causal",
         "mask_rate": 0.15,
         "gpu_config": get_gpu_config(),
@@ -546,6 +578,7 @@ def get_gpu_config():
     else:
         assert int(os.environ["WORLD_SIZE"]) == 1
         return "local"
+
 
 def train():
     init_process_group(backend="nccl")
@@ -569,7 +602,7 @@ def train():
         grad_accum_steps = global_batch_size // local_batch_size
     else:
         num_epochs = 8 if config["causal"] else 64
-        global_batch_size = 512 if config["causal"] else 2048
+        global_batch_size = 512 if config["causal"] else 1024
         if gpu_config == "B200":
             local_batch_size = 64 if config["causal"] else 128
         elif gpu_config == "H200":
@@ -657,13 +690,8 @@ def train():
         scheduler.load_state_dict(checkpoint["scheduler"])
         del checkpoint["optimizer"]
         del checkpoint["scheduler"]
-    scheduler = optim.lr_scheduler.LambdaLR(optimizer, ConstantScheduler())
 
-    stopper = (
-        EarlyStopper(patience=1, rtol=0.001)
-        if config["finetune"]
-        else EarlyStopper(patience=float("inf"), rtol=0)
-    )
+    stopper = make_early_stopper(config)
     task_weights = make_task_weights()
     get_loss = lambda x: evaluate_metrics(local_rank, x, dataloaders["test"])
     starting_epoch = 0 if checkpoint is None else checkpoint["epoch"] + 1
@@ -772,8 +800,8 @@ parser.add_argument("--modeltype", type=str)
 parser.add_argument("--finetune", type=str, default=None)
 parser.add_argument("--finetune_medium", type=int, default=None)
 parser.add_argument("--download", metavar="N", type=int, nargs="+", default=None)
-parser.add_argument('--mini', action='store_true')
-parser.add_argument('--prod', action='store_true')
+parser.add_argument("--mini", action="store_true")
+parser.add_argument("--prod", action="store_true")
 args = parser.parse_args()
 
 if __name__ == "__main__":
