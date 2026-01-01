@@ -556,7 +556,7 @@ def get_training_config():
         "rating_std": 1.778219,
         "forward": "train",
         "finetune": False,
-        "learning_rate": 3e-4 if args.modeltype == "masked" else 1e-4,
+        "learning_rate": 1e-4,
         "causal": args.modeltype == "causal",
         "mask_rate": 0.15,
         "gpu_config": get_gpu_config(),
@@ -592,25 +592,25 @@ def train():
     gpu_config = config["gpu_config"]
     if config["finetune"]:
         num_epochs = 16
-        global_batch_size = 256 if config["causal"] else 512
+        global_batch_size = 256
         grad_accum_steps = 1
         assert gpu_config == "local"
         # emulate training on a 8 gpu setup with gradient accumulation
         # TODO check if grad_accum_steps is still useful
-        local_batch_size = 16 if config["causal"] else 16
+        local_batch_size = 16
         assert global_batch_size % local_batch_size == 0
         grad_accum_steps = global_batch_size // local_batch_size
     else:
         num_epochs = 8 if config["causal"] else 64
-        global_batch_size = 512 if config["causal"] else 1024
+        global_batch_size = 512
         if gpu_config == "B200":
-            local_batch_size = 64 if config["causal"] else 128
+            local_batch_size = 64
         elif gpu_config == "H200":
-            local_batch_size = 32 if config["causal"] else 64
+            local_batch_size = 32
         elif gpu_config == "H100":
-            local_batch_size = 16 if config["causal"] else 64
+            local_batch_size = 16
         elif gpu_config == "local":
-            local_batch_size = 4 if config["causal"] else 8
+            local_batch_size = 4
         else:
             assert False
         assert global_batch_size % (world_size * local_batch_size) == 0

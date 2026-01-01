@@ -148,12 +148,9 @@ class Llama3(nn.Module):
             "num_kv_heads": config["num_kv_heads"],
             "embed_dim": config["embed_dim"],
             "intermediate_dim": config["intermediate_dim"],
-        }
-        if config["causal"]:
             # we split each token into an item and action token
-            llama_config["max_seq_len"] = 2 * config["max_sequence_length"]
-        else:
-            llama_config["max_seq_len"] = config["max_sequence_length"]
+            "max_seq_len": 2 * config["max_sequence_length"],
+        }
         if config["finetune"]:
             llama3 = torchtune.models.llama3.lora_llama3(
                 lora_attn_modules=["q_proj", "v_proj"],
@@ -185,18 +182,11 @@ class TransformerModel(nn.Module):
         self.watch_head = nn.Sequential(
             DualItemEmbedding(self.item_embedding), nn.LogSoftmax(dim=-1)
         )
-        if config["causal"]:
-            self.rating_head = nn.Sequential(
-                nn.Linear(config["embed_dim"], config["embed_dim"]),
-                nn.GELU(),
-                nn.Linear(config["embed_dim"], 1),
-            )
-        else:
-            self.rating_head = nn.Sequential(
-                nn.Linear(2 * config["embed_dim"], config["embed_dim"]),
-                nn.GELU(),
-                nn.Linear(config["embed_dim"], 1),
-            )
+        self.rating_head = nn.Sequential(
+            nn.Linear(config["embed_dim"], config["embed_dim"]),
+            nn.GELU(),
+            nn.Linear(config["embed_dim"], 1),
+        )
         self.apply(init_weights)
         self.empty_loss = nn.Parameter(torch.tensor(0.0))
         if config["finetune"]:
@@ -291,28 +281,34 @@ class TransformerModel(nn.Module):
 
     def mask_tokens(self, d):
         if self.config["finetune"]:
+            assert False
             mask = torch.zeros_like(d["userid"])
             for k in d:
                 if k.endswith(".weight"):
                     mask += d[k] > 0
             mask = mask > 0
         else:
-            mask = (
-                torch.rand(d["userid"].shape, device=d["userid"].device)
-                < self.config["mask_rate"]
-            )
+            randval = torch.rand(d["userid"].shape, device=d["userid"].device)
+            watch_mask = randval < 0.1
+            rating_mask = (randval >= 0.1) & (randval < 0.2)
         for k in d:
             if k.endswith(".position") or k.endswith(".label") or k.endswith(".weight"):
-                d[k][~mask] = 0
+                if "watch" in k:
+                    d[k][~watch_mask] = 0
+                elif "rating" in k:
+                    d[k][~rating_mask] = 0
+                elif "status" in k:
+                    pass
+                else:
+                    assert False
             elif k in ["userid", "time", "gender", "source"]:
                 pass  # don't mask
-            elif k in [
-                "matchedid",
-                "status",
-            ]:
-                d[k][mask] = -1
+            elif k in ["matchedid"]:
+                d[k][watch_mask] = -1
+            elif k in ["status"]:
+                d[k][watch_mask | rating_mask] = -1
             elif k in ["rating", "progress"]:
-                d[k][mask] = 0
+                d[k][watch_mask | rating_mask] = 0
             else:
                 assert False
         return d
@@ -334,7 +330,6 @@ class TransformerModel(nn.Module):
                     d["action_tokens"]["token_mask_ids"],
                     d["item_tokens"]["token_mask_ids"],
                 )
-                # TODO make a binary mask of duplicated item ids, shuffle them to the end, and cut
             else:
                 rope_input_pos = None
                 token_mask_ids = torch.zeros_like(userid)
@@ -356,7 +351,10 @@ class TransformerModel(nn.Module):
             block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
             return self.transformers(e, block_mask, rope_input_pos)
         else:
-            userid = d["userid"]
+            e_a = self.action_embedding(d)
+            e_i = self.item_embedding(d["matchedid"])
+            e = self.interleave(e_i, e_a)
+            userid = self.interleave(d["userid"], d["userid"])
             m, n = userid.shape
 
             def document_mask(b, h, q_idx, kv_idx):
@@ -365,9 +363,6 @@ class TransformerModel(nn.Module):
             block_mask = create_block_mask(
                 document_mask, B=m, H=None, Q_LEN=n, KV_LEN=n
             )
-            e_a = self.action_embedding(d)
-            e_i = self.item_embedding(d["matchedid"])
-            e = e_a + e_i
             return self.transformers(e, block_mask, None)
 
     def train_forward(self, d, evaluate):
@@ -400,9 +395,22 @@ class TransformerModel(nn.Module):
                     else:
                         assert False
                 else:
-                    weights = d[f"{medium}.{metric}.weight"]
-                    labels = d[f"{medium}.{metric}.label"]
-                    positions = d[f"{medium}.{metric}.position"]
+                    if metric == "watch":
+                        w = d[f"{medium}.{metric}.weight"]
+                        weights = self.interleave(w, w * 0)
+                        l = d[f"{medium}.{metric}.label"]
+                        labels = self.interleave(l, l * 0)
+                        p = d[f"{medium}.{metric}.position"]
+                        positions = self.interleave(p, p * 0)
+                    elif metric == "rating":
+                        w = d[f"{medium}.{metric}.weight"]
+                        weights = self.interleave(w * 0, w)
+                        l = d[f"{medium}.{metric}.label"]
+                        labels = self.interleave(l * 0, l)
+                        p = d[f"{medium}.{metric}.position"]
+                        positions = self.interleave(p * 0, p)
+                    else:
+                        assert False
                 if not torch.is_nonzero(weights.sum()):
                     losses.append(torch.square(self.empty_loss).sum())
                     continue
@@ -420,20 +428,7 @@ class TransformerModel(nn.Module):
                     )
                     losses.append(self.crossentropy(preds, labels, weights))
                 elif metric == "rating":
-                    if self.config["causal"]:
-                        preds = self.rating_head(embed).reshape(-1)
-                    else:
-                        item_pos = positions.squeeze(dim=1)
-                        if medium == 1:
-                            item_pos += self.config["vocab_sizes"]["0_matchedid"]
-                        X = torch.cat(
-                            (
-                                embed,
-                                self.item_embedding(item_pos),
-                            ),
-                            dim=-1,
-                        )
-                        preds = self.rating_head(X).reshape(-1)
+                    preds = self.rating_head(embed).reshape(-1)
                     labels = labels - self.config["rating_mean"]
                     if evaluate:
                         losses.append(self.moments(preds, labels, weights))
