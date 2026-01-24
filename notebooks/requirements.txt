@@ -1,4 +1,4 @@
-curl_cffi==0.13.0
+curl_cffi==0.14.0
 fastapi==0.116.2
 h5py==3.14.0
 hdf5plugin==5.1.0

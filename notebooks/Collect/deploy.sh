@@ -13,7 +13,7 @@ mkdir -p $logs && rm $logs/*.log
 (uvicorn layer1:app --host 0.0.0.0 --port 4102 --log-level warning |& julia -t 1 logrotate.jl $logs/layer1.2.log) &
 (uvicorn layer1:app --host 0.0.0.0 --port 4103 --log-level warning |& julia -t 1 logrotate.jl $logs/layer1.3.log) &
 (uvicorn layer1:app --host 0.0.0.0 --port 4104 --log-level warning |& julia -t 1 logrotate.jl $logs/layer1.4.log) &
-(julia layer2.jl 4002 1 "http://localhost:4101/proxy,http://localhost:4102/proxy,http://localhost:4103/proxy,http://localhost:4104/proxy" true 10 true |& julia -t 1 logrotate.jl $logs/layer2.log) &
+(julia layer2.jl 4002 1 "http://localhost:4101/proxy,http://localhost:4102/proxy,http://localhost:4103/proxy,http://localhost:4104/proxy" true 60 true |& julia -t 1 logrotate.jl $logs/layer2.log) &
 (julia layer3.jl 4003 "http://localhost:4002" 1000 10 |& julia -t 1 logrotate.jl $logs/layer3.log) &
 
 (julia -t 1 collect_single.jl mal_userids userid "http://localhost:4003/mal_username" 1 |& julia -t 1 logrotate.jl $logs/mal_userids.log) &
@@ -26,8 +26,8 @@ mkdir -p $logs && rm $logs/*.log
 (julia -t 16 collect_junction.jl kitsu_users user kitsu_user_items items nothing nothing userid db_junction_last_changed_at "http://localhost:4003/kitsu_user" 14 |& julia -t 1 logrotate.jl $logs/kitsu_users.log) &
 (julia -t 1 collect_junction.jl kitsu_media details kitsu_media_relations relations kitsu_user_items nothing medium,itemid db_primary_last_changed_at "http://localhost:4003/kitsu_media" 1 |& julia -t 1 logrotate.jl $logs/kitsu_media.log) &
 
-(julia -t 1 collect_single.jl animeplanet_userids userid "http://localhost:4003/animeplanet_username" 1 |& julia -t 1 logrotate.jl $logs/animeplanet_userids.log) &
-(julia -t 32 collect_junction.jl animeplanet_users user animeplanet_user_items items animeplanet_userids userid username db_junction_last_changed_at "http://localhost:4003/animeplanet_user" 50 |& julia -t 1 logrotate.jl $logs/animeplanet_users.log) &
+# (julia -t 1 collect_single.jl animeplanet_userids userid "http://localhost:4003/animeplanet_username" 1 |& julia -t 1 logrotate.jl $logs/animeplanet_userids.log) &
+(julia -t 2 collect_junction.jl animeplanet_users user animeplanet_user_items items animeplanet_userids userid username db_junction_last_changed_at "http://localhost:4003/animeplanet_user" 2 |& julia -t 1 logrotate.jl $logs/animeplanet_users.log) &
 (julia -t 1 collect_junction.jl animeplanet_media details animeplanet_media_relations relations animeplanet_user_items nothing medium,itemid db_primary_last_changed_at "http://localhost:4003/animeplanet_media" 1 |& julia -t 1 logrotate.jl $logs/animeplanet_media.log) &
 
 (julia -t 1 collect_external.jl |& julia -t 1 logrotate.jl $logs/external.log) &

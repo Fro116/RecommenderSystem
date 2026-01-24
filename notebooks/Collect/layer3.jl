@@ -73,14 +73,18 @@ macro retry(f, retries=3)
     end
 end
 
-const SESSIONS = Dict{Any,Any}() # token -> (sessionid, access_time)
+const SESSIONS = Dict{Any,Any}() # token -> (sessionid, access_time, expiry_time)
 const SESSIONS_LOCK = ReentrantLock()
 
 function get_session(token)
     auth = lock(SESSIONS_LOCK) do
         if token in keys(SESSIONS)
-            sessionid, _ = SESSIONS[token]
-            SESSIONS[token] = (sessionid, time())
+            sessionid, _, expiry_time = SESSIONS[token]
+            if time() > expiry_time
+                delete!(SESSIONS, token)
+                return nothing
+            end
+            SESSIONS[token] = (sessionid, time(), expiry_time)
             return sessionid
         end
         nothing
@@ -110,11 +114,12 @@ function get_session(token)
         @assert false
     end
     lock(SESSIONS_LOCK) do
-        SESSIONS[token] = (sessionid, time())
+        expiry_secs = Dict("kitsu" => 86400, "animeplanet" => 14400)[token["resource"]["location"]]
+        SESSIONS[token] = (sessionid, time(), time() + expiry_secs)
         if length(SESSIONS) > 10_000
             ks = collect(keys(SESSIONS))
             for k in ks
-                _, access_time = SESSIONS[k]
+                _, access_time, _ = SESSIONS[k]
                 if time() - access_time > 10_000
                     delete!(SESSIONS, k)
                 end

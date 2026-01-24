@@ -70,6 +70,9 @@ async def get_session(sessionid, proxyurl):
 async def proxy(request: Request):
     data = await request.json()
     session = await get_session(data["sessionid"], data.get("proxyurl", None))
+    if "cookies" in data:
+        for name, val, domain in data["cookies"]:
+            session.cookies.set(name, val, domain=domain)
     args = {}
     for k in ["method", "url", "headers", "impersonate", "timeout"]:
         if k in data:
