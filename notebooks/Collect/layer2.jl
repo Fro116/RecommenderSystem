@@ -36,10 +36,7 @@ function load_resources()::Vector{Resource}
     credentials = Dict()
     function get_proxies(path)
         proxies = []
-        proxy_df = CSV.read(
-            path,
-            DataFrames.DataFrame,
-        )
+        proxy_df = CSV.read(path, DataFrames.DataFrame)
         for (host, port, username, password) in
             zip(proxy_df.host, proxy_df.port, proxy_df.username, proxy_df.password)
             ip = split(username, "-")[end]
@@ -94,16 +91,17 @@ function load_resources()::Vector{Resource}
 
     animeplanet_credentials = []
     for x in readlines("../../secrets/animeplanet.auth.txt")
-        username, password = split(x, ",")
+        username, password, _ = split(x, ",")
         push!(animeplanet_credentials, Dict("username" => username, "password" => password))
     end
+    sorted_dedicated_ips = sort(dedicated_ips)
     animeplanet_resources = [
         Dict(
             "location" => "animeplanet",
-            "proxyurl" => x,
-            "ratelimit" => 8,
-            "credentials" => animeplanet_credentials[(i % length(animeplanet_credentials))+1],
-        ) for (i, x) in Iterators.enumerate(dedicated_ips)
+            "proxyurl" => sorted_dedicated_ips[i],
+            "ratelimit" => 16,
+            "credentials" => animeplanet_credentials[i],
+        ) for i in 1:min(length(dedicated_ips), length(animeplanet_credentials))
     ]
 
     resources = vcat(
@@ -147,7 +145,7 @@ function Resources(resources)
 end
 
 const RESOURCES = Resources(load_resources());
-const RECLAIM_TIMEOUT = 1000
+const RECLAIM_TIMEOUT = 3600
 LAST_RECLAIM::Float64 = time()
 
 function reclaim(r::Resources)
@@ -166,14 +164,17 @@ function reclaim(r::Resources)
             else
                 delta = 0
             end
-            logtag("RESOURCES", "location $loc has $li resources and $lq tasks with a wait delay of $delta")
+            logtag(
+                "RESOURCES",
+                "location $loc has $li resources and $lq tasks with a wait delay of $delta",
+            )
         end
         for k in Set(keys(r.resources))
             m = r.resources[k]
             if !isnothing(m.checkout_time) && t - m.checkout_time > RECLAIM_TIMEOUT
-                r.resources[k] =
-                    ResourceMetadata(m.version + 1, nothing, m.request_times)
-                push_front!(r.index[k["location"]], k)
+                logtag("RESOURCES", "reclaiming $m")
+                r.resources[k] = ResourceMetadata(m.version + 1, nothing, m.request_times)
+                pushfirst!(r.index[k["location"]], k)
             end
         end
     end
@@ -304,7 +305,7 @@ function callproxy(
         "method" => method,
         "url" => url,
         "sessionid" => sessionid,
-        "timeout" => DEFAULT_TIMEOUT
+        "timeout" => DEFAULT_TIMEOUT,
     )
     if get(headers, "impersonate", DEFAULT_IMPERSONATE)
         args["impersonate"] = "chrome"
@@ -321,7 +322,7 @@ function callproxy(
     if !isnothing(proxyurl)
         args["proxyurl"] = proxyurl
     end
-    layer_1_url = LAYER_1_URLS[(shahash(sessionid) % length(LAYER_1_URLS)) + 1]
+    layer_1_url = LAYER_1_URLS[(shahash(sessionid)%length(LAYER_1_URLS))+1]
     r = HTTP.post(layer_1_url, encode(args, :json)..., status_exception = false)
     Response(r.status, String(r.body), Dict(k => v for (k, v) in r.headers))
 end
@@ -505,7 +506,12 @@ function mal_get_list(resource::Resource, username::String, medium::String, offs
 end
 
 function mal_get_fingerprint(resource::Resource, username::String, medium::String)
-    params = Dict("limit" => 1, "fields" => "list_status{updated_at}", "nsfw" => true, "sort" => "list_updated_at")
+    params = Dict(
+        "limit" => 1,
+        "fields" => "list_status{updated_at}",
+        "nsfw" => true,
+        "sort" => "list_updated_at",
+    )
     url = string(
         HTTP.URI(
             "https://api.myanimelist.net/v2/users/$username/$(medium)list";
@@ -567,7 +573,12 @@ function mal_get_media(resource::Resource, medium::String, itemid::Integer)
             "rating",
             "studios",
         ],
-        "manga" => ["num_volumes", "num_chapters", "authors{first_name,last_name}", "serialization{name}"],
+        "manga" => [
+            "num_volumes",
+            "num_chapters",
+            "authors{first_name,last_name}",
+            "serialization{name}",
+        ],
     )
     params = Dict("fields" => join(vcat(fields["common"], fields[medium]), ","))
     url = string(HTTP.URI("https://api.myanimelist.net/v2/$medium/$itemid"; query = params))
@@ -588,7 +599,7 @@ function mal_get_media(resource::Resource, medium::String, itemid::Integer)
         "start_date" => optget(json, "start_date"),
         "end_date" => optget(json, "end_date"),
         "synopsis" => optget(json, "synopsis"),
-        "genres" =>  optget(json, "genres"),
+        "genres" => optget(json, "genres"),
         "created_at" => optget(json, "created_at"),
         "updated_at" => optget(json, "updated_at"),
         "media_type" => json["media_type"],
@@ -611,13 +622,19 @@ function mal_get_media(resource::Resource, medium::String, itemid::Integer)
         "rating" => optget(json, "rating"),
         "studios" =>
             "studios" in keys(json) ? [x["name"] for x in json["studios"]] :
-            "serialization" in keys(json) ? [x["node"]["name"] for x in json["serialization"]] :
-            nothing,
+            "serialization" in keys(json) ?
+            [x["node"]["name"] for x in json["serialization"]] : nothing,
         "num_volumes" => optget(json, "num_volumes"),
         "num_chapters" => optget(json, "num_chapters"),
         "authors" =>
             "authors" in keys(json) ?
-            [Dict("first_name" => x["node"]["first_name"], "last_name" => x["node"]["last_name"], "role" => x["role"]) for x in json["authors"]] : nothing,
+            [
+                Dict(
+                    "first_name" => x["node"]["first_name"],
+                    "last_name" => x["node"]["last_name"],
+                    "role" => x["role"],
+                ) for x in json["authors"]
+            ] : nothing,
     )
     # the mal API does not return manga relations for anime entries and vice versa        
     ret = Dict("details" => details)
@@ -879,7 +896,7 @@ function malweb_get_media_reviews(text::String, medium::String, itemid::Integer)
             "username" => username,
             "text" => final_text,
             "rating" => rating,
-            "upvotes" => upvotes
+            "upvotes" => upvotes,
         )
         push!(entries, entry)
     end
@@ -894,7 +911,9 @@ function malweb_get_user(resource::Resource, username::String)
         return HTTP.Response(r)
     end
     if isempty(r.body)
-        logerror("malweb_get_user received empty payload for $username with status $(r.status)")
+        logerror(
+            "malweb_get_user received empty payload for $username with status $(r.status)",
+        )
         r = request(resource, "GET", url, Dict("impersonate" => true))
         if isempty(r.body)
             return HTTP.Response(500, [])
@@ -920,7 +939,7 @@ function malweb_get_user(resource::Resource, username::String)
                 r.body,
                 """<span class="user-status-title di-ib fl-l fw-b">$field</span><span class="user-status-data di-ib fl-r fw-b">""",
                 "</span>";
-            )
+            ),
         )
     end
 
@@ -930,13 +949,18 @@ function malweb_get_user(resource::Resource, username::String)
                 r.body,
                 """/$field/.*?<span class="di-ib fl-l fn-grey2">Total Entries</span><span class="di-ib fl-r">""",
                 "</span>",
-            )
+            ),
         )
     end
 
     function get_avatar()
         stem = "https://cdn.myanimelist.net/s/common/userimages/"
-        leaf = extract(r.body, """<img class="lazyload" data-src="$stem""", "\"", optional=true)
+        leaf = extract(
+            r.body,
+            """<img class="lazyload" data-src="$stem""",
+            "\"",
+            optional = true,
+        )
         if isnothing(leaf)
             return nothing
         end
@@ -944,7 +968,13 @@ function malweb_get_user(resource::Resource, username::String)
     end
 
     function get_about()
-        matches = extract(r.body, """<div class="word-break">""", "</div>", optional=true, multiple = true)
+        matches = extract(
+            r.body,
+            """<div class="word-break">""",
+            "</div>",
+            optional = true,
+            multiple = true,
+        )
         if isnothing(matches)
             return matches
         end
@@ -959,7 +989,7 @@ function malweb_get_user(resource::Resource, username::String)
                 r.body,
                 """href="https://myanimelist.net/modules.php\\?go=report&amp;type=profile&amp;id=""",
                 "\"",
-            )
+            ),
         ),
         "last_online" => info_panel("Last Online"),
         "gender" => info_panel("Gender"),
@@ -1023,7 +1053,12 @@ Oxygen.@post "/anilist" function anilist_api(r::HTTP.Request)::HTTP.Response
     end
 end
 
-function anilist_get_list(resource::Resource, userid::Integer, medium::String, chunk::Integer)
+function anilist_get_list(
+    resource::Resource,
+    userid::Integer,
+    medium::String,
+    chunk::Integer,
+)
     url = "https://graphql.anilist.co"
     query = """
     query (\$userID: Int, \$MEDIA: MediaType, \$chunk: Int, \$perChunk: Int) {
@@ -1163,9 +1198,7 @@ function anilist_get_fingerprint(resource::Resource, userid::Integer, medium::St
             end
         end
     end
-    ret = Dict(
-        "entries" => collect(values(entries)),
-    )
+    ret = Dict("entries" => collect(values(entries)))
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
@@ -1411,7 +1444,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
                     hasNextPage
                 }
             }
-            """
+            """,
         )
         query = header
         for k in components
@@ -1483,12 +1516,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
                 "isLocked" => optget(data, "isLocked"),
                 "tags" => optget(data, "tags"),
                 "charactersPeek" => [
-                    Dict(
-                        "role" => x["role"],
-                        "name" => x["name"],
-                        "node" => x["node"],
-                    )
-                    for x in get(data["characters"], "edges", [])
+                    Dict("role" => x["role"], "name" => x["name"], "node" => x["node"]) for x in get(data["characters"], "edges", [])
                 ],
                 "staffPeek" => [
                     Dict("role" => x["role"], "name" => x["node"]["name"]["full"])
@@ -1540,11 +1568,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
             end
             if "characters" in keys(pages)
                 page_details["charactersPeek"] = [
-                    Dict(
-                        "role" => x["role"],
-                        "name" => x["name"],
-                        "node" => x["node"],
-                    )
+                    Dict("role" => x["role"], "name" => x["name"], "node" => x["node"])
                     for x in get(data["characters"], "edges", [])
                 ]
             end
@@ -1859,7 +1883,8 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
     )
     relations = []
     if "included" in keys(json)
-        details["genres"] = [x["attributes"]["name"] for x in json["included"] if x["type"] == "genres"]
+        details["genres"] =
+            [x["attributes"]["name"] for x in json["included"] if x["type"] == "genres"]
         details["malid"] = extractid([
             x["attributes"]["externalId"] for
             x in json["included"] if x["type"] == "mappings" &&
@@ -1876,7 +1901,8 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
                 "relation" => x["attributes"]["role"],
                 "itemid" => itemid,
                 "medium" => medium,
-                "target_id" => parse(Int, x["relationships"]["destination"]["data"]["id"]),
+                "target_id" =>
+                    parse(Int, x["relationships"]["destination"]["data"]["id"]),
                 "target_medium" => x["relationships"]["destination"]["data"]["type"],
             )
             push!(relations, d)
@@ -1886,12 +1912,7 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function kitsu_get_list(
-    resource::Resource,
-    auth::String,
-    userid::Integer,
-    offset::Integer,
-)
+function kitsu_get_list(resource::Resource, auth::String, userid::Integer, offset::Integer)
     url = "https://kitsu.io/api/edge/library-entries"
     params = Dict(
         "filter[user_id]" => userid,
@@ -1933,7 +1954,8 @@ function kitsu_get_list(
             "finishedAt" => optget(x["attributes"], "finishedAt"),
             "progressedAt" => optget(x["attributes"], "progressedAt"),
             "reactionSkipped" => x["attributes"]["reactionSkipped"],
-            "ratingTwenty" => kitsu_rating(Int, optget(x["attributes"], "ratingTwenty")),
+            "ratingTwenty" =>
+                kitsu_rating(Int, optget(x["attributes"], "ratingTwenty")),
             "rating" => kitsu_rating(Float64, optget(x["attributes"], "rating")),
         )
         push!(entries, d)
@@ -1946,11 +1968,7 @@ function kitsu_get_list(
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function kitsu_get_fingerprint(
-    resource::Resource,
-    auth::String,
-    userid::Integer,
-)
+function kitsu_get_fingerprint(resource::Resource, auth::String, userid::Integer)
     url = "https://kitsu.io/api/edge/library-entries"
     params = Dict(
         "filter[user_id]" => userid,
@@ -2025,10 +2043,12 @@ function kitsu_get_user(resource::Resource, auth::String, userid::Integer)
         included = json["included"]
         maybe_unpack(x) = length(x) == 0 ? 0 : only(x)
         ret["manga_count"] = maybe_unpack([
-            x["attributes"]["statsData"]["media"] for x in included if x["attributes"]["kind"] == "manga-amount-consumed"
+            x["attributes"]["statsData"]["media"] for
+            x in included if x["attributes"]["kind"] == "manga-amount-consumed"
         ])
         ret["anime_count"] = maybe_unpack([
-            x["attributes"]["statsData"]["media"] for x in included if x["attributes"]["kind"] == "anime-amount-consumed"
+            x["attributes"]["statsData"]["media"] for
+            x in included if x["attributes"]["kind"] == "anime-amount-consumed"
         ])
     else
         ret["manga_count"] = 0
@@ -2132,10 +2152,17 @@ function animeplanet_get_list(
     if expand_pagelimit
         params = Dict("per_page" => 560)
         url = string(
-            HTTP.URI("https://www.anime-planet.com/users/$username/$medium"; query = params),
+            HTTP.URI(
+                "https://www.anime-planet.com/users/$username/$medium";
+                query = params,
+            ),
         )
         r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-        text = parse_animeplanet_response(resource, r, x -> !occursin("<title>Search Results for $username", x))
+        text = parse_animeplanet_response(
+            resource,
+            r,
+            x -> !occursin("<title>Search Results for $username", x),
+        )
         if text isa HTTP.Response
             logstatus("animeplanet_get_list", text, url)
             return text
@@ -2151,7 +2178,11 @@ function animeplanet_get_list(
         HTTP.URI("https://www.anime-planet.com/users/$username/$medium"; query = params),
     )
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-    text = parse_animeplanet_response(resource, r, x -> !occursin("<title>Search Results for $username", x))
+    text = parse_animeplanet_response(
+        resource,
+        r,
+        x -> !occursin("<title>Search Results for $username", x),
+    )
     if text isa HTTP.Response
         logstatus("animeplanet_get_list", text, url)
         return text
@@ -2214,7 +2245,7 @@ function animeplanet_get_list(
         end
         prevline = line
     end
-    ret = Dict{String, Any}("entries" => entries)
+    ret = Dict{String,Any}("entries" => entries)
     if next_page
         ret["nextpage"] = page + 1
     end
@@ -2232,7 +2263,11 @@ function animeplanet_get_fingerprint(
         HTTP.URI("https://www.anime-planet.com/users/$username/$medium"; query = params),
     )
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-    text = parse_animeplanet_response(resource, r, x -> !occursin("<title>Search Results for $username", x))
+    text = parse_animeplanet_response(
+        resource,
+        r,
+        x -> !occursin("<title>Search Results for $username", x),
+    )
     if text isa HTTP.Response
         logstatus("animeplanet_get_fingerprint", text, url)
         return text
@@ -2267,7 +2302,11 @@ function animeplanet_get_media(
 )
     url = "https://www.anime-planet.com/$medium/$itemid"
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-    text = parse_animeplanet_response(resource, r, x -> !occursin("<h1>You searched for $itemid", x))
+    text = parse_animeplanet_response(
+        resource,
+        r,
+        x -> !occursin("<h1>You searched for $itemid", x),
+    )
     if text isa HTTP.Response
         logstatus("animeplanet_get_media", text, url)
         return text
@@ -2378,12 +2417,21 @@ function animeplanet_get_media(
     while has_next_page
         url = "https://www.anime-planet.com/$medium/$itemid/recommendations/$medium?page=$recommendations_page"
         r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-        text = parse_animeplanet_response(resource, r, x -> !occursin("<h1>You searched for $itemid</h1>", x))
+        text = parse_animeplanet_response(
+            resource,
+            r,
+            x -> !occursin("<h1>You searched for $itemid</h1>", x),
+        )
         if text isa HTTP.Response
             logstatus("animeplanet_get_media", text, url)
             return text
         end
-        entries, has_next_page = animeplanet_get_media_recommendations(text, medium, itemid, recommendations_page)
+        entries, has_next_page = animeplanet_get_media_recommendations(
+            text,
+            medium,
+            itemid,
+            recommendations_page,
+        )
         append!(recommendations, entries)
         recommendations_page += 1
     end
@@ -2394,12 +2442,17 @@ function animeplanet_get_media(
     while has_next_page
         url = "https://www.anime-planet.com/$medium/$itemid/reviews?page=$reviews_page"
         r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-        text = parse_animeplanet_response(resource, r, x -> !occursin("<h1>You searched for $itemid</h1>", x))
+        text = parse_animeplanet_response(
+            resource,
+            r,
+            x -> !occursin("<h1>You searched for $itemid</h1>", x),
+        )
         if text isa HTTP.Response
             logstatus("animeplanet_get_media", text, url)
             return text
         end
-        entries, has_next_page = animeplanet_get_media_reviews(text, medium, itemid, reviews_page)
+        entries, has_next_page =
+            animeplanet_get_media_reviews(text, medium, itemid, reviews_page)
         append!(reviews, entries)
         reviews_page += 1
     end
@@ -2408,7 +2461,12 @@ function animeplanet_get_media(
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function animeplanet_get_media_recommendations(text::String, medium::String, itemid::String, page::Int)
+function animeplanet_get_media_recommendations(
+    text::String,
+    medium::String,
+    itemid::String,
+    page::Int,
+)
     entries = []
     item_chunks = split(text, r"""<h3 class="flipMain">""")
     user_rec_regex =
@@ -2426,14 +2484,22 @@ function animeplanet_get_media_recommendations(text::String, medium::String, ite
                 html_unescape |>
                 (s -> replace(s, r"<[^>]*>" => "")) |>
                 strip
-            push!(entries, Dict("itemid" => rec_itemid, "username" => username, "text" => final_text))
+            push!(
+                entries,
+                Dict("itemid" => rec_itemid, "username" => username, "text" => final_text),
+            )
         end
     end
     has_next_page = occursin(Regex("<li class='next'><a href=?page=$page"), text)
     (entries, has_next_page)
 end
 
-function animeplanet_get_media_reviews(text::String, medium::String, itemid::String, page::Int)
+function animeplanet_get_media_reviews(
+    text::String,
+    medium::String,
+    itemid::String,
+    page::Int,
+)
     entries = []
     review_chunks = split(
         text,
@@ -2505,9 +2571,15 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
     function found(text::AbstractString)
         try
-            page_username = extract(text, """<meta name="description" content="Meet """, " on Anime-Planet.")
+            page_username = extract(
+                text,
+                """<meta name="description" content="Meet """,
+                " on Anime-Planet.",
+            )
             if lowercase(page_username) != lowercase(username)
-                logerror("animeplanet_get_user mismatched usernames $username $page_username")
+                logerror(
+                    "animeplanet_get_user mismatched usernames $username $page_username",
+                )
                 @assert false
             end
         catch
@@ -2551,7 +2623,10 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
     ret = Dict(
         "version" => API_VERSION,
         "username" => username,
-        "userid" => maybeint(extract(text, """<a href="/forum/members/.*\\.""", "\">forum</a>"), nothing),
+        "userid" => maybeint(
+            extract(text, """<a href="/forum/members/.*\\.""", "\">forum</a>"),
+            nothing,
+        ),
         "about" => html_unescape(
             extract(text, """<section class="profBio userContent">""", "</section>"),
         ),
@@ -2571,8 +2646,12 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
         ),
         "followers" => parse(Int, extract(text, """followers">""", " Followers<")),
         "following" => parse(Int, extract(text, """following">""", " Following<")),
-        "avatar" => to_image_url(extract(text, "<meta property='og:image' content='", "'", optional = true)),
-        "banner_image" => to_image_url(extract(text, "style='background-image: url\\(", "'", optional = true)),
+        "avatar" => to_image_url(
+            extract(text, "<meta property='og:image' content='", "'", optional = true),
+        ),
+        "banner_image" => to_image_url(
+            extract(text, "style='background-image: url\\(", "'", optional = true),
+        ),
     )
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
@@ -2588,7 +2667,11 @@ function animeplanet_get_feed(
         HTTP.URI("https://www.anime-planet.com/users/$username/feed", query = params),
     )
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-    text = parse_animeplanet_response(resource, r, x -> !occursin("<h1>You searched for $username</h1>", x))
+    text = parse_animeplanet_response(
+        resource,
+        r,
+        x -> !occursin("<h1>You searched for $username</h1>", x),
+    )
     if text isa HTTP.Response
         logstatus("animeplanet_get_feed", text, url)
         return text
@@ -2606,7 +2689,11 @@ end
 function animeplanet_get_username(resource::Resource, sessionid::String, userid::Integer)
     url = "https://www.anime-planet.com/forum/members/$userid"
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
-    text = parse_animeplanet_response(resource, r, x -> !occursin("The requested user could not be found.", x))
+    text = parse_animeplanet_response(
+        resource,
+        r,
+        x -> !occursin("The requested user could not be found.", x),
+    )
     if text isa HTTP.Response
         logstatus("animeplanet_get_username", text, url)
         return text
@@ -2616,16 +2703,12 @@ function animeplanet_get_username(resource::Resource, sessionid::String, userid:
         "<title>",
         " \\| Anime-Planet Forum</title>",
         capture = "([a-zA-Z0-9_]+?)",
-        optional=true,
+        optional = true,
     )
     if isnothing(username)
         return HTTP.Response(404, [])
     end
-    ret = Dict(
-        "version" => API_VERSION,
-        "userid" => userid,
-        "username" => username,
-    )
+    ret = Dict("version" => API_VERSION, "userid" => userid, "username" => username)
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
@@ -2639,19 +2722,87 @@ function animeplanet_get_image(resource::Resource, sessionid::String, url::Strin
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
+function animeplanet_solve_turnstile()
+    apikey = read("../../secrets/capsolver.apikey.txt", String)
+    sitekey = read("../../secrets/capsolver.animeplanet.txt", String)
+    payload = Dict(
+        "clientKey" => apikey,
+        "task" => Dict(
+            "type" => "AntiTurnstileTaskProxyLess",
+            "websiteKey" => sitekey,
+            "websiteURL" => "https://www.anime-planet.com",
+            "metadata" => Dict("action" => ""),
+        ),
+    )
+    try
+        res = HTTP.post(
+            "https://api.capsolver.com/createTask",
+            ["Content-Type" => "application/json"],
+            JSON3.write(payload),
+        )
+        resp = JSON3.read(String(res.body))
+        task_id = get(resp, :taskId, nothing)
+        if isnothing(task_id)
+            return nothing
+        end
+        for _ = 1:30
+            sleep(1)
+            poll_payload = Dict("clientKey" => apikey, "taskId" => task_id)
+            res = HTTP.post(
+                "https://api.capsolver.com/getTaskResult",
+                ["Content-Type" => "application/json"],
+                JSON3.write(poll_payload),
+            )
+            resp = JSON3.read(String(res.body))
+            status = get(resp, :status, "")
+            if status == "ready"
+                solution = get(resp, :solution, nothing)
+                if !isnothing(solution)
+                    return get(solution, :token, nothing)
+                end
+            end
+            error_id = get(resp, :errorId, nothing)
+            if status == "failed" || (!isnothing(error_id) && error_id != 0)
+                return nothing
+            end
+        end
+    catch e
+        logerror("capsolver error $e")
+        return nothing
+    end
+end
+
 function animeplanet_login(resource::Resource, sessionid::String)
+    token = animeplanet_solve_turnstile()
+    if isnothing(token)
+        logerror("animeplanet_login solve turnstile failed on $resource")
+        return HTTP.Response(500, [])
+    end
     url = "https://www.anime-planet.com/api/login"
     creds = resource["credentials"]
     d = Dict(
         "_username" => creds["username"],
         "_password" => creds["password"],
         "_remember_me" => true,
+        "_token" => token,
     )
     headers, body = encode(d, :json)
     headers["sessionid"] = sessionid
     r = request(resource, "PUT", url, headers, body)
     if r.status >= 400
         logstatus("animeplanet_login", r, url; handled_errors = [])
+        return HTTP.Response(r)
+    end
+    callback_url = try
+        only(JSON3.parse(r.body)[:data][:callback])
+    catch
+        logerror("animeplanet_login parse callback failed $r $creds, sleeping for 3600s")
+        sleep(3600)
+        return HTTP.Response(500, [])
+    end
+    r = request(resource, "GET", callback_url, Dict("sessionid" => sessionid))
+    if r.status >= 400
+        logstatus("animeplanet_login callback", r, url; handled_errors = [])
         return HTTP.Response(r)
     end
     HTTP.Response(200, [])
