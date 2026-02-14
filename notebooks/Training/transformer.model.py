@@ -281,12 +281,26 @@ class TransformerModel(nn.Module):
 
     def mask_tokens(self, d):
         if self.config["finetune"]:
-            assert False
-            mask = torch.zeros_like(d["userid"])
+            watch_mask = torch.zeros_like(d["userid"])
+            rating_mask = torch.zeros_like(d["userid"])
+            token_mask_ids = torch.zeros_like(d["userid"])
             for k in d:
-                if k.endswith(".weight"):
-                    mask += d[k] > 0
-            mask = mask > 0
+                if self.config["finetune_metric"] == "watch":
+                    if "watch" not in k:
+                        continue
+                    if k.endswith(".weight"):
+                        watch_mask += d[k] > 0
+                elif self.config["finetune_metric"] == "rating":
+                    if "rating" not in k:
+                        continue
+                    if k.endswith(".weight"):
+                        rating_mask += d[k] > 0
+                        token_mask_ids += d[k] > 0
+                else:
+                    assert False
+            watch_mask = watch_mask > 0
+            rating_mask = rating_mask > 0
+            d["token_mask_ids"] = token_mask_ids
         else:
             randval = torch.rand(d["userid"].shape, device=d["userid"].device)
             watch_mask = randval < 0.1
@@ -301,7 +315,7 @@ class TransformerModel(nn.Module):
                     pass
                 else:
                     assert False
-            elif k in ["userid", "time", "gender", "source"]:
+            elif k in ["userid", "time", "gender", "source", "token_mask_ids"]:
                 pass  # don't mask
             elif k in ["matchedid"]:
                 d[k][watch_mask] = -1
@@ -355,14 +369,22 @@ class TransformerModel(nn.Module):
             e_i = self.item_embedding(d["matchedid"])
             e = self.interleave(e_i, e_a)
             userid = self.interleave(d["userid"], d["userid"])
+            if "token_mask_ids" in d:
+                token_mask_ids = self.interleave(d["token_mask_ids"], d["token_mask_ids"])
+            else:
+                token_mask_ids = torch.zeros_like(userid)
             m, n = userid.shape
 
             def document_mask(b, h, q_idx, kv_idx):
                 return userid[b][q_idx] == userid[b][kv_idx]
 
-            block_mask = create_block_mask(
-                document_mask, B=m, H=None, Q_LEN=n, KV_LEN=n
-            )
+            def token_mask(b, h, q_idx, kv_idx):
+                return (token_mask_ids[b][kv_idx] == 0) | (
+                    token_mask_ids[b][q_idx] == token_mask_ids[b][kv_idx]
+                )
+
+            maskfn = and_masks(document_mask, token_mask)
+            block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
             return self.transformers(e, block_mask, None)
 
     def train_forward(self, d, evaluate):

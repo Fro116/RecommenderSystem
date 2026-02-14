@@ -392,12 +392,16 @@ def make_task_weights():
         assert False
     scale = [scale[x][y] for x in ALL_MEDIUMS for y in ALL_METRICS]
     # task balancing
-    if args.modeltype == "causal":
-        metric_weight = {"watch": 0.25, "rating": 1}
-    elif args.modeltype == "masked":
-        metric_weight = {"watch": 1, "rating": 0.25}
+    if args.finetune_metric is None:
+        if args.modeltype == "causal":
+            metric_weight = {"watch": 0.25, "rating": 1}
+        elif args.modeltype == "masked":
+            metric_weight = {"watch": 1, "rating": 0.25}
+        else:
+            assert False
     else:
-        assert False
+        metric_weight = {"watch": 0, "rating": 0}
+        metric_weight[args.finetune_metric] = 1
     if args.finetune is None:
         medium_weight = {0: 0.25, 1: 1}
     else:
@@ -411,7 +415,7 @@ def make_task_weights():
 
 def make_early_stopper(config):
     if config["finetune"]:
-        return EarlyStopper(patience=1, rtol=0.001)
+        return EarlyStopper(patience=2, rtol=0.001)
     if args.modeltype == "causal":
         return EarlyStopper(patience=1, rtol=0)
     else:
@@ -518,7 +522,8 @@ def upload(global_rank, logger):
 def get_training_config():
     if args.finetune is not None:
         checkpoint = torch.load(
-            f"{args.datadir}/transformer.{args.modeltype}.pt",
+            args.finetune,
+            # f"{args.datadir}/transformer.{args.modeltype}.pt",
             weights_only=False,
             map_location="cpu",
         )
@@ -526,6 +531,7 @@ def get_training_config():
         config["learning_rate"] = 2e-4
         config["finetune"] = True
         config["gpu_config"] = get_gpu_config()
+        config["finetune_metric"] = args.finetune_metric
         return config
 
     def get_num_items(medium, col):
@@ -799,6 +805,7 @@ parser.add_argument("--datadir", type=str)
 parser.add_argument("--modeltype", type=str)
 parser.add_argument("--finetune", type=str, default=None)
 parser.add_argument("--finetune_medium", type=int, default=None)
+parser.add_argument("--finetune_metric", type=str, default=None)
 parser.add_argument("--download", metavar="N", type=int, nargs="+", default=None)
 parser.add_argument("--mini", action="store_true")
 parser.add_argument("--prod", action="store_true")
