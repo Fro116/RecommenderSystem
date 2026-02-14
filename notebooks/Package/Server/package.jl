@@ -15,7 +15,7 @@ function embed_py(basedir::String)
     mediums = [0, 1]
     files = vcat(
         ["manga.csv", "anime.csv", "finetune_tag", "training_tag"],
-        ["transformer.$modeltype.$m.finetune.pt" for modeltype in ["causal", "masked"] for m in mediums],
+        ["transformer.masked.$m.$t.finetune.pt" for m in mediums for t in ["watch", "rating"]],
     )
     for f in files
         copy("data/finetune/$f", app)

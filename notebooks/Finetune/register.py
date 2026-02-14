@@ -11,10 +11,10 @@ datadir = "../../../data/finetune"
 with open("../Training/transformer.model.py") as f:
     exec(f.read())
 
-def register_transformer(modeltype):
+def register_transformer():
     device = "cpu"
     checkpoint = torch.load(
-        f"{datadir}/transformer.{modeltype}.pt",
+        f"{datadir}/transformer.masked.pt",
         weights_only=False,
         map_location=device,
     )
@@ -28,19 +28,17 @@ def register_transformer(modeltype):
     n_1 = model.config["vocab_sizes"]["1_matchedid"]
     embs = model.item_embedding(torch.arange(0, n_0 + n_1))
     return {
-        f"transformer.{modeltype}.0.watch.weight": embs[:n_0, :].detach().numpy(),
-        f"transformer.{modeltype}.1.watch.weight": embs[n_0:(n_0 + n_1), :].detach().numpy(),
-        f"transformer.{modeltype}.0.rating_mean": config['rating_mean'],
-        f"transformer.{modeltype}.1.rating_mean": config['rating_mean'],
+        "0.watch.weight": embs[:n_0, :].detach().numpy(),
+        "1.watch.weight": embs[n_0:(n_0 + n_1), :].detach().numpy(),
+        "0.rating_mean": config['rating_mean'],
+        "1.rating_mean": config['rating_mean'],
     }
 
 datadir = "../../data/finetune"
 
 
 def register():
-    ret = {}
-    for modeltype in ["causal", "masked"]:
-        ret.update(register_transformer(modeltype))
+    ret = register_transformer()
     with h5py.File(f"{datadir}/model.registry.h5", "w") as hf:
         for k, v in ret.items():
             hf.create_dataset(k, data=v)

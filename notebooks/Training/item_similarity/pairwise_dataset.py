@@ -11,10 +11,10 @@ datadir = "../../../data/training"
 with open("../transformer.model.py") as f:
     exec(f.read())
 
-def get_transformer_embeddings(modeltype):
+def get_transformer_embeddings():
     device = "cpu"
     checkpoint = torch.load(
-        f"{datadir}/transformer.{modeltype}.pt",
+        f"{datadir}/transformer.masked.pt",
         weights_only=False,
         map_location=device,
     )
@@ -28,8 +28,8 @@ def get_transformer_embeddings(modeltype):
     n_1 = model.config["vocab_sizes"]["1_matchedid"]
     embs = model.item_embedding(torch.arange(0, n_0 + n_1))
     return {
-        f"{modeltype}.0": embs[:n_0, :].detach().numpy(),
-        f"{modeltype}.1": embs[n_0:n_0+n_1, :].detach().numpy(),
+        "masked.0": embs[:n_0, :].detach().numpy(),
+        "masked.1": embs[n_0:n_0+n_1, :].detach().numpy(),
     }
 
 def get_num_items(medium):
@@ -55,8 +55,7 @@ def get_text_embeddings():
 
 def save_embeddings():
     ds = [
-        get_transformer_embeddings("masked"),
-        get_transformer_embeddings("causal"),
+        get_transformer_embeddings(),
         get_text_embeddings(),
     ]
     ret = {}

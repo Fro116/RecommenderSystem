@@ -33,9 +33,9 @@ function provision_instance()
             "8xH100" => 24,
         )[gpu_config]
         duration = Dict(
-            "8xB200" => 25,
-            "4xB200" => 50,
-            "8xH100" => 50,
+            "8xB200" => 50,
+            "4xB200" => 100,
+            "8xH100" => 100,
         )[gpu_config]
         num_gpus, gpu_type = split(gpu_config, "x")
         gpu_query = Dict(
@@ -59,10 +59,6 @@ function provision_instance()
                 logerror(
                     "skipping $instance_id because price $(x[:dph_total]) > $node_price",
                 )
-                continue
-            end
-            if balance < x[:dph_total] * duration
-                logerror("insufficient funds: $balance < $(x[:dph_total]) * $duration")
                 continue
             end
             disk_size = 96

@@ -19,15 +19,13 @@ function upload_metrics()
     training_tag = read("$datadir/list_tag", String)
     ts = time()
     dfs = []
-    for modeltype in ["masked", "causal"]
-        df = CSV.read("$datadir/transformer.$modeltype.csv", DataFrames.DataFrame)
-        cols = DataFrames.names(df)
-        df[!, "training_tag"] .= training_tag
-        df[!, "modeltype"] .= modeltype
-        df[!, "updated_at"] .= ts
-        df = df[:, [["training_tag", "modeltype"]; cols; ["updated_at"]]]
-        push!(dfs, df)
-    end
+    df = CSV.read("$datadir/transformer.masked.csv", DataFrames.DataFrame)
+    cols = DataFrames.names(df)
+    df[!, "training_tag"] .= training_tag
+    df[!, "modeltype"] .= "masked"
+    df[!, "updated_at"] .= ts
+    df = df[:, [["training_tag", "modeltype"]; cols; ["updated_at"]]]
+    push!(dfs, df)
     df = reduce(DataFrames.vcat, dfs)
     CSV.write("$datadir/$name", df)
 
@@ -47,12 +45,13 @@ end
 function check_gpu_success()
     list_tag = read("$datadir/list_tag", String)
     finished_file = read(
-        `rclone --retries=10 ls r2:rsys/database/training/$list_tag/transformer.causal.finished`,
+        `rclone --retries=10 ls r2:rsys/database/training/$list_tag/transformer.masked.finished`,
         String,
     )
     success = !isempty(finished_file)
     if success
-        for fn in ["transformer.$modeltype.$stem" for modeltype in ["causal", "masked"] for stem in ["csv", "pt"]]
+        for stem in ["csv", "pt"]
+            fn = "transformer.masked.$stem"
             run(`rclone --retries=10 copyto r2:rsys/database/training/$list_tag/$fn $datadir/$fn`)
         end
         upload_metrics()

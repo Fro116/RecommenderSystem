@@ -143,7 +143,6 @@ class LTRModel(nn.Module):
         self.retrieval_embeddings = nn.Embedding(
             config["vocab_sizes"][args.medium], 2048
         )
-        self.ranking_embeddings = nn.Embedding(config["vocab_sizes"][args.medium], 2048)
         self.metadata_embeddings = nn.Embedding(
             config["vocab_sizes"][args.medium], 3072
         )
@@ -167,14 +166,10 @@ class LTRModel(nn.Module):
             self.retrieval_embeddings.weight.data.copy_(
                 torch.tensor(hf[f"masked.{args.medium}"][:])
             )
-            self.ranking_embeddings.weight.data.copy_(
-                torch.tensor(hf[f"causal.{args.medium}"][:])
-            )
             self.metadata_embeddings.weight.data.copy_(
                 torch.tensor(hf[f"metadata.{args.medium}"][:])
             )
         self.retrieval_embeddings.weight.requires_grad = False
-        self.ranking_embeddings.weight.requires_grad = False
         self.metadata_embeddings.weight.requires_grad = False
 
     def embed(self, ids):

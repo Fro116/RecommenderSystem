@@ -249,48 +249,30 @@ class TransformerModel(nn.Module):
         y[..., 1:] = x[..., :-1]
         return y
 
-    def split_tokens(self, d):
-        item_tokens = {}
-        action_tokens = {}
-        userid_mask = d["userid"] == self.shift_right(d["userid"])
-        for k, v in d.items():
-            if k in ["userid", "rope_input_pos", "token_mask_ids"]:
-                item_tokens[k] = v
-                action_tokens[k] = v
-            elif k in ["time", "gender", "source"] or k.startswith("0.watch") or k.startswith("1.watch"):
-                action_tokens[k] = v
-            elif (
-                k
-                in [
-                    "matchedid",
-                ]
-                or k.startswith("0.rating")
-                or k.startswith("1.rating")
-                or k.startswith("0.status")
-                or k.startswith("1.status")
-            ):
-                item_tokens[k] = v
-            elif k in ["status", "rating", "progress"]:
-                action_tokens[k] = self.shift_right(v) * userid_mask
-            else:
-                assert False, k
-        return {
-            "item_tokens": item_tokens,
-            "action_tokens": action_tokens,
-        }
-
     def mask_tokens(self, d):
         if self.config["finetune"]:
-            assert False
-            mask = torch.zeros_like(d["userid"])
+            watch_mask = torch.zeros_like(d["userid"])
+            rating_mask = torch.zeros_like(d["userid"])
             for k in d:
-                if k.endswith(".weight"):
-                    mask += d[k] > 0
-            mask = mask > 0
+                if self.config["finetune_metric"] == "watch":
+                    if "watch" not in k:
+                        continue
+                    if k.endswith(".weight"):
+                        watch_mask += d[k] > 0
+                elif self.config["finetune_metric"] == "rating":
+                    if "rating" not in k:
+                        continue
+                    if k.endswith(".weight"):
+                        rating_mask += d[k] > 0
+                else:
+                    assert False
+            watch_mask = watch_mask > 0
+            rating_mask = rating_mask > 0
         else:
             randval = torch.rand(d["userid"].shape, device=d["userid"].device)
             watch_mask = randval < 0.1
             rating_mask = (randval >= 0.1) & (randval < 0.2)
+        d["token_mask_ids"] *= rating_mask
         for k in d:
             if k.endswith(".position") or k.endswith(".label") or k.endswith(".weight"):
                 if "watch" in k:
@@ -301,7 +283,7 @@ class TransformerModel(nn.Module):
                     pass
                 else:
                     assert False
-            elif k in ["userid", "time", "gender", "source"]:
+            elif k in ["userid", "token_mask_ids", "time", "gender", "source"]:
                 pass  # don't mask
             elif k in ["matchedid"]:
                 d[k][watch_mask] = -1
@@ -314,103 +296,55 @@ class TransformerModel(nn.Module):
         return d
 
     def to_embedding(self, d):
-        if self.config["causal"]:
-            e_a = self.action_embedding(d["action_tokens"])
-            e_i = self.item_embedding(d["item_tokens"]["matchedid"])
-            e = self.interleave(e_a, e_i)
-            userid = self.interleave(
-                *[d[k]["userid"] for k in ["action_tokens", "item_tokens"]]
+        e_a = self.action_embedding(d)
+        e_i = self.item_embedding(d["matchedid"])
+        e = self.interleave(e_i, e_a)
+        userid = self.interleave(d["userid"], d["userid"])
+        token_mask_ids = self.interleave(d["token_mask_ids"], d["token_mask_ids"])
+        if "rope_input_pos" in d:
+            rope_input_pos = self.interleave(
+                2 * d["rope_input_pos"],
+                2 * d["rope_input_pos"] + 1,
             )
-            if "rope_input_pos" in d["action_tokens"]:
-                rope_input_pos = self.interleave(
-                    2 * d["action_tokens"]["rope_input_pos"],
-                    2 * d["item_tokens"]["rope_input_pos"] + 1,
-                )
-                token_mask_ids = self.interleave(
-                    d["action_tokens"]["token_mask_ids"],
-                    d["item_tokens"]["token_mask_ids"],
-                )
-            else:
-                rope_input_pos = None
-                token_mask_ids = torch.zeros_like(userid)
-            # attention_masks
-            m, n = userid.shape
-
-            def document_mask(b, h, q_idx, kv_idx):
-                return userid[b][q_idx] == userid[b][kv_idx]
-
-            def causal_mask(b, h, q_idx, kv_idx):
-                return q_idx >= kv_idx
-
-            def token_mask(b, h, q_idx, kv_idx):
-                return (token_mask_ids[b][kv_idx] == 0) | (
-                    token_mask_ids[b][q_idx] == token_mask_ids[b][kv_idx]
-                )
-
-            maskfn = and_masks(document_mask, causal_mask, token_mask)
-            block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
-            return self.transformers(e, block_mask, rope_input_pos)
         else:
-            e_a = self.action_embedding(d)
-            e_i = self.item_embedding(d["matchedid"])
-            e = self.interleave(e_i, e_a)
-            userid = self.interleave(d["userid"], d["userid"])
-            m, n = userid.shape
+            rope_input_pos = None
+        m, n = userid.shape
 
-            def document_mask(b, h, q_idx, kv_idx):
-                return userid[b][q_idx] == userid[b][kv_idx]
+        def document_mask(b, h, q_idx, kv_idx):
+            return userid[b][q_idx] == userid[b][kv_idx]
 
-            block_mask = create_block_mask(
-                document_mask, B=m, H=None, Q_LEN=n, KV_LEN=n
+        def token_mask(b, h, q_idx, kv_idx):
+            return (token_mask_ids[b][kv_idx] == 0) | (
+                token_mask_ids[b][q_idx] == token_mask_ids[b][kv_idx]
             )
-            return self.transformers(e, block_mask, None)
+
+        maskfn = and_masks(document_mask, token_mask)
+        block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
+        return self.transformers(e, block_mask, rope_input_pos)
 
     def train_forward(self, d, evaluate):
         if not self.config["finetune"]:
             for k in d:
                 d[k] = d[k].reshape(-1, self.config["max_sequence_length"])
-        if self.config["causal"]:
-            d = self.split_tokens(d)
-        else:
-            d = self.mask_tokens(d)
+        d = self.mask_tokens(d)
         e = self.to_embedding(d)
         losses = []
         for medium in ALL_MEDIUMS:
             for metric in ALL_METRICS:
-                if self.config["causal"]:
-                    if metric == "watch":
-                        w = d["action_tokens"][f"{medium}.{metric}.weight"]
-                        weights = self.interleave(w, w * 0)
-                        l = d["action_tokens"][f"{medium}.{metric}.label"]
-                        labels = self.interleave(l, l * 0)
-                        p = d["action_tokens"][f"{medium}.{metric}.position"]
-                        positions = self.interleave(p, p * 0)
-                    elif metric == "rating":
-                        w = d["item_tokens"][f"{medium}.{metric}.weight"]
-                        weights = self.interleave(w * 0, w)
-                        l = d["item_tokens"][f"{medium}.{metric}.label"]
-                        labels = self.interleave(l * 0, l)
-                        p = d["item_tokens"][f"{medium}.{metric}.position"]
-                        positions = self.interleave(p * 0, p)
-                    else:
-                        assert False
-                else:
-                    if metric == "watch":
-                        w = d[f"{medium}.{metric}.weight"]
-                        weights = self.interleave(w, w * 0)
-                        l = d[f"{medium}.{metric}.label"]
-                        labels = self.interleave(l, l * 0)
-                        p = d[f"{medium}.{metric}.position"]
-                        positions = self.interleave(p, p * 0)
-                    elif metric == "rating":
-                        w = d[f"{medium}.{metric}.weight"]
-                        weights = self.interleave(w * 0, w)
-                        l = d[f"{medium}.{metric}.label"]
-                        labels = self.interleave(l * 0, l)
-                        p = d[f"{medium}.{metric}.position"]
-                        positions = self.interleave(p * 0, p)
-                    else:
-                        assert False
+                if metric == "watch":
+                    w = d[f"{medium}.{metric}.weight"]
+                    weights = self.interleave(w, w * 0)
+                    l = d[f"{medium}.{metric}.label"]
+                    labels = self.interleave(l, l * 0)
+                    p = d[f"{medium}.{metric}.position"]
+                    positions = self.interleave(p, p * 0)
+                elif metric == "rating":
+                    w = d[f"{medium}.{metric}.weight"]
+                    weights = self.interleave(w * 0, w)
+                    l = d[f"{medium}.{metric}.label"]
+                    labels = self.interleave(l * 0, l)
+                    p = d[f"{medium}.{metric}.position"]
+                    positions = self.interleave(p * 0, p)
                 if not torch.is_nonzero(weights.sum()):
                     losses.append(torch.square(self.empty_loss).sum())
                     continue
@@ -439,15 +373,10 @@ class TransformerModel(nn.Module):
         return losses
 
     def inference_forward(self, d, task):
-        if self.config["causal"]:
-            d = self.split_tokens(d)
         e = self.to_embedding(d)
         if task == "retrieval":
             return e
         elif task == "ranking":
-            if self.config["causal"]:
-                return e, self.rating_head(e)
-            else:
-                return e
+            return self.rating_head(e)
         else:
             assert False

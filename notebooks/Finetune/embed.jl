@@ -60,16 +60,8 @@ function query_model(
         task = "retrieval"
     else
         task = "ranking"
-        ts = user["timestamp"]
-        test_items = []
-        ranking_items = get_ranking_items(medium, Int(user["user"]["source"]))
-        for idx in test_matchedids
-            item = copy(ranking_items[idx])
-            item["history_max_ts"] = ts
-            push!(test_items, item)
-        end
         user = copy(user)
-        user["test_items"] = test_items
+        user["ranking_items"] = test_matchedids
     end
     model = models[(medium, task)]
     result_channel = Channel(1)
@@ -85,27 +77,20 @@ function query_model(
     data
 end
 
-@memoize function num_items(medium::Int)
-    m = Dict(0 => "manga", 1 => "anime")[medium]
-    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks = 1).matchedid) + 1
-end
-
-@memoize function get_ranking_items(medium::Int, source::Int)
-    info = Dict()
-    for i = 1:num_items(medium)
-        info[i-1] = Dict{String,Any}(
-            "medium" => medium,
-            "matchedid" => i-1,
-            "status" => 0,
-            "rating" => 0,
-            "progress" => 0,
-        )
-    end
-    info
-end
-
 for m in [0, 1]
     for task in ["retrieval", "ranking"]
         Threads.@spawn run_model(m, task)
     end
+end
+
+function compute_retrieval(registry, medium::Int, user, idxs)
+    masked_logits = registry["$medium.watch.weight"] * user["$medium.retrieval"]
+    p_masked = softmax(masked_logits)[idxs]
+    p = sum(registry["$medium.retrieval.coefs"] .* [p_masked])
+end
+
+function compute_ranking(registry, medium::Int, user)
+    r_masked = user["$medium.ranking"]
+    r_baseline = fill(registry["$medium.rating_mean"], length(r_masked))
+    r = sum(registry["$medium.rating.coefs"] .* [r_baseline, r_masked])
 end

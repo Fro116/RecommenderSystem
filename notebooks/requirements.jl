@@ -12,7 +12,7 @@ dependencies = [
     ("HDF5", "0.17.2"),
     ("HTTP", "1.10.19"),
     ("HypothesisTests", "v0.11.5"),
-    ("IJulia", "1.30.6"),
+    ("IJulia", "1.34.3"),
     ("Images", "0.26.2"),
     ("JLD2", "0.6.2"),
     ("JSON3", "1.14.3"),

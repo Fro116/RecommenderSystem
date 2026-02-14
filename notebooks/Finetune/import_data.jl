@@ -27,7 +27,7 @@ function download_data(finetune_tag::AbstractString)
         ["$m.json" for m in ["manga", "anime"]],
         ["media_relations.$m.jld2" for m in [0, 1]],
         ["watches.$m.jld2" for m in [0, 1]],
-        ["transformer.$modeltype.$stem" for modeltype in ["causal", "masked"] for stem in ["csv", "pt"]],
+        ["transformer.masked.$stem" for stem in ["csv", "pt"]],
         ["pairwise.embeddings.$stem" for stem in ["jld2", "csv"]],
         ["images.csv", "media_relations.csv"],
         ["media_embeddings.h5" ],

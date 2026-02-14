@@ -179,13 +179,15 @@ def to_device(data, local_rank):
     d = {}
     for k in data:
         d[k] = data[k].to(local_rank).to_dense()
-        if args.finetune and k.endswith(".position"):
+        if args.finetune is not None and k.endswith(".position"):
             d[k] = d[k].to(torch.int64)
     return d
 
 
 def minimize_quadratic(x, y):
     assert len(x) == 3 and len(y) == 3
+    if max(y) == min(y):
+        return float(max(y))
     A = np.array([[x[0] ** 2, x[0], 1], [x[1] ** 2, x[1], 1], [x[2] ** 2, x[2], 1]])
     B = np.array(y)
     a, b, c = np.linalg.solve(A, B)
@@ -317,7 +319,7 @@ class WSDScheduler(object):
 
 
 def create_learning_rate_schedule(optimizer, tokens_per_batch, epochs, logger):
-    if args.finetune or args.modeltype == "causal":
+    if args.finetune is not None:
         return optim.lr_scheduler.LambdaLR(optimizer, ConstantScheduler())
     else:
         transdir = "transformer_mini" if args.mini else "transformer"
@@ -366,39 +368,24 @@ def wsum(values, weights):
 
 def make_task_weights():
     # rescale losses so each task is equally weighted
-    if args.modeltype == "causal":
-        scale = {
-            0: {
-                "watch": 5.564432094339503,
-                "rating": 1.2555994665648476,
-            },
-            1: {
-                "watch": 3.7259071988829593,
-                "rating": 1.1956148524173345,
-            },
-        }
-    elif args.modeltype == "masked":
-        scale = {
-            0: {
-                "watch": 4.618602403897067,
-                "rating": 1.1958987168236102,
-            },
-            1: {
-                "watch": 2.5443243303769867,
-                "rating": 1.0527565486045412,
-            },
-        }
-    else:
-        assert False
+    scale = {
+        0: {
+            "watch": 4.618602403897067,
+            "rating": 1.1958987168236102,
+        },
+        1: {
+            "watch": 2.5443243303769867,
+            "rating": 1.0527565486045412,
+        },
+    }
     scale = [scale[x][y] for x in ALL_MEDIUMS for y in ALL_METRICS]
     # task balancing
-    if args.modeltype == "causal":
-        metric_weight = {"watch": 0.25, "rating": 1}
-    elif args.modeltype == "masked":
+    if args.finetune_metric is None:
         metric_weight = {"watch": 1, "rating": 0.25}
     else:
-        assert False
-    if args.finetune is None:
+        metric_weight = {"watch": 0, "rating": 0}
+        metric_weight[args.finetune_metric] = 1
+    if args.finetune_medium is None:
         medium_weight = {0: 0.25, 1: 1}
     else:
         medium_weight = {args.finetune_medium: 1, 1 - args.finetune_medium: 0}
@@ -411,9 +398,7 @@ def make_task_weights():
 
 def make_early_stopper(config):
     if config["finetune"]:
-        return EarlyStopper(patience=1, rtol=0.001)
-    if args.modeltype == "causal":
-        return EarlyStopper(patience=1, rtol=0)
+        return EarlyStopper(patience=2, rtol=0.001)
     else:
         return EarlyStopper(patience=float("inf"), rtol=0)
 
@@ -449,13 +434,16 @@ def checkpoint_model(
 ):
     if local_rank != 0:
         return
-    if args.finetune is None:
+    if not config["finetune"]:
+        basename = "transformer.masked"
         with open(os.path.join(args.datadir, "list_tag"), "r") as f:
             list_tag = f.read()
+    else:
+        basename = f"transformer.masked.{args.finetune_medium}.{args.finetune_metric}.finetune"
     # save model
     if save:
         logger.info("checkpointing model")
-        if args.finetune is None:
+        if not config["finetune"]:
             checkpoint = {
                 "model": model.module._orig_mod.state_dict(),
                 "optimizer": optimizer.state_dict(),
@@ -465,9 +453,9 @@ def checkpoint_model(
                 "training_loss": training_loss,
                 "test_loss": test_loss,
             }
-            torch.save(checkpoint, f"{args.datadir}/transformer.{args.modeltype}.pt")
+            torch.save(checkpoint, f"{args.datadir}/{basename}.pt")
             if global_rank == 0 and args.prod:
-                cmd = f"rclone --retries=10 copyto {args.datadir}/transformer.{args.modeltype}.pt r2:rsys/database/training/{list_tag}/transformer.{args.modeltype}.pt"
+                cmd = f"rclone --retries=10 copyto {args.datadir}/{basename}.pt r2:rsys/database/training/{list_tag}/{basename}.pt"
                 os.system(f"{cmd} &")
         else:
             checkpoint = {
@@ -479,14 +467,11 @@ def checkpoint_model(
             }
             torch.save(
                 checkpoint,
-                f"{args.datadir}/transformer.{args.modeltype}.{args.finetune_medium}.finetune.pt",
+                f"{args.datadir}/{basename}.pt",
             )
     # save metrics
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
-    if args.finetune is None:
-        csv_fn = f"{args.datadir}/transformer.{args.modeltype}.csv"
-    else:
-        csv_fn = f"{args.datadir}/transformer.{args.modeltype}.{args.finetune_medium}.finetune.csv"
+    csv_fn = f"{args.datadir}/{basename}.csv"
     if epoch < 0:
         with open(csv_fn, "w") as f:
             f.write(",".join(["epoch", "training_loss", "test_loss"] + names) + "\n")
@@ -497,8 +482,8 @@ def checkpoint_model(
             wsum(test_loss, task_weights),
         ] + test_loss
         f.write(",".join([str(x) for x in vals]) + "\n")
-    if global_rank == 0 and args.prod and args.finetune is None:
-        cmd = f"rclone --retries=10 copyto {args.datadir}/transformer.{args.modeltype}.csv r2:rsys/database/training/{list_tag}/transformer.{args.modeltype}.csv"
+    if global_rank == 0 and args.prod and not config["finetune"]:
+        cmd = f"rclone --retries=10 copyto {args.datadir}/{basename}.csv r2:rsys/database/training/{list_tag}/{basename}.csv"
         os.system(f"{cmd} &")
 
 
@@ -508,17 +493,17 @@ def upload(global_rank, logger):
     logger.info("uploading model")
     with open(os.path.join(args.datadir, "list_tag"), "r") as f:
         list_tag = f.read()
-    with open(f"{args.datadir}/transformer.{args.modeltype}.finished", "w") as f:
+    with open(f"{args.datadir}/transformer.masked.finished", "w") as f:
         pass
     for suffix in ["pt", "csv", "finished"]:
-        cmd = f"rclone --retries=10 copyto {args.datadir}/transformer.{args.modeltype}.{suffix} r2:rsys/database/training/{list_tag}/transformer.{args.modeltype}.{suffix}"
+        cmd = f"rclone --retries=10 copyto {args.datadir}/transformer.masked.{suffix} r2:rsys/database/training/{list_tag}/transformer.masked.{suffix}"
         os.system(cmd)
 
 
 def get_training_config():
     if args.finetune is not None:
         checkpoint = torch.load(
-            f"{args.datadir}/transformer.{args.modeltype}.pt",
+            args.finetune,
             weights_only=False,
             map_location="cpu",
         )
@@ -526,6 +511,7 @@ def get_training_config():
         config["learning_rate"] = 2e-4
         config["finetune"] = True
         config["gpu_config"] = get_gpu_config()
+        config["finetune_metric"] = args.finetune_metric
         return config
 
     def get_num_items(medium, col):
@@ -557,7 +543,6 @@ def get_training_config():
         "forward": "train",
         "finetune": False,
         "learning_rate": 1e-4,
-        "causal": args.modeltype == "causal",
         "mask_rate": 0.15,
         "gpu_config": get_gpu_config(),
     }
@@ -592,16 +577,13 @@ def train():
     gpu_config = config["gpu_config"]
     if config["finetune"]:
         num_epochs = 16
-        global_batch_size = 256
-        grad_accum_steps = 1
+        global_batch_size = 32
         assert gpu_config == "local"
-        # emulate training on a 8 gpu setup with gradient accumulation
-        # TODO check if grad_accum_steps is still useful
         local_batch_size = 16
         assert global_batch_size % local_batch_size == 0
         grad_accum_steps = global_batch_size // local_batch_size
     else:
-        num_epochs = 8 if config["causal"] else 64
+        num_epochs = 64
         global_batch_size = 512
         if gpu_config == "B200":
             local_batch_size = 64
@@ -661,7 +643,7 @@ def train():
             strict=False,
         )
     else:
-        checkpoint_fn = f"{args.datadir}/transformer.{args.modeltype}.pt"
+        checkpoint_fn = f"{args.datadir}/transformer.masked.pt"
         if os.path.exists(checkpoint_fn) and args.prod:
             checkpoint = torch.load(
                 checkpoint_fn, weights_only=False, map_location=f"cuda:{local_rank}"
@@ -769,8 +751,6 @@ def download(node, num_nodes):
         files += [
             "transformer.masked.pt",
             "transformer.masked.csv",
-            "transformer.causal.pt",
-            "transformer.causal.csv",
         ]
     for data in files:
         os.system(f"{template}/{data} {args.datadir}/{data}")
@@ -796,9 +776,9 @@ def download(node, num_nodes):
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--datadir", type=str)
-parser.add_argument("--modeltype", type=str)
 parser.add_argument("--finetune", type=str, default=None)
 parser.add_argument("--finetune_medium", type=int, default=None)
+parser.add_argument("--finetune_metric", type=str, default=None)
 parser.add_argument("--download", metavar="N", type=int, nargs="+", default=None)
 parser.add_argument("--mini", action="store_true")
 parser.add_argument("--prod", action="store_true")

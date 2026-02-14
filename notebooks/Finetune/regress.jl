@@ -92,7 +92,7 @@ function save_users(medium, registry)
         end
         data["last_status"] = last_status
         logp = logsoftmax(
-            registry["transformer.masked.$m.watch.weight"] * data["embeds"]["masked.$m"],
+            registry["$m.watch.weight"] * data["embeds"]["$m.retrieval"],
         )
         # apply business rules
         logp[1] = -Inf
@@ -215,9 +215,7 @@ function retrieval_metrics(users, registry, medium::Integer; multithreaded = tru
         if skip_user(u, m, "retrieval")
             continue
         end
-        logp = logsoftmax(
-            registry["transformer.masked.$m.watch.weight"] * u["masked.$m"],
-        )
+        logp = log.(compute_retrieval(registry, m, u, :))
         # apply business rules
         logp[1] = -Inf
         for (x, s) in u["last_status"]
@@ -245,29 +243,23 @@ end
 function regress_retrieval(users, registry, medium::Integer)
     m = medium
     p_masked = zeros(Float32, length(users))
-    p_causal = zeros(Float32, length(users))
     y = zeros(Float32, length(users))
     Threads.@threads for i = 1:length(users)
         u = users[i]
         if skip_user(u, m, "retrieval")
             continue
         end
-        masked_logits = registry["transformer.masked.$m.watch.weight"] * u["masked.$m"]
-        causal_logits = registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"]
+        masked_logits = registry["$m.watch.weight"] * u["$m.retrieval"]
         p_masked[i] = softmax(masked_logits)[u["matchedid"]+1]
-        p_causal[i] = softmax(causal_logits)[u["matchedid"]+1]
         y[i] = 1
     end
-    p = hcat(p_masked, p_causal)
-    function lossfn(x)
-        c = 1 / (1 + exp(-x[1]))
-        sum(-log.(max.(p * [c, 1 - c], eps(Float64))) .* y) / sum(y)
+    p = hcat(p_masked)
+    function lossfn()
+        sum(-log.(max.(p, eps(Float64))) .* y) / sum(y)
     end
-    ret = Optim.optimize(lossfn, Float32[0], Optim.LBFGS())
-    c = 1 / (1 + exp(-Optim.minimizer(ret)[1]))
     Dict(
-        "$m.retrieval.coefs" => [c, 1 - c],
-        "$m.retrieval.crossentropy" => Optim.minimum(ret),
+        "$m.retrieval.coefs" => [1],
+        "$m.retrieval.crossentropy" => lossfn(),
         "$m.retrieval.num_users" => sum(y),
     )
 end
@@ -276,7 +268,6 @@ function regress_ranking(users, registry, medium::Integer)
     m = medium
     x_baseline = zeros(Float32, length(users))
     x_masked = zeros(Float32, length(users))
-    x_causal = zeros(Float32, length(users))
     y = zeros(Float32, length(users))
     w = zeros(Float32, length(users))
     Threads.@threads for i = 1:length(users)
@@ -285,18 +276,12 @@ function regress_ranking(users, registry, medium::Integer)
             continue
         end
         idx = u["matchedid"] + 1
-        p_baseline = registry["transformer.causal.$m.rating_mean"]
-        p_masked =
-            u["masked.ranking.$m"][findfirst(==(u["matchedid"]), u["ranking_matchedids"])]
-        p_causal =
-            u["causal.ranking.$m"][findfirst(==(u["matchedid"]), u["ranking_matchedids"])]
-        x_baseline[i] = p_baseline
-        x_masked[i] = p_masked
-        x_causal[i] = p_causal
+        x_baseline[i] = registry["$m.rating_mean"]
+        x_masked[i] = u["$m.ranking"][findfirst(==(u["matchedid"]), u["ranking_matchedids"])]
         y[i] = u["rating"]
         w[i] = 1
     end
-    X = hcat(x_baseline, x_masked, x_causal)
+    X = hcat(x_baseline, x_masked)
     β = (X .* sqrt.(w)) \ (y .* sqrt.(w))
     loss = sum(w .* (X * β - y) .^ 2) / sum(w)
     Dict("$m.rating.coefs" => β, "$m.rating.mse" => loss, "$m.rating.num_users" => sum(w))
@@ -314,17 +299,8 @@ function get_ranking_features(users, registry, medium::Integer)
         idxs = u["ranking_matchedids"] .+ 1
         y[findfirst(==(u["matchedid"]), u["ranking_matchedids"]), i] = 1
         w[i] = u["rating"]
-        # watch feature
-        masked_logits = registry["transformer.masked.$m.watch.weight"] * u["masked.$m"]
-        causal_logits = registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"]
-        p_masked = softmax(masked_logits)[idxs]
-        p_causal = softmax(causal_logits)[idxs]
-        p[:, i] .= sum(registry["$m.retrieval.coefs"] .* [p_masked, p_causal])
-        # rating feature
-        r_baseline = fill(registry["transformer.causal.$m.rating_mean"], length(idxs))
-        r_masked = u["masked.ranking.$m"]
-        r_causal = u["causal.ranking.$m"]
-        r[:, i] .= sum(registry["$m.rating.coefs"] .* [r_baseline, r_masked, r_causal])
+        p[:, i] .= compute_retrieval(registry, m, u, idxs)
+        r[:, i] .= compute_ranking(registry, m, u)
     end
     p, r, y, w
 end
@@ -402,6 +378,7 @@ end
 
 function save_weights()
     registry = get_registry()
+    registry_keys = Set(keys(registry))
     metrics = Dict()
     start_server(port)
     for medium in [0, 1]
@@ -412,14 +389,16 @@ function save_weights()
         users = JLD2.load("$datadir/regress.$medium.jld2")["users"]
         registry = merge(
             registry,
-            retrieval_metrics(users, registry, medium),
             regress_retrieval(users, registry, medium),
             regress_ranking(users, registry, medium),
         )
-        registry = merge(registry, ranking_metrics(users, registry, medium))
+        registry = merge(
+            registry,
+            retrieval_metrics(users, registry, medium),
+            ranking_metrics(users, registry, medium),
+        )
     end
-    df =
-        make_metric_dataframe(Dict(k => v for (k, v) in registry if first(k) in ['0', '1']))
+    df = make_metric_dataframe(Dict(k => v for (k, v) in registry if k ∉ registry_keys))
     cols = DataFrames.names(df)
     df[!, "training_tag"] .= read("$datadir/training_tag", String)
     df[!, "finetune_tag"] .= read("$datadir/finetune_tag", String)

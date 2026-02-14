@@ -22,6 +22,11 @@ const status_map = Dict(
     "rewatching" => 8,
 )
 
+@memoize function num_items(medium::Int)
+    m = Dict(0 => "manga", 1 => "anime")[medium]
+    maximum(CSV.read("$datadir/$m.csv", DataFrames.DataFrame, ntasks = 1).matchedid) + 1
+end
+
 @memoize function get_images()
     df = CSV.read("$datadir/images.csv", DataFrames.DataFrame, ntasks = 1)
     d = Dict()
@@ -228,10 +233,7 @@ function retrieval(state)
         p += item_similarity["embeddings.$m"]' * x
     end
     for u in state["users"]
-        p += logsoftmax(
-            registry["transformer.masked.$m.watch.weight"] * u["embeds"]["masked.$m"],
-        )[1:num_items(m)]
-        # TODO incorporate other retrieval sources like ptw items or sequels
+        p += log.(compute_retrieval(registry, m, u["embeds"], 1:num_items(m)))
     end
     p[1] = -Inf # skip the default id for longtail items
     for u in state["users"]
@@ -319,7 +321,7 @@ function ranking(state, idxs, speedscope)
         s = state["users"][i]
         source = s["source"]
         u = copy(s["user"])
-        u["embeds"] = Dict(k => s["embeds"][k] for k in ["masked.$m"])
+        u["embeds"] = Dict(k => s["embeds"][k] for k in ["$m.retrieval"])
         d_embed = query_model(u, m, idxs .- 1)
         if isnothing(d_embed)
             return HTTP.Response(500, []), false
@@ -330,18 +332,8 @@ function ranking(state, idxs, speedscope)
     score = zeros(Float32, length(idxs))
     for user in state["users"]
         u = user["embeds"]
-        # watch feature
-        masked_logits = registry["transformer.masked.$m.watch.weight"] * u["masked.$m"]
-        causal_logits =
-            registry["transformer.causal.$m.watch.weight"] * u["causal.retrieval.$m"]
-        p_masked = softmax(masked_logits)[idxs]
-        p_causal = softmax(causal_logits)[idxs]
-        p = sum(registry["$m.retrieval.coefs"] .* [p_masked, p_causal])
-        # rating feature
-        r_baseline = fill(registry["transformer.causal.$m.rating_mean"], length(idxs))
-        r_masked = u["masked.ranking.$m"]
-        r_causal = u["causal.ranking.$m"]
-        r = sum(registry["$m.rating.coefs"] .* [r_baseline, r_masked, r_causal])
+        p = compute_retrieval(registry, m, u, idxs)
+        r = compute_ranking(registry, m, u)
         score += log.(p) + r
     end
     push!(speedscope, ("ranking_sort", time()))

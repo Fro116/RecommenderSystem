@@ -1,6 +1,6 @@
-curl_cffi==0.10.0
-fastapi==0.115.12
-msgpack==1.1.0
-torchao==0.10.0
+curl_cffi==0.14.0
+fastapi==0.116.2
+msgpack==1.1.1
+torchao==0.13.0
 torchtune==0.6.1
-uvicorn==0.34.2
+uvicorn==0.35.0

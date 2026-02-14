@@ -22,11 +22,11 @@ from torchtune.modules.peft import get_adapter_params, set_trainable_params
 warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
 
 
-def make_masked_item(ts):
+def make_item(ts, medium=0, itemid=-1):
     return {
-        "medium": 0,
+        "medium": medium,
         "history_max_ts": ts,
-        "matchedid": -1,
+        "matchedid": itemid,
         "status": -1,
         "rating": 0,
         "progress": 0,
@@ -71,14 +71,12 @@ def predict(users, task, medium):
     max_user_len = 1024
     max_ranking_items = 1024
     if task == "retrieval":
-        modeltype = "masked"
         max_seq_len = max_user_len
     elif task == "ranking":
-        modeltype = "causal"
         max_seq_len = max_user_len + max_ranking_items
     else:
         assert False
-    num_items_0 = models[f"transformer.masked.{medium}"].config["vocab_sizes"]["0_matchedid"]
+    num_items_0 = models[f"{medium}.{task}"].config["vocab_sizes"]["0_matchedid"]
     d = {
         # prompt features
         "userid": np.zeros((len(users), max_seq_len), dtype=np.int32),
@@ -94,10 +92,6 @@ def predict(users, task, medium):
         "rating": np.zeros((len(users), max_seq_len), dtype=np.float32),
         "progress": np.zeros((len(users), max_seq_len), dtype=np.float32),
     }
-    if modeltype == "causal":
-        masked_dim = models[f"transformer.masked.{medium}"].config["embed_dim"]
-        masked_embs = np.zeros((len(users), masked_dim), dtype=np.float32)
-        masked_pos = np.zeros((len(users), max_ranking_items), dtype=np.int32)
     for u in range(len(users)):
         userid = u + 1
         user = users[u]["user"]
@@ -105,10 +99,12 @@ def predict(users, task, medium):
         extra_tokens = 1
         if len(items) > max_user_len - extra_tokens:
             items = items[-(max_user_len - extra_tokens) :]
-        if modeltype == "causal" and task == "ranking":
-            test_items = users[u]["test_items"]
+        if task == "ranking":
+            test_items = [make_item(users[u]["timestamp"], medium, x) for x in users[u]["ranking_items"]]
+        elif task == "retrieval":
+            test_items = [make_item(users[u]["timestamp"])]
         else:
-            test_items = [make_masked_item(users[u]["timestamp"])]
+            assert False
         for i, x in enumerate(items + test_items):
             m = x["medium"]
             # prompt features
@@ -116,74 +112,39 @@ def predict(users, task, medium):
             d["time"][u, i] = x["history_max_ts"]
             d["gender"][u, i] = 0 if user["gender"] is None else user["gender"] + 1
             d["source"][u, i] = user["source"]
-            if modeltype == "causal":
-                d["rope_input_pos"][u, i] = i if i < len(items) else len(items)
-                d["token_mask_ids"][u, i] = 0 if i < len(items) else i
+            d["rope_input_pos"][u, i] = i if i < len(items) else len(items)
+            d["token_mask_ids"][u, i] = i if task == "ranking" and i >= len(items) else 0
             # item features
             d["matchedid"][u, i] = x["matchedid"] + (num_items_0 if m == 1 else 0)
             # action features
-            if modeltype == "causal" and i >= len(items) and len(items) > 0:
-                d["status"][u, i] = items[-1]["status"]
-                d["rating"][u, i] = items[-1]["rating"]
-                d["progress"][u, i] = items[-1]["progress"]
-            else:
-                d["status"][u, i] = x["status"]
-                d["rating"][u, i] = x["rating"]
-                d["progress"][u, i] = x["progress"]
-        if modeltype == "causal":
-            masked_embs[u, :] = users[u]["embeds"][f"masked.{medium}"]
-            masked_pos[u, :] = [x["matchedid"] + (num_items_0 if medium == 1 else 0) for x in users[u]["test_items"]]
-    e = {}
+            d["status"][u, i] = x["status"]
+            d["rating"][u, i] = x["rating"]
+            d["progress"][u, i] = x["progress"]
     with gpu_lock:
         for k in d:
             d[k] = torch.tensor(d[k]).to(device)
             torch._dynamo.mark_dynamic(d[k], 0)
-        if modeltype == "causal":
-            masked_embs = torch.tensor(masked_embs).to(device)
-            masked_pos = torch.tensor(masked_pos).to(device)
         start_time = time.time()
         with torch.no_grad():
             with torch.amp.autocast(device, dtype=torch.bfloat16):
-                ret = models[f"transformer.{modeltype}.{medium}"](d, task)
-                if modeltype == "causal":
-                    m = models[f"transformer.masked.{medium}"]
-                    X = torch.cat(
-                        (
-                            masked_embs.unsqueeze(1).repeat(1, max_ranking_items, 1),
-                            m.item_embedding(masked_pos),
-                        ),
-                        dim=-1,
-                    )
-                    masked_ret = m.rating_head(X).squeeze(-1)
+                embs = models[f"{medium}.{task}"](d, task).to("cpu")
         duration = time.time() - start_time
         logger.debug(f"batch of {len(users)} completed in {duration} seconds")
-        if modeltype == "causal":
-            e_ret, e_rnk = ret
-            e["retrieval"] = e_ret.to("cpu")
-            e["ranking"] = e_rnk.to("cpu")
-            e["masked_ranking"] = masked_ret.to("cpu")
-        else:
-            e["retrieval"] = ret.to("cpu")
-        del ret
-    if modeltype == "masked":
+    if task == "retrieval":
         ret = []
         for i, u in enumerate(users):
             d = {}
             N = min(len(project(tokenize(u["items"]))), max_user_len - 1)
-            d[f"masked.{medium}"] = e["retrieval"][i, N, :].tolist()
+            d[f"{medium}.{task}"] = embs[i, 2 * N, :].tolist()
             ret.append(d)
         return ret
-    elif modeltype == "causal":
+    elif task == "ranking":
         ret = []
         for i, u in enumerate(users):
             d = {}
             N = min(len(project(tokenize(u["items"]))), max_user_len - 1)
-            causal_idxs = []
-            for j in range(len(u["test_items"])):
-                causal_idxs.append(2 * (N + j) + 1)
-            d[f"causal.ranking.{medium}"] = e["ranking"][i, causal_idxs, 0].tolist()
-            d[f"causal.retrieval.{medium}"] = e["retrieval"][i, 2 * N, :].tolist()
-            d[f"masked.ranking.{medium}"] = masked_ret[i, :].tolist()
+            idxs = [2 * (N + j) + 1 for j in range(len(u["ranking_items"]))]
+            d[f"{medium}.{task}"] = embs[i, idxs, 0].tolist()
             ret.append(d)
         return ret
     else:
@@ -206,9 +167,11 @@ def set_nested_attr(obj, attr_string, value):
     setattr(current_obj, parts[-1], value)
 
 
-def load_model(modeltype, medium):
+def load_model(medium, task):
+    datadir = "../../data/finetune"
+    mtask = {"retrieval": "watch", "ranking": "rating"}[task]
     checkpoint = torch.load(
-        f"{datadir}/transformer.{modeltype}.{medium}.finetune.pt",
+        f"{datadir}/transformer.masked.{medium}.{mtask}.finetune.pt",
         weights_only=False,
         map_location=device,
     )
@@ -222,54 +185,69 @@ def load_model(modeltype, medium):
     return model
 
 
-logger = logging.getLogger(__name__)
-handler = logging.StreamHandler()
-handler.setLevel(logging.INFO)
-handler.setFormatter(
-    logging.Formatter("%(asctime)s %(levelname)s %(name)s › %(message)s")
-)
-logger.addHandler(handler)
-logger.setLevel(logging.INFO)
-logger.propagate = False
-logger.info("STARTUP BEGIN")
-starttime = time.time()
+def get_logger():
+    logger = logging.getLogger(__name__)
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s › %(message)s")
+    )
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    return logger
+
+
+def get_models():
+    starttime = time.time()
+    logger.info("GET MODELS BEGIN")
+    models = {}
+    for medium in [0, 1]:
+        for task in ["retrieval", "ranking"]:
+            logger.info(f"GET MODELS LOADING {medium} {task}")
+            srcmodel = "0.retrieval"
+            tgtmodel = f"{medium}.{task}"
+            models[tgtmodel] = load_model(medium, task)
+            # deduplicate shared params from LoRA
+            if tgtmodel != srcmodel:
+                for k, _ in models[srcmodel].named_parameters():
+                    if (
+                        get_nested_attr(models[srcmodel], k)
+                        == get_nested_attr(models[tgtmodel], k)
+                    ).all():
+                        set_nested_attr(
+                            models[tgtmodel],
+                            k,
+                            get_nested_attr(models[srcmodel], k),
+                        )
+                torch.cuda.empty_cache()
+    logger.info(f"GET MODELS END AFTER {time.time() - starttime}s")
+    return models
+
+
+def warmup(models):
+    starttime = time.time()
+    logger.info("WARMUP BEGIN")
+    for task in ["retrieval", "ranking"]:
+        for medium in [0, 1]:
+            test_user = {
+                "user": {"source": "mal", "birthday": None, "created_at": None, "gender": None, "source": 0},
+                "items": [],
+                "timestamp": time.time(),
+            }
+            if task == "ranking":
+                max_ranking_items = 1024
+                test_user["ranking_items"] = list(range(max_ranking_items))
+            for batch_size in range(1, 16 + 1):
+                predict([test_user] * batch_size, task, medium)
+    logger.info(f"WARMUP END AFTER {time.time() - starttime}s")
+
+
 device = "cuda"
-datadir = "../../data/finetune"
 gpu_lock = threading.Lock()
-models = {}
-for modeltype in ["causal", "masked"]:
-    for medium in [0, 1]:
-        logger.info(f"STARTUP LOADING {modeltype} {medium} MODEL")
-        models[f"transformer.{modeltype}.{medium}"] = load_model(modeltype, medium)
-    # deduplicate shared params from LoRA
-    for k, _ in models[f"transformer.{modeltype}.0"].named_parameters():
-        if (
-            get_nested_attr(models[f"transformer.{modeltype}.0"], k)
-            == get_nested_attr(models[f"transformer.{modeltype}.1"], k)
-        ).all():
-            set_nested_attr(
-                models[f"transformer.{modeltype}.1"],
-                k,
-                get_nested_attr(models[f"transformer.{modeltype}.0"], k),
-            )
-    torch.cuda.empty_cache()
-for task in ["retrieval", "ranking"]:
-    for medium in [0, 1]:
-        test_user = {
-            "user": {"source": "mal", "birthday": None, "created_at": None, "gender": None, "source": 0},
-            "items": [],
-            "timestamp": time.time(),
-        }
-        if task == "ranking":
-            max_ranking_items = 1024
-            masked_dim = models[f"transformer.masked.{medium}"].config["embed_dim"]
-            test_user["test_items"] = [
-                make_masked_item(time.time())
-            ] * max_ranking_items
-            test_user["embeds"] = {f"masked.{medium}": np.random.rand(masked_dim)}
-        for batch_size in range(1, 16 + 1):
-            predict([test_user] * batch_size, task, medium)
-logger.info(f"STARTUP END AFTER {time.time() - starttime}s")
+logger = get_logger()
+models = get_models()
+warmup(models)
 app = FastAPI()
 
 
