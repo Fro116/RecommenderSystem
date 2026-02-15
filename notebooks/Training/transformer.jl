@@ -83,6 +83,7 @@ function get_data(data, userid)
     d = Dict(
         # prompt features
         "userid" => Vector{Int32}(undef, N),
+        "token_mask_ids" => zeros(Int32, N),
         "time" => Vector{Float64}(undef, N),
         "gender" => Vector{Int32}(undef, N),
         "source" => Vector{Int32}(undef, N),
@@ -125,6 +126,9 @@ function get_data(data, userid)
             d["$m.watch.position"][i] = x["matchedid"]
         end
         if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
+            if i == length(data["items"])
+                d["token_mask_ids"][i] = 1
+            end
             d["$m.rating.label"][i] = x["rating"]
             d["$m.rating.weight"][i] = 1
             d["$m.rating.position"][i] = x["matchedid"]

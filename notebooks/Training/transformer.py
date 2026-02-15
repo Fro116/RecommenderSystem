@@ -88,6 +88,7 @@ class PretrainDataset(IterableDataset):
                 for k in f:
                     d[k] = f[k][:]
                 self.block_shuffle(d)
+                d["token_mask_ids"] *= 0 # TODO try enabling for masked
             assert len(d["userid"]) % self.batch_size == 0
             idxs = list(range(len(d["userid"])))
             idxs = [
@@ -179,13 +180,15 @@ def to_device(data, local_rank):
     d = {}
     for k in data:
         d[k] = data[k].to(local_rank).to_dense()
-        if args.finetune and k.endswith(".position"):
+        if args.finetune is not None and k.endswith(".position"):
             d[k] = d[k].to(torch.int64)
     return d
 
 
 def minimize_quadratic(x, y):
     assert len(x) == 3 and len(y) == 3
+    if max(y) == min(y):
+        return float(max(y))
     A = np.array([[x[0] ** 2, x[0], 1], [x[1] ** 2, x[1], 1], [x[2] ** 2, x[2], 1]])
     B = np.array(y)
     a, b, c = np.linalg.solve(A, B)
@@ -454,8 +457,11 @@ def checkpoint_model(
     if local_rank != 0:
         return
     if args.finetune is None:
+        basename = f"transformer.{args.modeltype}"
         with open(os.path.join(args.datadir, "list_tag"), "r") as f:
             list_tag = f.read()
+    else:
+        basename = f"transformer.{args.modeltype}.{args.finetune_medium}.{args.finetune_metric}.finetune"
     # save model
     if save:
         logger.info("checkpointing model")
@@ -469,9 +475,9 @@ def checkpoint_model(
                 "training_loss": training_loss,
                 "test_loss": test_loss,
             }
-            torch.save(checkpoint, f"{args.datadir}/transformer.{args.modeltype}.pt")
+            torch.save(checkpoint, f"{args.datadir}/{basename}.pt")
             if global_rank == 0 and args.prod:
-                cmd = f"rclone --retries=10 copyto {args.datadir}/transformer.{args.modeltype}.pt r2:rsys/database/training/{list_tag}/transformer.{args.modeltype}.pt"
+                cmd = f"rclone --retries=10 copyto {args.datadir}/{basename}.pt r2:rsys/database/training/{list_tag}/{basename}.pt"
                 os.system(f"{cmd} &")
         else:
             checkpoint = {
@@ -483,14 +489,11 @@ def checkpoint_model(
             }
             torch.save(
                 checkpoint,
-                f"{args.datadir}/transformer.{args.modeltype}.{args.finetune_medium}.finetune.pt",
+                f"{args.datadir}/{basename}.pt",
             )
     # save metrics
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
-    if args.finetune is None:
-        csv_fn = f"{args.datadir}/transformer.{args.modeltype}.csv"
-    else:
-        csv_fn = f"{args.datadir}/transformer.{args.modeltype}.{args.finetune_medium}.finetune.csv"
+    csv_fn = f"{args.datadir}/{basename}.csv"
     if epoch < 0:
         with open(csv_fn, "w") as f:
             f.write(",".join(["epoch", "training_loss", "test_loss"] + names) + "\n")
@@ -502,7 +505,7 @@ def checkpoint_model(
         ] + test_loss
         f.write(",".join([str(x) for x in vals]) + "\n")
     if global_rank == 0 and args.prod and args.finetune is None:
-        cmd = f"rclone --retries=10 copyto {args.datadir}/transformer.{args.modeltype}.csv r2:rsys/database/training/{list_tag}/transformer.{args.modeltype}.csv"
+        cmd = f"rclone --retries=10 copyto {args.datadir}/{basename}.csv r2:rsys/database/training/{list_tag}/{basename}.csv"
         os.system(f"{cmd} &")
 
 
@@ -523,7 +526,6 @@ def get_training_config():
     if args.finetune is not None:
         checkpoint = torch.load(
             args.finetune,
-            # f"{args.datadir}/transformer.{args.modeltype}.pt",
             weights_only=False,
             map_location="cpu",
         )
@@ -598,11 +600,8 @@ def train():
     gpu_config = config["gpu_config"]
     if config["finetune"]:
         num_epochs = 16
-        global_batch_size = 256
-        grad_accum_steps = 1
+        global_batch_size = 32
         assert gpu_config == "local"
-        # emulate training on a 8 gpu setup with gradient accumulation
-        # TODO check if grad_accum_steps is still useful
         local_batch_size = 16
         assert global_batch_size % local_batch_size == 0
         grad_accum_steps = global_batch_size // local_batch_size

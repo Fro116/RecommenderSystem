@@ -283,7 +283,6 @@ class TransformerModel(nn.Module):
         if self.config["finetune"]:
             watch_mask = torch.zeros_like(d["userid"])
             rating_mask = torch.zeros_like(d["userid"])
-            token_mask_ids = torch.zeros_like(d["userid"])
             for k in d:
                 if self.config["finetune_metric"] == "watch":
                     if "watch" not in k:
@@ -295,16 +294,15 @@ class TransformerModel(nn.Module):
                         continue
                     if k.endswith(".weight"):
                         rating_mask += d[k] > 0
-                        token_mask_ids += d[k] > 0
                 else:
                     assert False
             watch_mask = watch_mask > 0
             rating_mask = rating_mask > 0
-            d["token_mask_ids"] = token_mask_ids
         else:
             randval = torch.rand(d["userid"].shape, device=d["userid"].device)
             watch_mask = randval < 0.1
             rating_mask = (randval >= 0.1) & (randval < 0.2)
+        d["token_mask_ids"] *= rating_mask
         for k in d:
             if k.endswith(".position") or k.endswith(".label") or k.endswith(".weight"):
                 if "watch" in k:
@@ -315,7 +313,7 @@ class TransformerModel(nn.Module):
                     pass
                 else:
                     assert False
-            elif k in ["userid", "time", "gender", "source", "token_mask_ids"]:
+            elif k in ["userid", "token_mask_ids", "time", "gender", "source"]:
                 pass  # don't mask
             elif k in ["matchedid"]:
                 d[k][watch_mask] = -1
@@ -369,10 +367,7 @@ class TransformerModel(nn.Module):
             e_i = self.item_embedding(d["matchedid"])
             e = self.interleave(e_i, e_a)
             userid = self.interleave(d["userid"], d["userid"])
-            if "token_mask_ids" in d:
-                token_mask_ids = self.interleave(d["token_mask_ids"], d["token_mask_ids"])
-            else:
-                token_mask_ids = torch.zeros_like(userid)
+            token_mask_ids = self.interleave(d["token_mask_ids"], d["token_mask_ids"])
             m, n = userid.shape
 
             def document_mask(b, h, q_idx, kv_idx):
@@ -467,9 +462,6 @@ class TransformerModel(nn.Module):
         if task == "retrieval":
             return e
         elif task == "ranking":
-            if self.config["causal"]:
-                return e, self.rating_head(e)
-            else:
-                return e
+            return e, self.rating_head(e)
         else:
             assert False
