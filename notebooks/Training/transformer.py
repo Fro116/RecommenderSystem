@@ -88,6 +88,7 @@ class PretrainDataset(IterableDataset):
                 for k in f:
                     d[k] = f[k][:]
                 self.block_shuffle(d)
+                d["token_mask_ids"] *= 0 # TODO try enabling for masked
             assert len(d["userid"]) % self.batch_size == 0
             idxs = list(range(len(d["userid"])))
             idxs = [

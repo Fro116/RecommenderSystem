@@ -58,6 +58,7 @@ function get_data(data, userid)
     d = Dict(
         # prompt features
         "userid" => zeros(Int32, N),
+        "token_mask_ids" => zeros(Int32, N),
         "time" => zeros(Float64, N),
         "gender" => zeros(Int32, N),
         "source" => zeros(Int32, N),
@@ -106,6 +107,7 @@ function get_data(data, userid)
                     d["$m.watch.position"][i] = x["matchedid"]
                 end
                 if (x["rating"] > 0) && (x["rating"] != x["history_rating"])
+                    d["token_mask_ids"][i] = 1
                     d["$m.rating.label"][i] = x["rating"]
                     d["$m.rating.weight"][i] = 1
                     d["$m.rating.position"][i] = x["matchedid"]
