@@ -2722,12 +2722,7 @@ function animeplanet_get_feed(
 end
 
 function animeplanet_get_username(resource::Resource, sessionid::String, userid::Integer)
-    if !ANIMEPLANET_LOGIN
-        logerror("must be logged in to check username, sleeping for 3600s")
-        sleep(3600)
-        return HTTP.Response(500, [])
-    end
-    url = "https://www.anime-planet.com/forum/members/$userid"
+    url = "https://www.anime-planet.com/forum/members/$userid?tooltip=true"
     text = parse_animeplanet_response(
         resource,
         url,
@@ -2740,14 +2735,12 @@ function animeplanet_get_username(resource::Resource, sessionid::String, userid:
     end
     username = extract(
         text,
-        "<title>",
-        " \\| Anime-Planet Forum</title>",
+        """<a href="/forum/members/""",
+        ".$userid/",
         capture = "([a-zA-Z0-9_]+?)",
-        optional = true,
+        multiple=true,
     )
-    if isnothing(username)
-        return HTTP.Response(404, [])
-    end
+    username = only(Set(username))
     ret = Dict("version" => API_VERSION, "userid" => userid, "username" => username)
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
