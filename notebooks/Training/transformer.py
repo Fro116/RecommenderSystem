@@ -276,8 +276,14 @@ def train_epoch(
 def create_optimizer(model, config):
     param_dict = {pn: p for pn, p in model.named_parameters()}
     param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-    decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-    nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+    emb_w = {m.weight for m in model.modules() if isinstance(m, nn.Embedding)}
+    decay_params = []
+    nodecay_params = []
+    for n, p in param_dict.items():
+        if p.dim() >= 2 and p not in emb_w:
+            decay_params.append(p)
+        else:
+            nodecay_params.append(p)
     return optim.AdamW(
         [
             {"params": decay_params, "weight_decay": 0.1},
@@ -542,8 +548,7 @@ def get_training_config():
         "rating_std": 1.778219,
         "forward": "train",
         "finetune": False,
-        "learning_rate": 1e-4,
-        "mask_rate": 0.15,
+        "learning_rate": 3e-4,
         "gpu_config": get_gpu_config(),
     }
     if args.mini:

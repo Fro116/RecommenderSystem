@@ -118,6 +118,7 @@ class DualItemEmbedding(nn.Module):
         super().__init__()
         self.item_embedding = item_embedding
 
+    @torch._dynamo.disable
     def forward(self, inputs) -> torch.Tensor:
         x, medium = inputs
         F = nn.functional
