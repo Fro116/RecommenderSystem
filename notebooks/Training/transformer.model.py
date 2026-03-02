@@ -180,16 +180,13 @@ class TransformerModel(nn.Module):
         self.item_embedding = ItemEmbedding(config)
         self.transformers = Llama3(config)
 
-        self.watch_head = nn.Sequential(
-            DualItemEmbedding(self.item_embedding), nn.LogSoftmax(dim=-1)
-        )
+        self.watch_head = DualItemEmbedding(self.item_embedding)
         self.rating_head = nn.Sequential(
             nn.Linear(config["embed_dim"], config["embed_dim"]),
             nn.GELU(),
             nn.Linear(config["embed_dim"], 1),
         )
         self.apply(init_weights)
-        self.empty_loss = nn.Parameter(torch.tensor(0.0))
         if config["finetune"]:
             for layer in [
                 self.action_embedding,
@@ -227,9 +224,6 @@ class TransformerModel(nn.Module):
             (torch.square(0 * x - y) * w).sum() / w.sum(),
             (torch.square(-1 * x - y) * w).sum() / w.sum(),
         ]
-
-    def crossentropy(self, x, y, w):
-        return (-x * y * w).sum() / w.sum()
 
     def interleave(self, x, y):
         # interleave the tokens so that it goes x -> y -> x -> y, etc
@@ -347,7 +341,12 @@ class TransformerModel(nn.Module):
                     p = d[f"{medium}.{metric}.position"]
                     positions = self.interleave(p * 0, p)
                 if not torch.is_nonzero(weights.sum()):
-                    losses.append(torch.square(self.empty_loss).sum())
+                    dummy_input = e[0:1, 0:1, :]
+                    if metric == "watch":
+                        dummy_loss = self.watch_head((dummy_input, medium)).sum() * 0.0
+                    elif metric == "rating":
+                        dummy_loss = self.rating_head(dummy_input).sum() * 0.0
+                    losses.append(dummy_loss)
                     continue
                 positions = positions.reshape(*positions.shape, 1)
                 bp = torch.nonzero(weights, as_tuple=True)
@@ -356,12 +355,10 @@ class TransformerModel(nn.Module):
                 positions = positions[bp[0], bp[1]]
                 weights = weights[bp[0], bp[1]]
                 if metric == "watch":
-                    preds = (
-                        self.watch_head((embed, medium))
-                        .gather(dim=-1, index=positions)
-                        .reshape(-1)
-                    )
-                    losses.append(self.crossentropy(preds, labels, weights))
+                    logits = self.watch_head((embed, medium))
+                    target = positions.reshape(-1).to(torch.long)
+                    ce_loss = nn.functional.cross_entropy(logits, target, reduction="none")
+                    losses.append((ce_loss * labels * weights).sum() / weights.sum())
                 elif metric == "rating":
                     preds = self.rating_head(embed).reshape(-1)
                     labels = labels - self.config["rating_mean"]

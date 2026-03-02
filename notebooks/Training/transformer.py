@@ -662,7 +662,6 @@ def train():
         model,
         device_ids=[local_rank],
         output_device=local_rank,
-        find_unused_parameters=True,
     )
     optimizer = create_optimizer(model, config)
     scheduler = create_learning_rate_schedule(
