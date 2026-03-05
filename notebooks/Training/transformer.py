@@ -6,7 +6,6 @@ import logging
 import os
 import subprocess
 import time
-import warnings
 
 import h5py
 import hdf5plugin
@@ -18,19 +17,19 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-import torchtune.models.llama3
+from flash_attn import flash_attn_varlen_func
 from torch.distributed import destroy_process_group, init_process_group
-from torch.nn.attention.flex_attention import and_masks, create_block_mask
+from torch.nn.attention.flex_attention import (
+    and_masks,
+    create_block_mask,
+    flex_attention,
+)
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, IterableDataset
 from torchao.float8 import Float8LinearConfig, convert_to_float8_training
-from torchtune.modules.peft import get_adapter_params, set_trainable_params
 from tqdm import tqdm
-
-warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
-warnings.filterwarnings("ignore", ".*Sparse CSR tensor support is in beta state.*")
-
 
 with open("transformer.model.py") as f:
     exec(f.read())
@@ -269,9 +268,11 @@ def train_epoch(
                 sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
                 / grad_accum_steps
             )
-        loss.backward()
         if (step + 1) % grad_accum_steps != 0:
+            with model.no_sync():
+                loss.backward()
             continue
+        loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
@@ -654,7 +655,7 @@ def train():
         )
         for (x, w) in [("training", 8), ("test", 2)]
     }
-    model = TransformerModel(config)
+    model = RecommenderModel(config)
     model.load_pretrained_embeddings(args.datadir)
     logger.info(
         f"Created model with {sum(p.numel() for p in model.parameters())} parameters"

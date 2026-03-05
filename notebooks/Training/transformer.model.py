@@ -121,7 +121,6 @@ class DualItemEmbedding(nn.Module):
 
     def forward(self, inputs) -> torch.Tensor:
         x, medium = inputs
-        F = nn.functional
         K = self.item_embedding.config["vocab_sizes"]["0_matchedid"]
         if medium == 0:
             start, end = 0, K
@@ -137,11 +136,156 @@ class DualItemEmbedding(nn.Module):
         return F.linear(x, items)
 
 
-class Llama3(nn.Module):
+def precompute_freqs_cis(dim: int, end: int, theta: float = 500000.0):
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end, device=freqs.device, dtype=torch.float32)
+    freqs = torch.outer(t, freqs)
+    freqs = torch.cat((freqs, freqs), dim=-1)
+    freqs_cos = torch.cos(freqs)
+    freqs_sin = torch.sin(freqs)
+    return freqs_cos, freqs_sin
+
+
+def apply_rotary_emb(x: torch.Tensor, freqs_cos: torch.Tensor, freqs_sin: torch.Tensor):
+    x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
+    x_rot = torch.cat((-x2, x1), dim=-1)
+    freqs_cos = freqs_cos.unsqueeze(-2).to(x.dtype)
+    freqs_sin = freqs_sin.unsqueeze(-2).to(x.dtype)
+    return (x * freqs_cos) + (x_rot * freqs_sin)
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
+
+
+class SwiGLU(nn.Module):
+    def __init__(self, dim: int, intermediate_dim: int):
+        super().__init__()
+        self.w1 = nn.Linear(dim, intermediate_dim, bias=False)
+        self.w2 = nn.Linear(intermediate_dim, dim, bias=False)
+        self.w3 = nn.Linear(dim, intermediate_dim, bias=False)
+
+    def forward(self, x):
+        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+
+
+class FlashAttention(nn.Module):
     def __init__(self, config):
-        super(Llama3, self).__init__()
-        llama_config = {
-            "vocab_size": 0,
+        super().__init__()
+        self.finetune = config["finetune"]
+        self.num_heads = config["num_heads"]
+        self.num_kv_heads = config["num_kv_heads"]
+        self.head_dim = config["embed_dim"] // self.num_heads
+        self.wq = nn.Linear(
+            config["embed_dim"], self.num_heads * self.head_dim, bias=False
+        )
+        self.wk = nn.Linear(
+            config["embed_dim"], self.num_kv_heads * self.head_dim, bias=False
+        )
+        self.wv = nn.Linear(
+            config["embed_dim"], self.num_kv_heads * self.head_dim, bias=False
+        )
+        self.wo = nn.Linear(
+            self.num_heads * self.head_dim, config["embed_dim"], bias=False
+        )
+        if self.finetune:
+            self.lora_rank = 8
+            self.lora_scaling = 16 / 8
+            self.lora_dropout = nn.Dropout(0.1)
+            self.wq_lora_A = nn.Linear(config["embed_dim"], self.lora_rank, bias=False)
+            self.wq_lora_B = nn.Linear(
+                self.lora_rank, self.num_heads * self.head_dim, bias=False
+            )
+            self.wv_lora_A = nn.Linear(config["embed_dim"], self.lora_rank, bias=False)
+            self.wv_lora_B = nn.Linear(
+                self.lora_rank, self.num_kv_heads * self.head_dim, bias=False
+            )
+            nn.init.normal_(self.wq_lora_A.weight, std=0.006)
+            nn.init.zeros_(self.wq_lora_B.weight)
+            nn.init.normal_(self.wv_lora_A.weight, std=0.006)
+            nn.init.zeros_(self.wv_lora_B.weight)
+
+    def forward(
+        self, x, freqs_cos, freqs_sin, cu_seqlens=None, max_seqlen=None, block_mask=None
+    ):
+        if self.finetune:
+            B, S, _ = x.shape
+            q = (
+                self.wq(x)
+                + self.wq_lora_B(self.wq_lora_A(self.lora_dropout(x)))
+                * self.lora_scaling
+            )
+            k = self.wk(x)
+            v = (
+                self.wv(x)
+                + self.wv_lora_B(self.wv_lora_A(self.lora_dropout(x)))
+                * self.lora_scaling
+            )
+            q = q.view(B, S, self.num_heads, self.head_dim)
+            k = k.view(B, S, self.num_kv_heads, self.head_dim)
+            v = v.view(B, S, self.num_kv_heads, self.head_dim)
+            q = apply_rotary_emb(q, freqs_cos, freqs_sin)
+            k = apply_rotary_emb(k, freqs_cos, freqs_sin)
+            q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+            if self.num_kv_heads != self.num_heads:
+                num_groups = self.num_heads // self.num_kv_heads
+                k = k.repeat_interleave(num_groups, dim=1)
+                v = v.repeat_interleave(num_groups, dim=1)
+            attn_out = flex_attention(q, k, v, block_mask=block_mask)
+            return self.wo(attn_out.transpose(1, 2).contiguous().view(B, S, -1))
+        else:
+            total_tokens = x.shape[0]
+            q = self.wq(x).view(total_tokens, self.num_heads, self.head_dim)
+            k = self.wk(x).view(total_tokens, self.num_kv_heads, self.head_dim)
+            v = self.wv(x).view(total_tokens, self.num_kv_heads, self.head_dim)
+            q = apply_rotary_emb(q, freqs_cos, freqs_sin)
+            k = apply_rotary_emb(k, freqs_cos, freqs_sin)
+            attn_out = flash_attn_varlen_func(
+                q,
+                k,
+                v,
+                cu_seqlens_q=cu_seqlens,
+                cu_seqlens_k=cu_seqlens,
+                max_seqlen_q=max_seqlen,
+                max_seqlen_k=max_seqlen,
+                causal=True,
+            )
+            return self.wo(attn_out.view(total_tokens, -1))
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.attention = FlashAttention(config)
+        self.feed_forward = SwiGLU(config["embed_dim"], config["intermediate_dim"])
+        self.attention_norm = RMSNorm(config["embed_dim"])
+        self.ffn_norm = RMSNorm(config["embed_dim"])
+
+    def forward(
+        self, x, freqs_cos, freqs_sin, cu_seqlens=None, max_seqlen=None, block_mask=None
+    ):
+        h = x + self.attention(
+            self.attention_norm(x),
+            freqs_cos,
+            freqs_sin,
+            cu_seqlens,
+            max_seqlen,
+            block_mask,
+        )
+        out = h + self.feed_forward(self.ffn_norm(h))
+        return out
+
+
+class Transformer(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        config = {
             "num_layers": config["num_layers"],
             "num_heads": config["num_heads"],
             "num_kv_heads": config["num_kv_heads"],
@@ -149,35 +293,85 @@ class Llama3(nn.Module):
             "intermediate_dim": config["intermediate_dim"],
             # we split each token into an item and action token
             "max_seq_len": 2 * config["max_sequence_length"],
+            "finetune": config["finetune"],
         }
-        if config["finetune"]:
-            llama3 = torchtune.models.llama3.lora_llama3(
-                lora_attn_modules=["q_proj", "v_proj"],
-                lora_rank=8,
-                lora_alpha=16,
-                lora_dropout=0.1,
-                **llama_config,
+        self.config = config
+        self.layers = nn.ModuleList(
+            [TransformerBlock(config) for _ in range(config["num_layers"])]
+        )
+        self.norm = RMSNorm(config["embed_dim"])
+        head_dim = config["embed_dim"] // config["num_heads"]
+        freqs_cos, freqs_sin = precompute_freqs_cis(head_dim, config["max_seq_len"])
+        self.register_buffer("freqs_cos", freqs_cos, persistent=False)
+        self.register_buffer("freqs_sin", freqs_sin, persistent=False)
+
+    def forward(
+        self, input_embeddings, position_ids, document_ids=None, token_mask_ids=None
+    ):
+        if self.config["finetune"]:
+            m, n = document_ids.shape
+
+            def document_mask(b, h, q_idx, kv_idx):
+                return document_ids[b][q_idx] == document_ids[b][kv_idx]
+
+            def token_mask(b, h, q_idx, kv_idx):
+                return (token_mask_ids[b][kv_idx] == 0) | (
+                    token_mask_ids[b][q_idx] == token_mask_ids[b][kv_idx]
+                )
+
+            def causal_mask(b, h, q_idx, kv_idx):
+                return q_idx >= kv_idx
+
+            maskfn = and_masks(document_mask, token_mask, causal_mask)  # TODO cleanup
+            block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
+            freqs_cos, freqs_sin = (
+                self.freqs_cos[position_ids],
+                self.freqs_sin[position_ids],
             )
-            set_trainable_params(llama3, get_adapter_params(llama3))
+            h = input_embeddings
+            for layer in self.layers:
+                h = layer(h, freqs_cos, freqs_sin, block_mask=block_mask)
+            return self.norm(h)
         else:
-            llama3 = torchtune.models.llama3.llama3(**llama_config)
-        self.layers = llama3.layers
-        self.norm = llama3.norm
+            B, S, H = input_embeddings.shape
+            flat_embeds = input_embeddings.view(B * S, H)
+            flat_pos_ids = position_ids.view(B * S)
+            max_doc_id = document_ids.max() + 1
+            batch_offsets = (
+                torch.arange(B, device=input_embeddings.device).unsqueeze(1)
+                * max_doc_id
+            )
+            global_doc_ids = (document_ids + batch_offsets).view(-1)
+            changes = global_doc_ids[1:] != global_doc_ids[:-1]
+            boundaries = torch.nonzero(changes).squeeze(-1) + 1
+            cu_seqlens = torch.cat(
+                [
+                    torch.tensor(
+                        [0], dtype=torch.int32, device=input_embeddings.device
+                    ),
+                    boundaries.to(torch.int32),
+                    torch.tensor(
+                        [B * S], dtype=torch.int32, device=input_embeddings.device
+                    ),
+                ]
+            )
+            max_seqlen_in_batch = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+            freqs_cos = self.freqs_cos[flat_pos_ids]
+            freqs_sin = self.freqs_sin[flat_pos_ids]
+            h = flat_embeds
+            for layer in self.layers:
+                h = layer(h, freqs_cos, freqs_sin, cu_seqlens, max_seqlen_in_batch)
+            h = self.norm(h)
+            return h.view(B, S, H)
 
-    def forward(self, x, mask, input_pos):
-        for layer in self.layers:
-            x = layer(x, mask=mask, input_pos=input_pos)
-        x = self.norm(x)
-        return x
 
-
-class TransformerModel(nn.Module):
+class RecommenderModel(nn.Module):
     def __init__(self, config):
-        super(TransformerModel, self).__init__()
+        super(RecommenderModel, self).__init__()
         self.config = config
         self.action_embedding = ActionEmbedding(config)
         self.item_embedding = ItemEmbedding(config)
-        self.transformers = Llama3(config)
+        self.transformers = Transformer(config)
 
         self.watch_head = DualItemEmbedding(self.item_embedding)
         self.rating_head = nn.Sequential(
@@ -195,6 +389,8 @@ class TransformerModel(nn.Module):
             ]:
                 for _, param in layer.named_parameters():
                     param.requires_grad = False
+            for name, param in self.transformers.named_parameters():
+                param.requires_grad = "lora_" in name
         if config["forward"] == "train":
             self.forward = self.train_forward
         elif config["forward"] == "inference":
@@ -285,6 +481,17 @@ class TransformerModel(nn.Module):
                 d[k][watch_mask | rating_mask] = 0
             else:
                 assert False
+
+        # shuffle masked tokens to the end of each sequence
+        # todo always pass rope
+        assert "rope_input_pos" not in d
+        b, s = d["userid"].shape
+        d["rope_input_pos"] = torch.arange(s, device=d["userid"].device).unsqueeze(0).repeat(b, 1)
+        is_masked = watch_mask | rating_mask
+        composite_key = (d["userid"] * 2) + is_masked.to(torch.int64)
+        sort_idx = composite_key.argsort(dim=1, stable=True)
+        for k, v in d.items():
+            d[k] = torch.gather(v, 1, sort_idx)
         return d
 
     def to_embedding(self, d):
@@ -292,27 +499,20 @@ class TransformerModel(nn.Module):
         e_i = self.item_embedding(d["matchedid"])
         e = self.interleave(e_i, e_a)
         userid = self.interleave(d["userid"], d["userid"])
-        token_mask_ids = self.interleave(d["token_mask_ids"], d["token_mask_ids"])
-        if "rope_input_pos" in d:
-            rope_input_pos = self.interleave(
-                2 * d["rope_input_pos"],
-                2 * d["rope_input_pos"] + 1,
-            )
+        rope_input_pos = self.interleave(
+            2 * d["rope_input_pos"],
+            2 * d["rope_input_pos"] + 1,
+        )
+        if self.config["finetune"]:
+            token_mask_ids = self.interleave(d["token_mask_ids"], d["token_mask_ids"])
         else:
-            rope_input_pos = None
-        m, n = userid.shape
-
-        def document_mask(b, h, q_idx, kv_idx):
-            return userid[b][q_idx] == userid[b][kv_idx]
-
-        def token_mask(b, h, q_idx, kv_idx):
-            return (token_mask_ids[b][kv_idx] == 0) | (
-                token_mask_ids[b][q_idx] == token_mask_ids[b][kv_idx]
-            )
-
-        maskfn = and_masks(document_mask, token_mask)
-        block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
-        return self.transformers(e, block_mask, rope_input_pos)
+            token_mask_ids = None
+        return self.transformers(
+            e,
+            position_ids=rope_input_pos,
+            document_ids=userid,
+            token_mask_ids=token_mask_ids,
+        )
 
     def train_forward(self, d, evaluate):
         if not self.config["finetune"]:
@@ -340,9 +540,7 @@ class TransformerModel(nn.Module):
                     w_sum = weights.sum().clamp(min=1e-8)
                     logits = self.watch_head((embed, medium))
                     target = positions.to(torch.long)
-                    ce_loss = nn.functional.cross_entropy(
-                        logits, target, reduction="none"
-                    )
+                    ce_loss = F.cross_entropy(logits, target, reduction="none")
                     losses.append((ce_loss * labels * weights).sum() / w_sum)
                 elif metric == "rating":
                     preds = self.rating_head(embed).reshape(-1)
