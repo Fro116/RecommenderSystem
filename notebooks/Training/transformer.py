@@ -24,11 +24,13 @@ from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.attention.flex_attention import and_masks, create_block_mask
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, IterableDataset
+from torchao.float8 import Float8LinearConfig, convert_to_float8_training
 from torchtune.modules.peft import get_adapter_params, set_trainable_params
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
 warnings.filterwarnings("ignore", ".*Sparse CSR tensor support is in beta state.*")
+
 
 with open("transformer.model.py") as f:
     exec(f.read())
@@ -169,7 +171,9 @@ def collate(data):
     ret = {}
     for k, v in data[0].items():
         if scipy.sparse.issparse(v):
-            ret[k] = torch.sparse_csr_tensor(v.indptr, v.indices, v.data, v.shape)
+            ret[k] = torch.sparse_csr_tensor(
+                v.indptr, v.indices, v.data, v.shape
+            ).to_dense()
         else:
             ret[k] = torch.tensor(v)
     return ret
@@ -178,7 +182,7 @@ def collate(data):
 def to_device(data, local_rank):
     d = {}
     for k in data:
-        d[k] = data[k].to(local_rank).to_dense()
+        d[k] = data[k].to(local_rank, non_blocking=True)
         if args.finetune is not None and k.endswith(".position"):
             d[k] = d[k].to(torch.int64)
     return d
@@ -244,8 +248,12 @@ def train_epoch(
     task_weights,
     grad_accum_steps,
 ):
-    training_losses = [0.0 for _ in range(len(task_weights))]
-    training_weights = [0.0 for _ in range(len(task_weights))]
+    training_losses = [
+        torch.tensor(0.0, device=local_rank) for _ in range(len(task_weights))
+    ]
+    training_weights = [
+        torch.tensor(0.0, device=local_rank) for _ in range(len(task_weights))
+    ]
     progress = tqdm(desc="Training batches", mininterval=1, disable=local_rank != 0)
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
     optimizer.zero_grad(set_to_none=True)
@@ -254,8 +262,8 @@ def train_epoch(
             d = to_device(data, local_rank)
             tloss = model(d, False)
             for i in range(len(tloss)):
-                w = float(d[f"{names[i]}.weight"].sum())
-                training_losses[i] += float(tloss[i].detach()) * w
+                w = d[f"{names[i]}.weight"].sum()
+                training_losses[i] += tloss[i].detach() * w
                 training_weights[i] += w
             loss = (
                 sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
@@ -270,7 +278,11 @@ def train_epoch(
         scheduler.step()
         progress.update()
     progress.close()
-    return reduce_mean(local_rank, training_losses, training_weights)
+    return reduce_mean(
+        local_rank,
+        [float(x) for x in training_losses],
+        [float(x) for x in training_weights],
+    )
 
 
 def create_optimizer(model, config):
@@ -291,6 +303,7 @@ def create_optimizer(model, config):
         ],
         lr=config["learning_rate"],
         betas=(0.9, 0.95),
+        fused=True,
     )
 
 
@@ -445,13 +458,15 @@ def checkpoint_model(
         with open(os.path.join(args.datadir, "list_tag"), "r") as f:
             list_tag = f.read()
     else:
-        basename = f"transformer.masked.{args.finetune_medium}.{args.finetune_metric}.finetune"
+        basename = (
+            f"transformer.masked.{args.finetune_medium}.{args.finetune_metric}.finetune"
+        )
     # save model
     if save:
         logger.info("checkpointing model")
         if not config["finetune"]:
             checkpoint = {
-                "model": model.module._orig_mod.state_dict(),
+                "model": model._orig_mod.module.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
                 "config": config,
@@ -465,7 +480,7 @@ def checkpoint_model(
                 os.system(f"{cmd} &")
         else:
             checkpoint = {
-                "model": model.module._orig_mod.state_dict(),
+                "model": model._orig_mod.module.state_dict(),
                 "config": config,
                 "epoch": epoch,
                 "training_loss": training_loss,
@@ -541,16 +556,20 @@ def get_training_config():
             "gender": 4,
             "source": 4,
         },
-        "metadata_emb_size": 3076,
+        "metadata_emb_size": 3076 + 12,  # pad to mod 16
         "min_ts": min_ts,
         "max_ts": max_ts,
         "rating_mean": 7.6287384,
         "rating_std": 1.778219,
         "forward": "train",
         "finetune": False,
-        "learning_rate": 3e-4,
+        "learning_rate": 1e-4,
+        "mask_rate": 0.1,
         "gpu_config": get_gpu_config(),
     }
+    config["mask_topk"] = 1
+    while config["mask_topk"] < config["mask_rate"] * config["max_sequence_length"]:
+        config["mask_topk"] *= 2
     if args.mini:
         assert config["num_layers"] % 2 == 0
         config["num_layers"] = config["num_layers"] // 2
@@ -589,19 +608,20 @@ def train():
         grad_accum_steps = global_batch_size // local_batch_size
     else:
         num_epochs = 64
-        global_batch_size = 512
+        global_batch_size = 1024
         if gpu_config == "B200":
-            local_batch_size = 64
+            local_batch_size = 128
         elif gpu_config == "H200":
-            local_batch_size = 32
+            local_batch_size = 64
         elif gpu_config == "H100":
-            local_batch_size = 16
+            local_batch_size = 32
         elif gpu_config == "local":
             local_batch_size = 4
         else:
             assert False
         assert global_batch_size % (world_size * local_batch_size) == 0
         grad_accum_steps = global_batch_size // (world_size * local_batch_size)
+        config["local_batch_size"] = local_batch_size
 
     def TransformerDataset(x):
         transdir = "transformer_mini" if args.mini else "transformer"
@@ -630,6 +650,7 @@ def train():
             persistent_workers=True,
             collate_fn=collate,
             worker_init_fn=worker_init_fn,
+            pin_memory=True,
         )
         for (x, w) in [("training", 8), ("test", 2)]
     }
@@ -657,12 +678,26 @@ def train():
             model.load_state_dict(checkpoint["model"])
             del checkpoint["model"]
     model = model.to(local_rank)
-    model = torch.compile(model)
+    fp8_config = Float8LinearConfig.from_recipe_name("tensorwise")
+    convert_to_float8_training(
+        model,
+        config=fp8_config,
+        module_filter_fn=lambda mod, fqn: (
+            not (
+                isinstance(mod, nn.Linear)
+                and (mod.in_features < 16 or mod.out_features < 16)
+            )
+        ),
+    )
     model = DDP(
         model,
         device_ids=[local_rank],
         output_device=local_rank,
+        gradient_as_bucket_view=True,
+        static_graph=True,
+        bucket_cap_mb=256,
     )
+    model = torch.compile(model)
     optimizer = create_optimizer(model, config)
     scheduler = create_learning_rate_schedule(
         optimizer,

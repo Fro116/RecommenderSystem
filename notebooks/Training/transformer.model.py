@@ -42,7 +42,7 @@ class ActionEmbedding(nn.Module):
                 4,  # source
                 1,  # has_rating
                 1,  # rating
-                16, # status
+                16,  # status
                 1,  # progress
             ]
         )
@@ -93,6 +93,7 @@ class ActionEmbedding(nn.Module):
         )
         return self.linear(emb)
 
+
 class ItemEmbedding(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -118,25 +119,22 @@ class DualItemEmbedding(nn.Module):
         super().__init__()
         self.item_embedding = item_embedding
 
-    @torch._dynamo.disable
     def forward(self, inputs) -> torch.Tensor:
         x, medium = inputs
         F = nn.functional
-        m1 = self.item_embedding.matchedid_embedding.embedding.weight
-        m2 = self.item_embedding.metadata_embedding.embedding.weight
-        W = self.item_embedding.projection_layer.weight
-        b = self.item_embedding.projection_layer.bias
-        logits1 = F.linear(x, m1)
-        logits2 = F.linear(x.matmul(W), m2)
-        bias = x.matmul(b).unsqueeze(-1)
-        ret = logits1 + logits2 + bias
         K = self.item_embedding.config["vocab_sizes"]["0_matchedid"]
         if medium == 0:
-            return ret[..., :K]
+            start, end = 0, K
         elif medium == 1:
-            return ret[..., K:-1]
+            start, end = K, -1
         else:
             assert False
+        m1_sliced = self.item_embedding.matchedid_embedding.embedding.weight[start:end]
+        m2_sliced = self.item_embedding.metadata_embedding.embedding.weight[start:end]
+        W = self.item_embedding.projection_layer.weight
+        b = self.item_embedding.projection_layer.bias
+        items = m1_sliced + F.linear(m2_sliced, W, bias=b)
+        return F.linear(x, items)
 
 
 class Llama3(nn.Module):
@@ -171,6 +169,7 @@ class Llama3(nn.Module):
             x = layer(x, mask=mask, input_pos=input_pos)
         x = self.norm(x)
         return x
+
 
 class TransformerModel(nn.Module):
     def __init__(self, config):
@@ -211,18 +210,20 @@ class TransformerModel(nn.Module):
         W = d["metadata"]
         weights = self.item_embedding.metadata_embedding.embedding.weight
         weights.zero_()
-        assert W.shape[0] + 1 == weights.shape[0] and W.shape[1] == weights.shape[1]
+        assert W.shape[0] + 1 == weights.shape[0]
+        assert W.shape[1] <= weights.shape[1] < W.shape[1] + 16
         W_t = torch.as_tensor(W, dtype=weights.dtype, device=weights.device)
-        weights[:W.shape[0], :].copy_(W_t)
+        weights[: W.shape[0], : W.shape[1]].copy_(W_t)
 
     def mse(self, x, y, w):
-        return (torch.square(x - y) * w).sum() / w.sum()
+        return (torch.square(x - y) * w).sum() / w.sum().clamp(min=1e-8)
 
     def moments(self, x, y, w):
+        w_sum = w.sum().clamp(min=1e-8)
         return [
-            (torch.square(x - y) * w).sum() / w.sum(),
-            (torch.square(0 * x - y) * w).sum() / w.sum(),
-            (torch.square(-1 * x - y) * w).sum() / w.sum(),
+            (torch.square(x - y) * w).sum() / w_sum,
+            (torch.square(0 * x - y) * w).sum() / w_sum,
+            (torch.square(-1 * x - y) * w).sum() / w_sum,
         ]
 
     def interleave(self, x, y):
@@ -238,11 +239,6 @@ class TransformerModel(nn.Module):
             return ret
         else:
             assert False
-
-    def shift_right(self, x):
-        y = torch.zeros_like(x)
-        y[..., 1:] = x[..., :-1]
-        return y
 
     def mask_tokens(self, d):
         if self.config["finetune"]:
@@ -265,8 +261,9 @@ class TransformerModel(nn.Module):
             rating_mask = rating_mask > 0
         else:
             randval = torch.rand(d["userid"].shape, device=d["userid"].device)
-            watch_mask = randval < 0.1
-            rating_mask = (randval >= 0.1) & (randval < 0.2)
+            mask_rate = self.config["mask_rate"]
+            watch_mask = randval < mask_rate
+            rating_mask = (randval >= mask_rate) & (randval < 2 * mask_rate)
         d["token_mask_ids"] *= rating_mask
         for k in d:
             if k.endswith(".position") or k.endswith(".label") or k.endswith(".weight"):
@@ -322,43 +319,31 @@ class TransformerModel(nn.Module):
             for k in d:
                 d[k] = d[k].reshape(-1, self.config["max_sequence_length"])
         d = self.mask_tokens(d)
-        e = self.to_embedding(d)
+        embeds = self.to_embedding(d)
+        e0 = embeds[:, 0::2]
+        e1 = embeds[:, 1::2]
+        topk = self.config["mask_topk"] * self.config["local_batch_size"]
         losses = []
         for medium in ALL_MEDIUMS:
             for metric in ALL_METRICS:
+                w = d[f"{medium}.{metric}.weight"]
+                l = d[f"{medium}.{metric}.label"]
+                p = d[f"{medium}.{metric}.position"]
+                e = e0 if metric == "watch" else e1
+                w = d[f"{medium}.{metric}.weight"]
+                _, bp = torch.topk(w.reshape(-1), k=topk)
+                embed = e.reshape(-1, e.shape[-1])[bp, :]
+                labels = l.reshape(-1)[bp]
+                positions = p.reshape(-1)[bp]
+                weights = w.reshape(-1)[bp]
                 if metric == "watch":
-                    w = d[f"{medium}.{metric}.weight"]
-                    weights = self.interleave(w, w * 0)
-                    l = d[f"{medium}.{metric}.label"]
-                    labels = self.interleave(l, l * 0)
-                    p = d[f"{medium}.{metric}.position"]
-                    positions = self.interleave(p, p * 0)
-                elif metric == "rating":
-                    w = d[f"{medium}.{metric}.weight"]
-                    weights = self.interleave(w * 0, w)
-                    l = d[f"{medium}.{metric}.label"]
-                    labels = self.interleave(l * 0, l)
-                    p = d[f"{medium}.{metric}.position"]
-                    positions = self.interleave(p * 0, p)
-                if not torch.is_nonzero(weights.sum()):
-                    dummy_input = e[0:1, 0:1, :]
-                    if metric == "watch":
-                        dummy_loss = self.watch_head((dummy_input, medium)).sum() * 0.0
-                    elif metric == "rating":
-                        dummy_loss = self.rating_head(dummy_input).sum() * 0.0
-                    losses.append(dummy_loss)
-                    continue
-                positions = positions.reshape(*positions.shape, 1)
-                bp = torch.nonzero(weights, as_tuple=True)
-                embed = e[bp[0], bp[1], :]
-                labels = labels[bp[0], bp[1]]
-                positions = positions[bp[0], bp[1]]
-                weights = weights[bp[0], bp[1]]
-                if metric == "watch":
+                    w_sum = weights.sum().clamp(min=1e-8)
                     logits = self.watch_head((embed, medium))
-                    target = positions.reshape(-1).to(torch.long)
-                    ce_loss = nn.functional.cross_entropy(logits, target, reduction="none")
-                    losses.append((ce_loss * labels * weights).sum() / weights.sum())
+                    target = positions.to(torch.long)
+                    ce_loss = nn.functional.cross_entropy(
+                        logits, target, reduction="none"
+                    )
+                    losses.append((ce_loss * labels * weights).sum() / w_sum)
                 elif metric == "rating":
                     preds = self.rating_head(embed).reshape(-1)
                     labels = labels - self.config["rating_mean"]
