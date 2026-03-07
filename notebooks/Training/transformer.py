@@ -9,7 +9,6 @@ import time
 
 import h5py
 import hdf5plugin
-import msgpack
 import numpy as np
 import pandas as pd
 import scipy
@@ -545,8 +544,8 @@ def get_training_config():
         max_ts = datetime.datetime.strptime(f.read().strip(), "%Y%m%d").timestamp()
     config = {
         "num_layers": 8,
-        "num_heads": 32,
-        "num_kv_heads": 16,
+        "num_heads": 16,
+        "num_kv_heads": 8,
         "embed_dim": 2048,
         "intermediate_dim": 5632,
         "max_sequence_length": 1024,
@@ -557,7 +556,7 @@ def get_training_config():
             "gender": 4,
             "source": 4,
         },
-        "metadata_emb_size": 3076 + 12,  # pad to mod 16
+        "metadata_emb_size": 3076 + 124,  # pad to mod 128
         "min_ts": min_ts,
         "max_ts": max_ts,
         "rating_mean": 7.6287384,
@@ -622,7 +621,7 @@ def train():
             assert False
         assert global_batch_size % (world_size * local_batch_size) == 0
         grad_accum_steps = global_batch_size // (world_size * local_batch_size)
-        config["local_batch_size"] = local_batch_size
+    config["local_batch_size"] = local_batch_size
 
     def TransformerDataset(x):
         transdir = "transformer_mini" if args.mini else "transformer"

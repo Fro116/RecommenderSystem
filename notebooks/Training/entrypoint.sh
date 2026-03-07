@@ -15,15 +15,17 @@ endpoint = https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com
 " > ~/.config/rclone/rclone.conf
 rclone --retries=10 -Pv copy r2:rsys/secrets secrets
 mv secrets RecommenderSystem/
-# cuda 12.8 packages
-if [ ! -f "venv" ]; then
-    python3 -m venv venv
-fi
 deactivate
-source venv/bin/activate
-pip install torch==2.8.0 pandas==2.3.2 scipy==1.16.2 h5py==3.14.0 hdf5plugin==5.1.0 msgpack==1.1.1 torchao==0.13.0 torchtune==0.6.1
+python3 -m venv /venv/torch
+source /venv/torch/bin/activate
+pip install --upgrade pip
+pip install torch==2.9.1 torchao==0.15.0 flash-attn-4==4.0.0b4 h5py==3.16.0 hdf5plugin==6.0.0 pandas==3.0.1 scipy==1.17.1 tqdm==4.67.3
 cd RecommenderSystem/notebooks/Training/
 python transformer.py --datadir ../../data/training --download 0 1 --prod
 torchrun --standalone --nproc_per_node={{NUM_GPUS}} transformer.py --datadir ../../data/training --prod
+deactivate
+python3 -m venv venv/vastai
+source venv/vastai/bin/activate
 pip install vastai
 vastai stop instance $CONTAINER_ID
+deactivate

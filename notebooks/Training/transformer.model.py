@@ -254,7 +254,7 @@ class FlashAttention(nn.Module):
                 cu_seqlens_k=cu_seqlens,
                 max_seqlen_q=max_seqlen,
                 max_seqlen_k=max_seqlen,
-                causal=True,
+                causal=False,
             )
             return self.wo(attn_out.view(total_tokens, -1))
 
@@ -355,7 +355,7 @@ class Transformer(nn.Module):
                     ),
                 ]
             )
-            max_seqlen_in_batch = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+            max_seqlen_in_batch = self.config["max_seq_len"]
             freqs_cos = self.freqs_cos[flat_pos_ids]
             freqs_sin = self.freqs_sin[flat_pos_ids]
             h = flat_embeds
@@ -407,7 +407,7 @@ class RecommenderModel(nn.Module):
         weights = self.item_embedding.metadata_embedding.embedding.weight
         weights.zero_()
         assert W.shape[0] + 1 == weights.shape[0]
-        assert W.shape[1] <= weights.shape[1] < W.shape[1] + 16
+        assert W.shape[1] <= weights.shape[1] < W.shape[1] + 128
         W_t = torch.as_tensor(W, dtype=weights.dtype, device=weights.device)
         weights[: W.shape[0], : W.shape[1]].copy_(W_t)
 
@@ -482,16 +482,9 @@ class RecommenderModel(nn.Module):
             else:
                 assert False
 
-        # shuffle masked tokens to the end of each sequence
-        # todo always pass rope
         assert "rope_input_pos" not in d
         b, s = d["userid"].shape
         d["rope_input_pos"] = torch.arange(s, device=d["userid"].device).unsqueeze(0).repeat(b, 1)
-        is_masked = watch_mask | rating_mask
-        composite_key = (d["userid"] * 2) + is_masked.to(torch.int64)
-        sort_idx = composite_key.argsort(dim=1, stable=True)
-        for k, v in d.items():
-            d[k] = torch.gather(v, 1, sort_idx)
         return d
 
     def to_embedding(self, d):
@@ -522,7 +515,10 @@ class RecommenderModel(nn.Module):
         embeds = self.to_embedding(d)
         e0 = embeds[:, 0::2]
         e1 = embeds[:, 1::2]
-        topk = self.config["mask_topk"] * self.config["local_batch_size"]
+        if self.config["finetune"]:
+            topk = self.config["local_batch_size"]
+        else:
+            topk = self.config["mask_topk"] * self.config["local_batch_size"]
         losses = []
         for medium in ALL_MEDIUMS:
             for metric in ALL_METRICS:
@@ -531,7 +527,7 @@ class RecommenderModel(nn.Module):
                 p = d[f"{medium}.{metric}.position"]
                 e = e0 if metric == "watch" else e1
                 w = d[f"{medium}.{metric}.weight"]
-                _, bp = torch.topk(w.reshape(-1), k=topk)
+                _, bp = torch.topk(w.reshape(-1), k=topk, sorted=False)
                 embed = e.reshape(-1, e.shape[-1])[bp, :]
                 labels = l.reshape(-1)[bp]
                 positions = p.reshape(-1)[bp]
