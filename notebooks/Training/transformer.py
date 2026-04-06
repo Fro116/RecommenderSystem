@@ -18,13 +18,16 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
-import torchtune.models.llama3
 from torch.distributed import destroy_process_group, init_process_group
-from torch.nn.attention.flex_attention import and_masks, create_block_mask
+from torch.nn.attention.flex_attention import (
+    and_masks,
+    create_block_mask,
+    flex_attention,
+)
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, IterableDataset
-from torchtune.modules.peft import get_adapter_params, set_trainable_params
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")

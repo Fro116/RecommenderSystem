@@ -138,11 +138,136 @@ class DualItemEmbedding(nn.Module):
             assert False
 
 
-class Llama3(nn.Module):
+def precompute_freqs_cis(dim: int, end: int, theta: float = 500000.0):
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end, device=freqs.device, dtype=torch.float32)
+    freqs = torch.outer(t, freqs) # Shape: (max_seq_len, dim // 2)
+    freqs_cos = torch.cos(freqs)
+    freqs_sin = torch.sin(freqs)
+    return freqs_cos, freqs_sin
+
+
+def apply_rotary_emb(x: torch.Tensor, freqs_cos: torch.Tensor, freqs_sin: torch.Tensor):
+    freqs_cos = freqs_cos.unsqueeze(2).float() # (B, S, 1, head_dim // 2)
+    freqs_sin = freqs_sin.unsqueeze(2).float() # (B, S, 1, head_dim // 2)
+    x_reshaped = x.float().reshape(*x.shape[:-1], -1, 2)
+    x0, x1 = x_reshaped.unbind(-1)
+    x_out0 = x0 * freqs_cos - x1 * freqs_sin
+    x_out1 = x0 * freqs_sin + x1 * freqs_cos
+    x_rot = torch.stack([x_out0, x_out1], dim=-1).flatten(3)
+    return x_rot.type_as(x)
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.scale = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        x_fp32 = x.float()
+        x_normed = x_fp32 * torch.rsqrt(x_fp32.pow(2).mean(-1, keepdim=True) + self.eps)
+        return x_normed.type_as(x) * self.scale
+
+
+class SwiGLU(nn.Module):
+    def __init__(self, dim: int, intermediate_dim: int):
+        super().__init__()
+        self.w1 = nn.Linear(dim, intermediate_dim, bias=False)
+        self.w2 = nn.Linear(intermediate_dim, dim, bias=False)
+        self.w3 = nn.Linear(dim, intermediate_dim, bias=False)
+
+    def forward(self, x):
+        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+
+
+class FlashAttention(nn.Module):
     def __init__(self, config):
-        super(Llama3, self).__init__()
-        llama_config = {
-            "vocab_size": 0,
+        super().__init__()
+        self.finetune = config["finetune"]
+        self.num_heads = config["num_heads"]
+        self.num_kv_heads = config["num_kv_heads"]
+        self.head_dim = config["embed_dim"] // self.num_heads
+        self.q_proj = nn.Linear(
+            config["embed_dim"], self.num_heads * self.head_dim, bias=False
+        )
+        self.k_proj = nn.Linear(
+            config["embed_dim"], self.num_kv_heads * self.head_dim, bias=False
+        )
+        self.v_proj = nn.Linear(
+            config["embed_dim"], self.num_kv_heads * self.head_dim, bias=False
+        )
+        self.output_proj = nn.Linear(
+            self.num_heads * self.head_dim, config["embed_dim"], bias=False
+        )
+        if self.finetune:
+            self.lora_rank = 8
+            self.lora_scaling = 16 / 8
+            self.lora_dropout = nn.Dropout(0.1)
+            self.q_proj_lora_A = nn.Linear(config["embed_dim"], self.lora_rank, bias=False)
+            self.q_proj_lora_B = nn.Linear(
+                self.lora_rank, self.num_heads * self.head_dim, bias=False
+            )
+            self.v_proj_lora_A = nn.Linear(config["embed_dim"], self.lora_rank, bias=False)
+            self.v_proj_lora_B = nn.Linear(
+                self.lora_rank, self.num_kv_heads * self.head_dim, bias=False
+            )
+            nn.init.normal_(self.q_proj_lora_A.weight, std=0.006)
+            nn.init.zeros_(self.q_proj_lora_B.weight)
+            nn.init.normal_(self.v_proj_lora_A.weight, std=0.006)
+            nn.init.zeros_(self.v_proj_lora_B.weight)
+
+    def forward(
+        self, x, freqs_cos, freqs_sin, cu_seqlens=None, max_seqlen=None, block_mask=None
+    ):
+        B, S, _ = x.shape
+        k = self.k_proj(x)
+        q = self.q_proj(x)
+        v = self.v_proj(x)
+        if self.finetune:
+            q += self.q_proj_lora_B(self.q_proj_lora_A(self.lora_dropout(x))) * self.lora_scaling
+            v += self.v_proj_lora_B(self.v_proj_lora_A(self.lora_dropout(x))) * self.lora_scaling
+        q = q.view(B, S, self.num_heads, self.head_dim)
+        k = k.view(B, S, self.num_kv_heads, self.head_dim)
+        v = v.view(B, S, self.num_kv_heads, self.head_dim)
+        q = apply_rotary_emb(q, freqs_cos, freqs_sin)
+        k = apply_rotary_emb(k, freqs_cos, freqs_sin)
+        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        if self.num_kv_heads != self.num_heads:
+            num_groups = self.num_heads // self.num_kv_heads
+            k = k.repeat_interleave(num_groups, dim=1)
+            v = v.repeat_interleave(num_groups, dim=1)
+        attn_out = flex_attention(q, k, v, block_mask=block_mask)
+        return self.output_proj(attn_out.transpose(1, 2).contiguous().view(B, S, -1))
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.attn = FlashAttention(config)
+        self.mlp = SwiGLU(config["embed_dim"], config["intermediate_dim"])
+        self.sa_norm = RMSNorm(config["embed_dim"])
+        self.mlp_norm = RMSNorm(config["embed_dim"])
+
+    def forward(
+        self, x, freqs_cos, freqs_sin, cu_seqlens=None, max_seqlen=None, block_mask=None
+    ):
+        h = x + self.attn(
+            self.sa_norm(x),
+            freqs_cos,
+            freqs_sin,
+            cu_seqlens,
+            max_seqlen,
+            block_mask,
+        )
+        out = h + self.mlp(self.mlp_norm(h))
+        return out
+
+
+class Transformer(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        config = {
             "num_layers": config["num_layers"],
             "num_heads": config["num_heads"],
             "num_kv_heads": config["num_kv_heads"],
@@ -150,26 +275,28 @@ class Llama3(nn.Module):
             "intermediate_dim": config["intermediate_dim"],
             # we split each token into an item and action token
             "max_seq_len": 2 * config["max_sequence_length"],
+            "finetune": config["finetune"],
         }
-        if config["finetune"]:
-            llama3 = torchtune.models.llama3.lora_llama3(
-                lora_attn_modules=["q_proj", "v_proj"],
-                lora_rank=8,
-                lora_alpha=16,
-                lora_dropout=0.1,
-                **llama_config,
-            )
-            set_trainable_params(llama3, get_adapter_params(llama3))
-        else:
-            llama3 = torchtune.models.llama3.llama3(**llama_config)
-        self.layers = llama3.layers
-        self.norm = llama3.norm
+        self.config = config
+        self.layers = nn.ModuleList(
+            [TransformerBlock(config) for _ in range(config["num_layers"])]
+        )
+        self.norm = RMSNorm(config["embed_dim"])
+        head_dim = config["embed_dim"] // config["num_heads"]
+        freqs_cos, freqs_sin = precompute_freqs_cis(head_dim, config["max_seq_len"])
+        self.register_buffer("freqs_cos", freqs_cos, persistent=False)
+        self.register_buffer("freqs_sin", freqs_sin, persistent=False)
 
-    def forward(self, x, mask, input_pos):
+    def forward(self, input_embeddings, block_mask, position_ids):
+        freqs_cos, freqs_sin = (
+            self.freqs_cos[position_ids],
+            self.freqs_sin[position_ids],
+        )
+        h = input_embeddings
         for layer in self.layers:
-            x = layer(x, mask=mask, input_pos=input_pos)
-        x = self.norm(x)
-        return x
+            h = layer(h, freqs_cos, freqs_sin, block_mask=block_mask)
+        return self.norm(h)
+
 
 class TransformerModel(nn.Module):
     def __init__(self, config):
@@ -177,7 +304,7 @@ class TransformerModel(nn.Module):
         self.config = config
         self.action_embedding = ActionEmbedding(config)
         self.item_embedding = ItemEmbedding(config)
-        self.transformers = Llama3(config)
+        self.transformers = Transformer(config)
 
         self.watch_head = nn.Sequential(
             DualItemEmbedding(self.item_embedding), nn.LogSoftmax(dim=-1)
@@ -198,6 +325,8 @@ class TransformerModel(nn.Module):
             ]:
                 for _, param in layer.named_parameters():
                     param.requires_grad = False
+            for name, param in self.transformers.named_parameters():
+                param.requires_grad = "lora_" in name
         if config["forward"] == "train":
             self.forward = self.train_forward
         elif config["forward"] == "inference":

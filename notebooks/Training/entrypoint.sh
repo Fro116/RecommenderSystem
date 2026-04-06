@@ -21,7 +21,7 @@ if [ ! -f "venv" ]; then
 fi
 deactivate
 source venv/bin/activate
-pip install torch==2.8.0 pandas==2.3.2 scipy==1.16.2 h5py==3.14.0 hdf5plugin==5.1.0 msgpack==1.1.1 torchao==0.13.0 torchtune==0.6.1
+pip install torch==2.8.0 pandas==2.3.2 scipy==1.16.2 h5py==3.14.0 hdf5plugin==5.1.0 msgpack==1.1.1 torchao==0.13.0
 cd RecommenderSystem/notebooks/Training/
 python transformer.py --datadir ../../data/training --download 0 1 --prod
 torchrun --standalone --nproc_per_node={{NUM_GPUS}} transformer.py --datadir ../../data/training --prod
