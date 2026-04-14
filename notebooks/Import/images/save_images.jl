@@ -1,6 +1,7 @@
 import CSV
 import DataFrames
 import Images
+import FileIO
 import Glob
 import Logging
 import OpenCV
@@ -29,17 +30,39 @@ function import_data()
     )
 end
 
+function extract_bytes(fn::String)
+    try
+        data = FileIO.load(fn)
+        if eltype(data) <: AbstractArray
+            byte_array = UInt8[]
+            for frame in data
+                append!(byte_array, extract_bytes(frame))
+            end
+            return byte_array
+        else
+            dense_pixels = collect(data)
+            return Vector{UInt8}(reinterpret(UInt8, vec(dense_pixels)))
+        end
+    catch
+        return open(fn) do f
+            logerror("could not extract bytes for $fn")
+            read(f)
+        end
+    end
+end
+
 function add_imagehashes()
     df = CSV.read("$datadir/images.csv", DataFrames.DataFrame)
     df[!, "imagehash"] .= ""
-    Threads.@threads for i = 1:DataFrames.nrow(df)
-        if !df.saved[i]
-            continue
-        end
-        fn = "$datadir/images/$(df.filename[i])"
-        @assert ispath(fn)
-        df.imagehash[i] = open(fn) do f
-            stringhash(read(f))
+    error_only_logger = Logging.ConsoleLogger(stderr, Logging.Error)
+    Logging.with_logger(error_only_logger) do
+        Threads.@threads for i = 1:DataFrames.nrow(df)
+            if !df.saved[i]
+                continue
+            end
+            fn = "$datadir/images/$(df.filename[i])"
+            @assert ispath(fn)
+            df.imagehash[i] = stringhash(extract_bytes(fn))
         end
     end
     CSV.write("$datadir/images.csv", df)
@@ -176,7 +199,7 @@ function save_image_metadata(to_delete)
             end
             height, width = size(Images.load("$datadir/srimages/$basename"))
             rows[length(sizes)*(i-1)+j] =
-                (source, medium, itemid, name, basename, height, width, imagehash)
+                (source, medium, itemid, "", basename, height, width, imagehash)
         end
     end
     rows = filter(x -> !isnothing(x), rows)
@@ -192,6 +215,7 @@ function save_image_metadata(to_delete)
         )
         srdf = vcat(srdf, srdf_to_add)
     end
+    srdf[:, "imageid"] .= map(x -> split(x, ".")[1], srdf.filename)
     filter!(x -> x.filename ∉ to_delete, srdf)
     CSV.write("$datadir/srimages.csv", sort(srdf))
 end
@@ -213,6 +237,7 @@ function upload_images(to_add, to_delete)
     qrun(
         `rclone --retries=10 copyto $datadir/srimages.csv r2:rsys/database/import/images.csv`,
     )
+    logtag("IMAGES", "finished uploading")
 end
 
 function encode_images()
@@ -226,6 +251,9 @@ function encode_images()
         "IMAGES",
         "keeping $(length(matched)) adding $(length(to_add)) and deleting $(length(to_delete))",
     )
+    open("$datadir/matched.txt", "w") do f foreach(x -> println(f, x), matched) end
+    open("$datadir/to_add.txt", "w") do f foreach(x -> println(f, x), to_add) end
+    open("$datadir/to_delete.txt", "w") do f foreach(x -> println(f, x), to_delete) end
     downsample(to_add)
     sr_images(to_add)
     save_image_metadata(to_delete)

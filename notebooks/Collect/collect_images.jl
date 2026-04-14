@@ -200,10 +200,10 @@ end
 function save_images()
     while true
         df = get_urls()
+        cleanup(df)
         write_df(df)
         save_new_images(df)
         save_random_images(df, 10000)
-        cleanup(df)
     end
 end
 

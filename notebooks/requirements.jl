@@ -7,11 +7,12 @@ dependencies = [
     ("CodecZstd", "0.8.6"),
     ("DataFrames", "1.8.0"),
     ("DataStructures", "0.18.22"),
+    ("FileIO", "1.18.0"),
     ("Glob", "1.3.1"),
     ("H5Zblosc", "0.1.2"),
     ("HDF5", "0.17.2"),
     ("HTTP", "1.10.19"),
-    ("HypothesisTests", "v0.11.5"),
+    ("HypothesisTests", "0.11.5"),
     ("IJulia", "1.34.3"),
     ("Images", "0.26.2"),
     ("JLD2", "0.6.2"),
@@ -27,6 +28,7 @@ dependencies = [
     ("ProgressMeter", "1.11.0"),
     ("StatsBase", "0.34.6"),
     ("StringDistances", "0.11.3"),
+    ("VideoIO", "1.6.1"),
 ]
 
 for (d, v) in dependencies
