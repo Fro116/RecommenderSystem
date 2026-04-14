@@ -546,9 +546,11 @@ def get_training_config():
         "forward": "train",
         "finetune": False,
         "learning_rate": 1e-4,
-        "mask_rate": 0.15,
+        "mask_rate": 0.1,
+        "mask_topk": 128,
         "gpu_config": get_gpu_config(),
     }
+    assert config["mask_topk"] > config["mask_rate"] * config["max_sequence_length"]
     if args.mini:
         assert config["num_layers"] % 2 == 0
         config["num_layers"] = config["num_layers"] // 2
@@ -600,6 +602,7 @@ def train():
             assert False
         assert global_batch_size % (world_size * local_batch_size) == 0
         grad_accum_steps = global_batch_size // (world_size * local_batch_size)
+    config["local_batch_size"] = local_batch_size
 
     def TransformerDataset(x):
         transdir = "transformer_mini" if args.mini else "transformer"
@@ -631,7 +634,7 @@ def train():
         )
         for (x, w) in [("training", 8), ("test", 2)]
     }
-    model = TransformerModel(config)
+    model = RecommenderModel(config)
     model.load_pretrained_embeddings(args.datadir)
     logger.info(
         f"Created model with {sum(p.numel() for p in model.parameters())} parameters"
