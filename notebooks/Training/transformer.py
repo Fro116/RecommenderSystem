@@ -6,7 +6,6 @@ import logging
 import os
 import subprocess
 import time
-import warnings
 
 import h5py
 import hdf5plugin
@@ -29,9 +28,6 @@ from torch.nn.attention.flex_attention import (
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
-
-warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
-warnings.filterwarnings("ignore", ".*Sparse CSR tensor support is in beta state.*")
 
 with open("transformer.model.py") as f:
     exec(f.read())
@@ -172,7 +168,7 @@ def collate(data):
     ret = {}
     for k, v in data[0].items():
         if scipy.sparse.issparse(v):
-            ret[k] = torch.sparse_csr_tensor(v.indptr, v.indices, v.data, v.shape)
+            ret[k] = torch.sparse_csr_tensor(v.indptr, v.indices, v.data, v.shape).to_dense()
         else:
             ret[k] = torch.tensor(v)
     return ret
@@ -181,7 +177,7 @@ def collate(data):
 def to_device(data, local_rank):
     d = {}
     for k in data:
-        d[k] = data[k].to(local_rank).to_dense()
+        d[k] = data[k].to(local_rank, non_blocking=True)
         if args.finetune is not None and k.endswith(".position"):
             d[k] = d[k].to(torch.int64)
     return d
@@ -247,8 +243,12 @@ def train_epoch(
     task_weights,
     grad_accum_steps,
 ):
-    training_losses = [0.0 for _ in range(len(task_weights))]
-    training_weights = [0.0 for _ in range(len(task_weights))]
+    training_losses = [
+        torch.tensor(0.0, device=local_rank) for _ in range(len(task_weights))
+    ]
+    training_weights = [
+        torch.tensor(0.0, device=local_rank) for _ in range(len(task_weights))
+    ]
     progress = tqdm(desc="Training batches", mininterval=1, disable=local_rank != 0)
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
     optimizer.zero_grad(set_to_none=True)
@@ -257,24 +257,29 @@ def train_epoch(
             d = to_device(data, local_rank)
             tloss = model(d, False)
             for i in range(len(tloss)):
-                w = float(d[f"{names[i]}.weight"].sum())
-                training_losses[i] += float(tloss[i].detach()) * w
+                w = d[f"{names[i]}.weight"].sum()
+                training_losses[i] += tloss[i].detach() * w
                 training_weights[i] += w
             loss = (
                 sum(tloss[i] * task_weights[i] for i in range(len(tloss)))
                 / grad_accum_steps
             )
-        loss.backward()
         if (step + 1) % grad_accum_steps != 0:
+            with model.no_sync():
+                loss.backward()
             continue
+        loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         scheduler.step()
         progress.update()
     progress.close()
-    return reduce_mean(local_rank, training_losses, training_weights)
-
+    return reduce_mean(
+        local_rank,
+        [float(x) for x in training_losses],
+        [float(x) for x in training_weights],
+    )
 
 def create_optimizer(model, config):
     param_dict = {pn: p for pn, p in model.named_parameters()}
@@ -288,6 +293,7 @@ def create_optimizer(model, config):
         ],
         lr=config["learning_rate"],
         betas=(0.9, 0.95),
+        fused=True,
     )
 
 
@@ -515,6 +521,7 @@ def get_training_config():
         config["finetune"] = True
         config["gpu_config"] = get_gpu_config()
         config["finetune_metric"] = args.finetune_metric
+        # config["mask_topk"] = 1
         return config
 
     def get_num_items(medium, col):
