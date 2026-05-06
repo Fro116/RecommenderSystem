@@ -3,7 +3,6 @@ import h5py
 import pandas as pd
 import torch
 import torch.nn as nn
-import torchtune.models.llama3
 import numpy as np
 
 datadir = "../../../data/finetune"
@@ -20,7 +19,7 @@ def register_transformer():
     )
     config = checkpoint["config"]
     config["forward"] = "inference"
-    model = TransformerModel(config)
+    model = RecommenderModel(config)
     model.load_state_dict(checkpoint["model"])
     model = model.to(device)
     model.eval()

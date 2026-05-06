@@ -13,14 +13,14 @@ import msgpack
 import numpy as np
 import torch
 import torch.nn as nn
-import torchtune.models.llama3
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
-from torch.nn.attention.flex_attention import and_masks, create_block_mask
-from torchtune.modules.peft import get_adapter_params, set_trainable_params
-
-warnings.filterwarnings("ignore", ".*Initializing zero-element tensors is a no-op.*")
-
+import torch.nn.functional as F
+from torch.nn.attention.flex_attention import (
+    and_masks,
+    create_block_mask,
+    flex_attention,
+)
 
 def make_item(ts, medium=0, itemid=-1):
     return {
@@ -177,7 +177,7 @@ def load_model(medium, task):
     )
     config = checkpoint["config"]
     config["forward"] = "inference"
-    model = TransformerModel(config)
+    model = RecommenderModel(config)
     model.load_state_dict(checkpoint["model"])
     model = model.to(device)
     model = torch.compile(model)

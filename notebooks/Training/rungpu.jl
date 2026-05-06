@@ -13,24 +13,14 @@ function write_entrypoint(num_gpus)
     end
 end
 
-function get_balance()
-    try
-        json = read(`vastai show user --raw`, String)
-        return JSON3.parse(json)[:credit]
-    catch e
-        logerror("$e")
-        return 0
-    end
-end
-
 function provision_instance()
     get_instances() = copy(JSON3.parse(read(`vastai show instances --raw`, String)))
     @assert isempty(get_instances()) "instance already exists"
     for gpu_config in ["8xB200", "4xB200", "8xH100"]
         node_price = Dict(
-            "8xB200" => 32,
-            "4xB200" => 16,
-            "8xH100" => 24,
+            "8xB200" => 48,
+            "4xB200" => 24,
+            "8xH100" => 32,
         )[gpu_config]
         duration = Dict(
             "8xB200" => 50,
@@ -42,7 +32,6 @@ function provision_instance()
             "B200" => """gpu_name in ["B200"]""",
             "H100" => """gpu_name in ["H200", "H100_SXM"]""",
         )[gpu_type]
-        balance = get_balance()
         offers = copy(
             JSON3.parse(
                 read(
@@ -124,13 +113,13 @@ end
 
 function launch_job()
     instance = nothing
-    max_wait = time() + 3600 * 8
+    max_wait = time() + 3600 * 24
     while time() < max_wait
         instance = provision_instance()
         if !isnothing(instance)
             break
         end
-        timeout = 600
+        timeout = 60
         logerror("failed to provision gpu instance, retrying in $timeout seconds")
         sleep(timeout)
     end
