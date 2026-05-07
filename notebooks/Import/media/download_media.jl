@@ -204,6 +204,23 @@ function as_dataframe(x::Item)
     )
 end
 
+function sanitize_date(x::Union{AbstractString,Int,Missing})
+    if ismissing(x)
+        return x
+    end
+    parts = split(string(x), "-")
+    while length(parts) >= 1
+        try
+            date = join(parts, "-")
+            Dates.Date(date)
+            return date
+        catch
+            pop!(parts)
+        end
+    end
+    missing
+end
+
 function import_mal(medium)
     source = "mal"
     df = read_csv("$datadir/$source/$(source)_media.csv")
@@ -402,8 +419,8 @@ function import_mal(medium)
             mediatype = mediatype(x.media_type),
             status = status(x.status, x.start_date),
             source = mediasource(x.source),
-            startdate = x.start_date,
-            enddate = x.end_date,
+            startdate = sanitize_date(x.start_date),
+            enddate = sanitize_date(x.end_date),
             season = season(x.start_season),
             episodes = optstring(optnum(x.num_episodes)),
             volumes = optstring(optnum(x.num_volumes)),
@@ -504,7 +521,7 @@ function import_anilist(medium::String)::Vector{Item}
             end
             push!(vals, string(json[k]))
         end
-        join(vals, "-")
+        sanitize_date(join(vals, "-"))
     end
     function status(x, startdate)
         if ismissing(x)
@@ -747,7 +764,7 @@ function import_kitsu(medium)
         while endswith(x, "-01")
             x = chop(x, tail = length("-01"))
         end
-        x
+        sanitize_date(x)
     end
     function status(x)
         if ismissing(x)
@@ -901,7 +918,7 @@ function import_animeplanet(medium)
             return missing
         end
         fields = split(x, " - ")
-        first(fields)
+        sanitize_date(first(fields))
     end
     function enddate(date)
         if ismissing(date) || date == "TBA"
@@ -916,7 +933,7 @@ function import_animeplanet(medium)
         if date == "?"
             return missing
         end
-        date
+        sanitize_date(date)
     end
     function episodes(x)
         if ismissing(x) || medium != "anime"

@@ -77,7 +77,16 @@ end
 
 function get_media_groups(medium::Int)
     df = get_media_groups(Dict(0 => "manga", 1 => "anime")[medium])
-    filter(x -> !(coalesce(x.status, nothing) in ["Upcoming", "TBA"]), df)
+    function is_unreleased(status, startdate)
+        if !ismissing(startdate) && Dates.Date(startdate) < Dates.now()
+            return false
+        end
+        if !ismissing(status) && status in ["Upcoming", "TBA"]
+            return true
+        end
+        false
+    end
+    filter(x -> !is_unreleased(x.status, x.startdate), df)
 end
 
 function get_title_records(medium::Int)
@@ -122,7 +131,7 @@ function get_counts(medium::Int)
 end
 
 function get_itemids(medium::Int)
-    df = df = get_media_groups(medium)
+    df = get_media_groups(medium)
     df = DataFrames.combine(DataFrames.groupby(df, [:matchedid])) do subdf
         subdf[argmax(subdf.count), :]
     end
