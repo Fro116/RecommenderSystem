@@ -5,9 +5,9 @@ hdf5plugin==5.1.0
 msgpack==1.1.1
 numpy==2.3.3
 pandas==2.3.2
+pillow==12.2.0
 scipy==1.16.2
-torch==2.8.0
-torchao==0.13.0
-torchvision==0.23.0
+torch==2.11.0
+torchao==0.17.0
 tqdm==4.67.1
 uvicorn==0.35.0

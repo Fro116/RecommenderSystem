@@ -4,10 +4,9 @@ import Images
 import FileIO
 import Glob
 import Logging
-import OpenCV
 import ProgressMeter: @showprogress
 import Random
-
+using ProgressMeter
 include("../../julia_utils/hash.jl")
 include("../../julia_utils/stdout.jl")
 
@@ -28,44 +27,6 @@ function import_data()
     qrun(
         `rclone --retries=10 copyto r2:rsys/database/import/images.csv $datadir/srimages.csv`,
     )
-end
-
-function extract_bytes(fn::String)
-    try
-        data = FileIO.load(fn)
-        if eltype(data) <: AbstractArray
-            byte_array = UInt8[]
-            for frame in data
-                append!(byte_array, extract_bytes(frame))
-            end
-            return byte_array
-        else
-            dense_pixels = collect(data)
-            return Vector{UInt8}(reinterpret(UInt8, vec(dense_pixels)))
-        end
-    catch
-        return open(fn) do f
-            logerror("could not extract bytes for $fn")
-            read(f)
-        end
-    end
-end
-
-function add_imagehashes()
-    df = CSV.read("$datadir/images.csv", DataFrames.DataFrame)
-    df[!, "imagehash"] .= ""
-    error_only_logger = Logging.ConsoleLogger(stderr, Logging.Error)
-    Logging.with_logger(error_only_logger) do
-        Threads.@threads for i = 1:DataFrames.nrow(df)
-            if !df.saved[i]
-                continue
-            end
-            fn = "$datadir/images/$(df.filename[i])"
-            @assert ispath(fn)
-            df.imagehash[i] = stringhash(extract_bytes(fn))
-        end
-    end
-    CSV.write("$datadir/images.csv", df)
 end
 
 function get_diffs()
@@ -103,19 +64,12 @@ function get_diffs()
 end
 
 function downsample(images)
-    @showprogress for name in images
+    @showprogress Threads.@threads for name in images
         fn = "$datadir/images/$name"
-        while true
-            img = OpenCV.imread(fn)
-            width, height = OpenCV.size(img)[end-1:end]
-            should_downsample = height >= 2000 || width >= 2000
-            if !should_downsample
-                break
-            end
-            width = Int32(div(width, 2))
-            height = Int32(div(height, 2))
-            img = OpenCV.resize(img, OpenCV.Size(width, height))
-            OpenCV.imwrite(fn, img)
+        try
+            run(`python downsample.py $fn 2000 2000`)
+        catch e
+            logerror("downsample: $fn error $e")
         end
     end
 end
@@ -245,7 +199,7 @@ function encode_images()
     rm(datadir, recursive = true, force = true)
     mkpath(datadir)
     import_data()
-    add_imagehashes()
+    run(`python hash.py`)
     matched, to_add, to_delete = get_diffs()
     logtag(
         "IMAGES",
