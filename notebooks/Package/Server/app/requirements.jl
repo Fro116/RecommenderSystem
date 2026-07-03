@@ -2,19 +2,18 @@ import Pkg
 
 dependencies = [
     ("CodecZlib", "0.7.8"),
-    ("CodecZstd", "0.8.6"),
-    ("CSV", "0.10.15"),
-    ("DataFrames", "1.7.0"),
-    ("Glob", "1.3.1"),    
-    ("HTTP", "1.10.14"),
-    ("JLD2", "0.5.10"),
-    ("JSON3", "1.14.1"),
+    ("CodecZstd", "0.8.7"),
+    ("CSV", "0.10.16"),
+    ("DataFrames", "1.8.2"),
+    ("Glob", "1.4.0"),
+    ("HTTP", "1.11.0"),
+    ("JLD2", "0.6.4"),
+    ("JSON3", "1.14.3"),
     ("LibPQ", "1.18.0"),
     ("Memoize", "0.4.4"),
     ("MsgPack", "1.2.1"),
-    ("NNlib", "0.9.26"),
-    ("Oxygen", "1.5.15"),
-    ("PackageCompiler", "2.2.0"),
+    ("NNlib", "0.9.34"),
+    ("Oxygen", "1.10.2"),
 ]
 
 for (d, v) in dependencies

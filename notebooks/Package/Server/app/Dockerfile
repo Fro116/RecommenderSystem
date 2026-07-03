@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+FROM pytorch/pytorch:2.11.0-cuda13.0-cudnn9-runtime
 
 WORKDIR /usr/src/app
 RUN apt update && apt install gcc g++ curl supervisor build-essential -y
@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
 # julia
 RUN curl -fsSL https://install.julialang.org | sh -s -- -y
 ENV PATH="/root/.juliaup/bin:$PATH"
-ENV julia_version=1.11.7
+ENV julia_version=1.12.6
 RUN juliaup add $julia_version && juliaup default $julia_version
 COPY requirements.jl .
 RUN julia requirements.jl

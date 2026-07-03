@@ -8,10 +8,6 @@ import LinearAlgebra
 import Memoize: @memoize
 import NNlib: gelu, logsoftmax, softmax
 import Optim
-include("../julia_utils/http.jl")
-include("../julia_utils/stdout.jl")
-include("../Training/history_tools.jl")
-include("embed.jl")
 
 const datadir = "../../data/finetune"
 const deleted_status = 3
@@ -19,6 +15,11 @@ const planned_status = 5
 const port = 5000
 const MODEL_URL = "http://localhost:$port"
 const num_ranking_items = 1024
+
+include("../julia_utils/http.jl")
+include("../julia_utils/stdout.jl")
+include("../Training/history_tools.jl")
+include("embed.jl")
 LinearAlgebra.BLAS.set_num_threads(1)
 
 function get_registry()

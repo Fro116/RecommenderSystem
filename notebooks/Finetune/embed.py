@@ -13,14 +13,17 @@ import msgpack
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
-import torch.nn.functional as F
 from torch.nn.attention.flex_attention import (
     and_masks,
     create_block_mask,
     flex_attention,
 )
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed import destroy_process_group, init_process_group
+
 
 def make_item(ts, medium=0, itemid=-1):
     return {
@@ -39,6 +42,7 @@ def tokenize(user_items):
         for k in ["status", "rating", "progress"]:
             token[k] = x[-1][k]
         return token
+
     items = []
     last_mid = None
     span = []
@@ -76,7 +80,7 @@ def predict(users, task, medium):
         max_seq_len = max_user_len + max_ranking_items
     else:
         assert False
-    num_items_0 = models[f"{medium}.{task}"].config["vocab_sizes"]["0_matchedid"]
+    num_items_0 = models[f"{medium}.{task}"].module.config["vocab_sizes"]["0_matchedid"]
     d = {
         # prompt features
         "userid": np.zeros((len(users), max_seq_len), dtype=np.int32),
@@ -100,7 +104,10 @@ def predict(users, task, medium):
         if len(items) > max_user_len - extra_tokens:
             items = items[-(max_user_len - extra_tokens) :]
         if task == "ranking":
-            test_items = [make_item(users[u]["timestamp"], medium, x) for x in users[u]["ranking_items"]]
+            test_items = [
+                make_item(users[u]["timestamp"], medium, x)
+                for x in users[u]["ranking_items"]
+            ]
         elif task == "retrieval":
             test_items = [make_item(users[u]["timestamp"])]
         else:
@@ -113,13 +120,16 @@ def predict(users, task, medium):
             d["gender"][u, i] = 0 if user["gender"] is None else user["gender"] + 1
             d["source"][u, i] = user["source"]
             d["rope_input_pos"][u, i] = i if i < len(items) else len(items)
-            d["token_mask_ids"][u, i] = i if task == "ranking" and i >= len(items) else 0
+            d["token_mask_ids"][u, i] = (
+                i if task == "ranking" and i >= len(items) else 0
+            )
             # item features
             d["matchedid"][u, i] = x["matchedid"] + (num_items_0 if m == 1 else 0)
             # action features
             d["status"][u, i] = x["status"]
             d["rating"][u, i] = x["rating"]
             d["progress"][u, i] = x["progress"]
+
     with gpu_lock:
         for k in d:
             d[k] = torch.tensor(d[k]).to(device)
@@ -181,6 +191,12 @@ def load_model(medium, task):
     model.load_state_dict(checkpoint["model"])
     model = model.to(device)
     model = torch.compile(model)
+    model = DDP(
+        model,
+        device_ids=[0],
+        output_device=0,
+        find_unused_parameters=True,
+    )
     model.eval()
     return model
 
@@ -196,6 +212,15 @@ def get_logger():
     logger.setLevel(logging.INFO)
     logger.propagate = False
     return logger
+
+
+def init_distributed():
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    os.environ["WORLD_SIZE"] = "1"
+    os.environ["RANK"] = "0"
+    os.environ["LOCAL_RANK"] = "0"
+    init_process_group(backend="nccl")
 
 
 def get_models():
@@ -231,7 +256,13 @@ def warmup(models):
     for task in ["retrieval", "ranking"]:
         for medium in [0, 1]:
             test_user = {
-                "user": {"source": "mal", "birthday": None, "created_at": None, "gender": None, "source": 0},
+                "user": {
+                    "source": "mal",
+                    "birthday": None,
+                    "created_at": None,
+                    "gender": None,
+                    "source": 0,
+                },
                 "items": [],
                 "timestamp": time.time(),
             }
@@ -246,6 +277,7 @@ def warmup(models):
 device = "cuda"
 gpu_lock = threading.Lock()
 logger = get_logger()
+init_distributed()
 models = get_models()
 warmup(models)
 app = FastAPI()
@@ -267,6 +299,7 @@ async def log_request_duration(request: Request, call_next):
 
 @app.get("/shutdown")
 async def shutdown_endpoint():
+    destroy_process_group()
     os.kill(os.getpid(), signal.SIGTERM)
     return Response(status_code=200)
 
