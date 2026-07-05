@@ -1,25 +1,39 @@
 import HTTP
+import JLD2
 import JSON3
-import ProgressMeter: @showprogress
-
+import ProgressMeter: @showprogress, next!
 include("../../julia_utils/stdout.jl")
 
-const datadir = "../../../data/import/embeddings/documents"
+const datadir = "../../../data/import/embeddings"
+const secretdir = "../../../secrets"
+const gcp_project = read("$secretdir/gcp.project.txt", String)
+const model_id = "gemini-embedding-2"
+const gcp_lock = ReentrantLock()
+
+gcp_access_token::String = ""
+function update_gcp_access_token(token::String)
+    global gcp_access_token
+    lock(gcp_lock) do
+        if token != gcp_access_token
+            return
+        end
+        run(`gcloud auth login --quiet --cred-file=$secretdir/gcp.auth.json`)
+        gcp_access_token = strip(read(`gcloud auth print-access-token`, String))
+    end
+end
+update_gcp_access_token(gcp_access_token)
 
 function get_embeddings_cache()
-    if ispath("$datadir/embeddings.json")
-        embeddings = JSON3.read("$datadir/embeddings.json")
-    else
-        embeddings = []
+    if !ispath("$datadir/document_embeddings.jld2")
+        return Dict()
     end
-    cache = Dict()
-    for x in embeddings
-        v = copy(x[:embedding])
-        k = copy(x)
-        delete!(k, :embedding)
-        cache[k] = v
+    embeddings = JLD2.load("$datadir/document_embeddings.jld2")
+    cached_model_id = embeddings["modelname"]
+    if cached_model_id != model_id
+        logtag("EMBED_DOCUMENTS", "using new model $model_id to replace $cached_model_id")
+        return Dict()
     end
-    cache
+    Dict(v["text"] => v["embedding"] for (_, v) in embeddings["documents"] if v["success"])
 end
 
 function json_to_document(x)
@@ -59,7 +73,6 @@ function json_to_document(x)
     push!(doc_parts, metadata_str)
     premise_str = something(x[:synopsis]..., "")
     push!(doc_parts, "# Premise\n$(premise_str)")
-    x[:characters]
     characters = []
     for y in first(x[:characters], 8)
         name = y[:name]
@@ -135,48 +148,20 @@ function sections_to_document(data_dict::Dict{String,String}, section_order::Vec
     String(take!(md_buffer))
 end
 
-function document_to_chunks(text::String)
-    # TODO unchunk once embeddings models get >2048 context limit
-    sections = document_to_sections(text)
-    metadata = sections_to_document(
-        sections,
-        ["Title", "Metadata", "Keywords", "Synopsis", "Characters", "Premise"],
-    )
-    analysis = sections_to_document(
-        sections,
-        [
-            "Title",
-            "Tagline",
-            "Metadata",
-            "Premise",
-            "Analysis",
-            "Characters",
-            "Reviews",
-            "Keywords",
-        ],
-    )
-    Dict("metadata" => metadata, "analysis" => analysis)
-end
-
-const secretdir = "../../../secrets"
-run(`gcloud auth login --quiet --cred-file=$secretdir/gcp.auth.json`)
-const gcp_project = read("$secretdir/gcp.project.txt", String)
-const gcp_region = "us-central1"
-get_gcp_access_token() = strip(read(`gcloud auth print-access-token`, String))
-gcp_access_token::String = get_gcp_access_token()
-
-function get_embedding(text::AbstractString, gcp_access_token::AbstractString)
-    if isempty(text)
-        return zeros(Float32, 3072), true
-    end
-    model_id = "gemini-embedding-001"
-    url = "https://$(gcp_region)-aiplatform.googleapis.com/v1/projects/$(gcp_project)/locations/$(gcp_region)/publishers/google/models/$(model_id):predict"
+function get_embedding(
+    title::AbstractString,
+    text::AbstractString,
+    gcp_access_token::AbstractString,
+)
+    @assert !(isempty(title) && isempty(text))
+    gcp_region = "global"
+    url = "https://aiplatform.googleapis.com/v1/projects/$(gcp_project)/locations/$gcp_region/publishers/google/models/$(model_id):embedContent"
     headers = Dict(
         "Authorization" => "Bearer $gcp_access_token",
         "Content-Type" => "application/json",
     )
     payload =
-        Dict("instances" => [Dict("task_type" => "RETRIEVAL_DOCUMENT", "content" => text)])
+        Dict("content" => Dict("parts" => [Dict("text" => "title: $title | text: $text")]))
     body = JSON3.write(payload)
     ret = HTTP.post(url, headers, body, status_exception = false)
     if HTTP.iserror(ret)
@@ -184,64 +169,88 @@ function get_embedding(text::AbstractString, gcp_access_token::AbstractString)
         return ret, false
     end
     data = JSON3.read(ret.body)
-    embs = only(data["predictions"])["embeddings"]
-    if embs["statistics"]["truncated"]
-        num_tokens = embs["statistics"]["token_count"]
-        println("truncated embedding with $num_tokens tokens")
+    if get(data, "truncated", false)
+        num_tokens = data["usageMetadata"]["totalTokenCount"]
+        logerror("truncated embedding with $num_tokens tokens")
     end
-    Float32.(embs["values"]), true
+    Float32.(data["embedding"]["values"]), true
 end
 
-function get_embedding(text::AbstractString)
-    global gcp_access_token
+function get_embedding(title::AbstractString, text::AbstractString)
     for retry = 1:3
-        ret, ok = get_embedding(text, gcp_access_token)
+        token = gcp_access_token
+        ret, ok = get_embedding(title, text, token)
         if ok
-            return ret
+            return ret, true
         else
-            gcp_access_token = get_gcp_access_token()
-            sleep(1)
+            sleep(10)
+            update_gcp_access_token(token)
         end
     end
-    nothing
+    logerror("text embedding failed for $title")
+    zeros(Float32, 3072), false
 end
 
 function save_embeddings()
-    emb_cache = get_embeddings_cache()
+    existing_embeddings = get_embeddings_cache()
     jsons = copy(JSON3.read("$datadir/summaries.json"))
-    cache_hits = 0
-    cache_misses = 0
-    @showprogress for json in jsons
-        if json in keys(emb_cache)
-            json[:embedding] = emb_cache[json]
-            cache_hits += 1
+    texts = ["" for _ = 1:length(jsons)]
+    embeddings = Any[nothing for _ = 1:length(jsons)]
+    cache_hits = [false for _ = 1:length(jsons)]
+    cache_misses = [false for _ = 1:length(jsons)]
+    @showprogress Threads.@threads for i = 1:length(jsons)
+        json = jsons[i]
+        text = sections_to_document(
+            document_to_sections(json_to_document(json)),
+            [
+                "Title",
+                "Tagline",
+                "Metadata",
+                "Premise",
+                "Analysis",
+                "Synopsis",
+                "Characters",
+                "Keywords",
+                "Reviews",
+            ],
+        )
+        texts[i] = text
+        if text in keys(existing_embeddings)
+            embeddings[i] = Dict(
+                "embedding" => existing_embeddings[text],
+                "keys" => json[:keys],
+                "success" => true,
+            )
+            cache_hits[i] = true
         else
-            text = json_to_document(json)
-            chunks = document_to_chunks(text)
-            d_emb = Dict()
-            for (k, v) in chunks
-                emb = get_embedding(v)
-                if isnothing(emb)
-                    logerror("text embedding failed for $k")
-                    emb = zeros(Float32, 3072)
-                end
-                d_emb[k] = emb
+            title = json[:title]
+            emb, ok = get_embedding(title, text)
+            embeddings[i] = Dict("embedding" => emb, "keys" => json[:keys], "success" => ok)
+            if ok
+                cache_misses[i] = true
             end
-            json[:embedding] = d_emb
-            cache_misses += 1
         end
     end
-    cache_hitrate = cache_hits / (cache_hits + cache_misses)
+    d = Dict()
+    for (t, e) in zip(texts, embeddings)
+        d[e["keys"]] =
+            Dict("text" => t, "embedding" => e["embedding"], "success" => e["success"])
+    end
+    num_cache_hits = sum(cache_hits)
+    num_cache_misses = sum(cache_misses)
+    cache_hitrate = num_cache_hits / (num_cache_hits + num_cache_misses)
+    num_fails = length(cache_hits) - num_cache_hits - num_cache_misses
     logtag(
         "EMBED_DOCUMENTS",
-        "cache hitrate: $cache_hitrate, hits: $cache_hits, misses: $cache_misses",
+        "cache hitrate: $cache_hitrate, hits: $num_cache_hits, misses: $num_cache_misses, fails: $num_fails",
     )
-    open("$datadir/embeddings.json", "w") do f
-        JSON3.write(f, jsons)
-    end
-    cmd = "rclone --retries=10 copyto $datadir/embeddings.json r2:rsys/database/import/embeddings.json"
-    run(`sh -c $cmd`)
-
+    JLD2.save(
+        "$datadir/document_embeddings.jld2",
+        Dict("documents" => d, "modelname" => model_id),
+    )
+    run(
+        `rclone copyto -Pv $datadir/document_embeddings.jld2 r2:rsys/database/import/document_embeddings.jld2`,
+    )
 end
 
 save_embeddings()

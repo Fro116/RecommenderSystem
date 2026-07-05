@@ -8,13 +8,13 @@ import ProgressMeter: @showprogress
 include("../../julia_utils/stdout.jl")
 include("../../Training/import_list.jl")
 
-const datadir = "../../../data/import/autocomplete"
+const datadir = "../../../data/import/autocomplete_users"
 
 qrun(x) = run(pipeline(x, stdout = devnull, stderr = devnull))
 
 function import_data()
     logtag("SAVE_AUTOCOMPLETE", "importing data")
-    rm(datadir, recursive=true, force=true)
+    rm(datadir, recursive = true, force = true)
     mkpath(datadir)
     qrun(`rclone --retries=10 copyto r2:rsys/database/lists/latest $datadir/latest`)
     tag = read("$datadir/latest", String)
@@ -37,10 +37,31 @@ function save_profiles()
             ts = parse(Float64, df.db_refreshed_at[i])
             data = decompress(df.data[i])
             user = import_profile(df.source[i], data, ts)
-            r = (user["source"], user["username"], ts, user["avatar"], user["last_online"], user["gender"], user["birthday"], user["created_at"])
+            r = (
+                user["source"],
+                user["username"],
+                ts,
+                user["avatar"],
+                user["last_online"],
+                user["gender"],
+                user["birthday"],
+                user["created_at"],
+            )
             records[i] = r
         end
-        df = DataFrames.DataFrame(records, [:source, :username, :accessed_at, :avatar, :last_online, :gender, :birthday, :created_at])
+        df = DataFrames.DataFrame(
+            records,
+            [
+                :source,
+                :username,
+                :accessed_at,
+                :avatar,
+                :last_online,
+                :gender,
+                :birthday,
+                :created_at,
+            ],
+        )
         CSV.write(
             "$datadir/profiles.$idx.csv",
             df,
@@ -89,11 +110,7 @@ function insert!(node::TrieNode{V}, username::String, meta::Dict{String,V}) wher
     current.metadata = meta
 end
 
-function autocomplete(
-    ac::AutoComplete{V},
-    prefix::String,
-    N::Int
-) where {V}
+function autocomplete(ac::AutoComplete{V}, prefix::String, N::Int) where {V}
     current = ac.root
     for c in prefix
         if haskey(current.children, c)
@@ -133,19 +150,25 @@ function text_encode(data)
     )
 end
 
-function save_user_autcompletes()
+function save_user_autocompletes()
     logtag("SAVE_AUTOCOMPLETE", "saving user autocompletes")
+    df = CSV.read("$datadir/profiles.csv", DataFrames.DataFrame)
+    filter!(x -> !ismissing(x.username), df)
+    split_key(source, username) = string(source) * first(lowercase(username))
+    df[!, "split_key"] = split_key.(df.source, df.username)
+    Threads.@threads for (i, key) in collect(Iterators.enumerate(Set(df.split_key)))
+        save_user_autocomplete_split(filter(x -> x.split_key == key, df), string(i))
+    end
+end
+
+function save_user_autocomplete_split(df, suffix)
     source_map = Dict("mal" => 0, "anilist" => 1, "kitsu" => 2, "animeplanet" => 3)
     inv_source_map = Dict(v => k for (k, v) in source_map)
-    df = CSV.read("$datadir/profiles.csv", DataFrames.DataFrame)
     d = Dict()
     for v in values(source_map)
         d[v] = Dict{String,Dict{String,Any}}()
     end
-    @showprogress for i = 1:DataFrames.nrow(df)
-        if ismissing(df.username[i])
-            continue
-        end
+    for i = 1:DataFrames.nrow(df)
         d[df.source[i]][lowercase(df.username[i])] = Dict(
             "username" => df.username[i],
             "avatar" => df.avatar[i],
@@ -154,42 +177,49 @@ function save_user_autcompletes()
             "gender" => df.gender[i],
             "birthday" => df.birthday[i],
             "created_at" => df.created_at[i],
-            "sortkey" => (!isnothing(df.avatar[i]) && !ismissing(df.avatar[i]), df.accessed_at[i]),
+            "sortkey" => (
+                !isnothing(df.avatar[i]) && !ismissing(df.avatar[i]),
+                df.accessed_at[i],
+            ),
         )
     end
     acs = Dict(v => AutoComplete(d[v]) for v in values(source_map))
     seen = Dict(v => Set() for v in values(source_map))
-    batches = collect(Iterators.partition(1:DataFrames.nrow(df), 1_000_000))
-    @showprogress for b = 1:length(batches)
-        batch = batches[b]
-        records = []
-        for i in batch
-            if ismissing(df.username[i])
+    records = []
+    for i = 1:DataFrames.nrow(df)
+        source = df.source[i]
+        s = inv_source_map[source]
+        prefix = ""
+        for c in lowercase(df.username[i])
+            prefix *= c
+            if prefix in seen[source]
                 continue
             end
-            source = df.source[i]
-            s = inv_source_map[source]
-            prefix = ""
-            for c in lowercase(df.username[i])
-                prefix *= c
-                if prefix in seen[source]
-                    continue
-                end
-                push!(seen[source], prefix)
-                vals = autocomplete(acs[source], prefix, 10)
-                vals = [Dict(k => x[2][k] for k in ["username", "avatar", "last_online", "gender", "birthday", "created_at"]) for x in vals]
-                push!(records, (s, prefix, text_encode(vals)))
-            end
+            push!(seen[source], prefix)
+            vals = autocomplete(acs[source], prefix, 10)
+            vals = [
+                Dict(
+                    k => x[2][k] for k in [
+                        "username",
+                        "avatar",
+                        "last_online",
+                        "gender",
+                        "birthday",
+                        "created_at",
+                    ]
+                ) for x in vals
+            ]
+            push!(records, (s, prefix, text_encode(vals)))
         end
-        ac_df = DataFrames.DataFrame(records, [:source, :prefix, :data])
-        CSV.write("$datadir/user_autocomplete.$b.csv", ac_df)
     end
+    ac_df = DataFrames.DataFrame(records, [:source, :prefix, :data])
+    CSV.write("$datadir/user_autocomplete.$suffix.csv", ac_df)
 end
 
 function upload_autocompletes()
     logtag("SAVE_AUTOCOMPLETE", "uploading autocompletes")
     cmds = [
-        "cd ../../../data/import/autocomplete",
+        "cd $datadir",
         "df=user_autocomplete",
         "db=autocomplete_users",
         raw"mlr --csv cat $df.*.csv > $df.csv",
@@ -204,5 +234,5 @@ end
 
 import_data()
 save_profiles()
-save_user_autcompletes()
+save_user_autocompletes()
 upload_autocompletes()

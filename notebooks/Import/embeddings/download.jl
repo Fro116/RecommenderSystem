@@ -8,7 +8,7 @@ import ProgressMeter: @showprogress
 
 include("../../julia_utils/stdout.jl")
 
-const datadir = "../../../data/import/embeddings/documents"
+const datadir = "../../../data/import/embeddings"
 const mediums = ["manga", "anime"]
 const sources = ["mal", "anilist", "kitsu", "animeplanet"]
 
@@ -20,7 +20,8 @@ function download_data()
     files = vcat(
         ["$m.groups.csv" for m in mediums],
         ["$(s)_$(m).json" for s in sources for m in mediums],
-        ["embeddings.json"],
+        ["$(x)_embeddings.jld2" for x in ["document", "image", "query"]],
+        ["summaries.json", "images.csv"],
     )
     for fn in files
         cmd = "$retrieval/$fn $datadir/$fn"

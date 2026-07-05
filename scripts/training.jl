@@ -29,7 +29,7 @@ function run_training()
     if Dates.dayofmonth(Dates.today()) ∉ [8, 23]
         return
     end
-    for x in ["media", "autocomplete", "autocomplete_items", "embeddings"]
+    for x in ["media", "autocomplete_users", "autocomplete_items", "embeddings"]
         import_db(x)
     end
     lock(gpulock) do

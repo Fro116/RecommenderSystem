@@ -4,32 +4,43 @@ import HTTP
 import JLD2
 import JSON3
 import Memoize: @memoize
-import ProgressMeter: @showprogress
+import ProgressMeter: @showprogress, next!
 include("../../julia_utils/stdout.jl")
 
-const datadir = "../../../data/import/embeddings/documents"
+const datadir = "../../../data/import/embeddings"
 const secretdir = "../../../secrets"
+const gcp_project = read("$secretdir/gcp.project.txt", String)
+const model_id = "gemini-embedding-2"
+const gcp_lock = ReentrantLock()
 
-function get_gcp_access_token()
-    run(`gcloud auth login --quiet --cred-file=$secretdir/gcp.auth.json`)
-    strip(read(`gcloud auth print-access-token`, String))
+gcp_access_token::String = ""
+function update_gcp_access_token(token::String)
+    global gcp_access_token
+    lock(gcp_lock) do
+        if token != gcp_access_token
+            return
+        end
+        run(`gcloud auth login --quiet --cred-file=$secretdir/gcp.auth.json`)
+        gcp_access_token = strip(read(`gcloud auth print-access-token`, String))
+    end
 end
-gcp_access_token::String = get_gcp_access_token()
+update_gcp_access_token(gcp_access_token)
 
 function get_text_embedding(text::AbstractString, gcp_access_token::AbstractString)
     if isempty(text)
         return zeros(Float32, 3072), true
     end
-    gcp_project = read("$secretdir/gcp.project.txt", String)
-    gcp_region = read("$secretdir/gcp.region.txt", String)
-    model_id = "gemini-embedding-001"
-    url = "https://$(gcp_region)-aiplatform.googleapis.com/v1/projects/$(gcp_project)/locations/$(gcp_region)/publishers/google/models/$(model_id):predict"
+    gcp_region = "global"
+    url = "https://aiplatform.googleapis.com/v1/projects/$(gcp_project)/locations/$gcp_region/publishers/google/models/$(model_id):embedContent"
     headers = Dict(
         "Authorization" => "Bearer $gcp_access_token",
         "Content-Type" => "application/json",
     )
-    payload =
-        Dict("instances" => [Dict("task_type" => "RETRIEVAL_QUERY", "content" => text)])
+    payload = Dict(
+        "content" => Dict(
+            "parts" => [Dict("text" => "task: search result | query: $text")],
+        ),
+    )
     body = JSON3.write(payload)
     ret = HTTP.post(url, headers, body, status_exception = false)
     if HTTP.iserror(ret)
@@ -37,20 +48,23 @@ function get_text_embedding(text::AbstractString, gcp_access_token::AbstractStri
         return ret, false
     end
     data = JSON3.read(ret.body)
-    embs = only(data["predictions"])["embeddings"]
-    Float32.(embs["values"]), true
+    if get(data, "truncated", false)
+        num_tokens = data["usageMetadata"]["totalTokenCount"]
+        logerror("truncated embedding with $num_tokens tokens")
+    end
+    Float32.(data["embedding"]["values"]), true
 end
 
 function get_text_embedding(text::AbstractString)
-    global gcp_access_token
     for attempt = 1:3
+        token = gcp_access_token
         try
-            resp, ok = get_text_embedding(text, gcp_access_token)
+            resp, ok = get_text_embedding(text, token)
             @assert ok
             return resp, ok
         catch
-            sleep(1)
-            gcp_access_token = get_gcp_access_token()
+            sleep(10)
+            update_gcp_access_token(token)
         end
     end
     logerror("get_text_embedding failed for $text")
@@ -112,7 +126,7 @@ function get_queries(json)
 end
 
 function get_queries()
-    json = open("$datadir/embeddings.json") do f
+    json = open("$datadir/summaries.json") do f
         JSON3.read(f)
     end
     queries = Set()
@@ -125,38 +139,48 @@ function get_queries()
 end
 
 function embed_queries()
-    queries = get_queries()
-    run(
-        `rclone --retries=10 copyto -Pv r2:rsys/database/import/search_embeddings.jld2 $datadir/search_embeddings.jld2`,
-    )
-    if ispath("$datadir/search_embeddings.jld2")
-        existing_queries = JLD2.load("$datadir/search_embeddings.jld2")["queries"]
-    else
-        existing_queries = Dict()
+    queries = collect(get_queries())
+    existing_queries = Dict()
+    if ispath("$datadir/query_embeddings.jld2")
+        query_embeddings = JLD2.load("$datadir/query_embeddings.jld2")
+        cached_model_id = get(query_embeddings, "modelname", nothing) # todo remove guard
+        if cached_model_id == model_id
+            existing_queries = query_embeddings["queries"]
+        else
+            logtag(
+                "EMBED_QUERIES",
+                "using new model $model_id to replace $cached_model_id",
+            )
+        end
     end
-    cache_hits = 0
-    cache_misses = 0
-    d = Dict()
-    @showprogress for q in queries
+    embeddings = Any[nothing for _ = 1:length(queries)]
+    cache_hits = [false for _ = 1:length(queries)]
+    cache_misses = [false for _ = 1:length(queries)]
+    @showprogress Threads.@threads for i = 1:length(queries)
+        q = queries[i]
         if q in keys(existing_queries)
-            d[q] = existing_queries[q]
-            cache_hits += 1
+            embeddings[i] = existing_queries[q]
+            cache_hits[i] = true
         else
             emb, ok = get_text_embedding(q)
             if ok
-                d[q] = emb
+                embeddings[i] = emb
+                cache_misses[i] = true
             end
-            cache_misses += 1
         end
     end
-    cache_hitrate = cache_hits / (cache_hits + cache_misses)
+    d = Dict(k => v for (k, v) in zip(queries, embeddings) if !isnothing(v))
+    num_cache_hits = sum(cache_hits)
+    num_cache_misses = sum(cache_misses)
+    cache_hitrate = num_cache_hits / (num_cache_hits + num_cache_misses)
+    num_fails = length(cache_hits) - num_cache_hits - num_cache_misses
     logtag(
         "EMBED_QUERIES",
-        "cache hitrate: $cache_hitrate, hits: $cache_hits, misses: $cache_misses",
+        "cache hitrate: $cache_hitrate, hits: $num_cache_hits, misses: $num_cache_misses, fails: $num_fails",
     )
-    JLD2.save("$datadir/search_embeddings.jld2", Dict("queries" => d))
+    JLD2.save("$datadir/query_embeddings.jld2", Dict("queries" => d, "modelname" => model_id))
     run(
-        `rclone copyto -Pv $datadir/search_embeddings.jld2 r2:rsys/database/import/search_embeddings.jld2`,
+        `rclone copyto -Pv $datadir/query_embeddings.jld2 r2:rsys/database/import/query_embeddings.jld2`,
     )
 end
 

@@ -4,10 +4,10 @@ import JSON3
 import Random
 include("../../julia_utils/stdout.jl")
 
-const datadir = "../../../data/import/embeddings/documents"
+const datadir = "../../../data/import/embeddings"
 const secretdir = "../../../secrets"
-const model_id = "gemini-3-flash-preview"
-const region = "global" # necessary to use preview models
+const model_id = "gemini-3.5-flash"
+const region = "global"
 
 function truncate_array(arr, p)
     n = Int(round(length(arr) * p))
@@ -100,17 +100,15 @@ function sanitize_key(json)
 end
 
 function get_generations_cache()
-    if ispath("$datadir/embeddings.json")
-        generations = JSON3.read("$datadir/embeddings.json")
+    if ispath("$datadir/summaries.json")
+        generations = JSON3.read("$datadir/summaries.json")
     else
         generations = []
     end
+    cached_model_ids =
+        Set(x[:llm_summary][:modelname] for x in generations if !isnothing(x[:llm_summary]))
+    cached_model_id = isempty(cached_model_ids) ? nothing : only(cached_model_ids)
     cached_generations = Dict()
-    cached_model_id = only(
-        Set(
-            x[:llm_summary][:modelname] for x in generations if !isnothing(x[:llm_summary])
-        ),
-    )
     if model_id != cached_model_id
         logtag(
             "SUMMARIZE_DOCUMENTS",
@@ -122,12 +120,10 @@ function get_generations_cache()
         v = x[:llm_summary]
         k = copy(x)
         delete!(k, :llm_summary)
-        delete!(k, :embedding)
         cached_generations[k] = v
     end
     cached_generations
 end
-
 
 function upload_batch_job()
     bucket = read("$secretdir/gcp.bucket.txt", String)
@@ -229,6 +225,16 @@ function wait_on_batch_job(batch_job_id)
     run(`sh -c $cmd`)
 end
 
+function cleanup_batch_job()
+    bucket = read("$secretdir/gcp.bucket.txt", String)
+    cmds = [
+        "gcloud auth login --quiet --cred-file=$secretdir/gcp.auth.json",
+        "gcloud storage rm --quiet --recursive $bucket/embeddings",
+    ]
+    cmd = join(cmds, " && ")
+    run(`sh -c $cmd`)
+end
+
 function save_generations()
     generations_cache = get_generations_cache()
     fns = Glob.glob("$datadir/batch/*/predictions.jsonl")
@@ -243,7 +249,10 @@ function save_generations()
             try
                 text = only(only(json[:response][:candidates])[:content][:parts])[:text]
                 modelname = json[:response][:modelVersion]
-                generations_cache[input_json] = Dict(:text => text, :modelname => modelname)
+                if modelname != model_id
+                    logerror("received modelname $modelname instead of $model_id")
+                end
+                generations_cache[input_json] = Dict(:text => text, :modelname => model_id)
             catch
                 generations_cache[input_json] = nothing
                 fails += 1
@@ -266,9 +275,11 @@ function save_generations()
             push!(jsons, json)
         end
     end
+    json_str = JSON3.write(jsons)
     open("$datadir/summaries.json", "w") do f
-        JSON3.write(f, jsons)
+        write(f, json_str)
     end
+    run(`rclone copyto -Pv $datadir/summaries.json r2:rsys/database/import/summaries.json`)
 end
 
 function summarize_documents()
@@ -278,6 +289,8 @@ function summarize_documents()
     if num_jobs > 0
         batch_job_id = queue_batch_job()
         wait_on_batch_job(batch_job_id)
+    else
+        cleanup_batch_job()
     end
     save_generations()
 end

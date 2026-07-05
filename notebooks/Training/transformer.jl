@@ -60,7 +60,7 @@ function save_media_embeddings()
         m = Dict(0 => "manga", 1 => "anime")[medium]
         data = JSON3.read("$datadir/$m.json")
         for x in data
-            embs = sum(values(x[:embedding])) ./ length(x[:embedding])
+            embs = x[:embedding][:text_embedding]
             has_sd, sd = optdate(x[:metadata][:dates][:startdate])
             has_ed, ed = optdate(x[:metadata][:dates][:enddate])
             idx = x[:matchedid]+1 + ((medium == 1) ? num_items(0) : 0)

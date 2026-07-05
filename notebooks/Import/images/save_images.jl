@@ -29,38 +29,54 @@ function import_data()
     )
 end
 
-function get_diffs()
-    df = CSV.read("$datadir/images.csv", DataFrames.DataFrame)
+function read_images_csv()
+    df = CSV.read(
+        "$datadir/images.csv",
+        DataFrames.DataFrame,
+        types = Dict("itemid" => String),
+    )
+    filter(x -> x.saved, df)
+end
+
+read_srimages_csv() = CSV.read(
+    "$datadir/srimages.csv",
+    DataFrames.DataFrame,
+    types = Dict("imageid" => String, "itemid" => String),
+)
+
+function get_new_hashes()
+    df = read_images_csv()
     hashes = Dict{String,String}()
-    src_exts = Dict()
-    src_images = Set()
-    dst_images = Set()
     for i = 1:DataFrames.nrow(df)
-        fn = "$datadir/images/$(df.filename[i])"
-        if !df.saved[i]
-            continue
-        end
-        name, ext = split(df.filename[i], ".")
-        src_exts[name] = ext
-        hashes[name] = df.imagehash[i]
-        push!(src_images, name)
+        imageid, _ = split(df.filename[i], ".")
+        hashes[imageid] = df.imagehash[i]
     end
+    hashes
+end
+
+function get_old_hashes()
+    hashes = Dict{String,String}()
     if ispath("$datadir/srimages.csv")
-        srdf = CSV.read("$datadir/srimages.csv", DataFrames.DataFrame)
+        srdf = read_srimages_csv()
         for i = 1:DataFrames.nrow(srdf)
-            name, _, _ = split(srdf.filename[i], ".")
-            if srdf.imagehash[i] != get(hashes, name, nothing)
-                logerror("mismatched image hash for $(srdf.source[i]) $(srdf.itemid[i]) $name")
-                continue
-            end
-            push!(dst_images, name)
+            hashes[srdf.imageid[i]] = srdf.imagehash[i]
         end
     end
-    matched = intersect(src_images, dst_images)
-    to_add = ["$k.$(src_exts[k])" for k in setdiff(src_images, dst_images)]
-    to_delete =
-        ["$k.$m.webp" for k in setdiff(dst_images, src_images) for m in ["large"]]
-    matched, to_add, to_delete
+    hashes
+end
+
+function get_new_images()
+    new_hashes = get_new_hashes()
+    old_hashes = get_old_hashes()
+    df = read_images_csv()
+    new_images = []
+    for i = 1:DataFrames.nrow(df)
+        imageid, _ = split(df.filename[i], ".")
+        if get(old_hashes, imageid, nothing) != new_hashes[imageid]
+            push!(new_images, df.filename[i])
+        end
+    end
+    collect(Set(new_images))
 end
 
 function downsample(images)
@@ -86,7 +102,7 @@ function super_resolution(src, dst)
             "python3 -m waifu2x.cli --style art_scan --method $model --noise-level 3 --batch-size 16 --gpu 0 -i $abssrc -o $absdst",
         ]
         cmd = join(cmds, " && ")
-        for retry in 1:3
+        for retry = 1:3
             try
                 run(`sh -c $cmd`)
                 break
@@ -108,7 +124,7 @@ end
 
 function sr_images(images)
     tmpdir = "$datadir/tmp"
-    rm("$datadir/srimages", recursive=true, force=true)
+    rm("$datadir/srimages", recursive = true, force = true)
     mkpath("$datadir/srimages")
     @showprogress for batch in collect(Iterators.partition(images, 1024))
         rm(tmpdir, recursive = true, force = true)
@@ -135,9 +151,17 @@ function sr_images(images)
     end
 end
 
-function save_image_metadata(to_delete)
-    df = CSV.read("$datadir/images.csv", DataFrames.DataFrame, types = Dict("itemid" => String))
-    df = filter(x -> x.saved, df)
+function save_image_metadata()
+    # existing images
+    hashes = get_new_hashes()
+    if ispath("$datadir/srimages.csv")
+        srdf = read_srimages_csv()
+        filter(x -> x.imageid ∉ keys(hashes), srdf)
+    else
+        srdf = DataFrames.DataFrame()
+    end
+    # newly added images
+    df = read_images_csv()
     sizes = ["large"]
     rows = Any[nothing for _ = 1:DataFrames.nrow(df)*length(sizes)]
     Threads.@threads for i = 1:DataFrames.nrow(df)
@@ -145,6 +169,7 @@ function save_image_metadata(to_delete)
         medium = df.medium[i]
         itemid = df.itemid[i]
         imagehash = df.imagehash[i]
+        coverimage = df.coverimage[i]
         name, _ = split(df.filename[i], ".")
         for j = 1:length(sizes)
             basename = "$name.$(sizes[j]).webp"
@@ -152,41 +177,44 @@ function save_image_metadata(to_delete)
                 continue
             end
             height, width = size(Images.load("$datadir/srimages/$basename"))
-            rows[length(sizes)*(i-1)+j] =
-                (source, medium, itemid, "", basename, height, width, imagehash)
+            rows[length(sizes)*(i-1)+j] = (
+                source,
+                medium,
+                itemid,
+                split(basename, ".")[1],
+                basename,
+                coverimage,
+                height,
+                width,
+                imagehash,
+            )
         end
     end
     rows = filter(x -> !isnothing(x), rows)
-    srdf = CSV.read(
-        "$datadir/srimages.csv",
-        DataFrames.DataFrame,
-        types = Dict("imageid" => String, "itemid" => String),
-    )
     if !isempty(rows)
-        srdf_to_add = DataFrames.DataFrame(
+        to_add = DataFrames.DataFrame(
             rows,
-            [:source, :medium, :itemid, :imageid, :filename, :height, :width, :imagehash],
+            [
+                :source,
+                :medium,
+                :itemid,
+                :imageid,
+                :filename,
+                :coverimage,
+                :height,
+                :width,
+                :imagehash,
+            ],
         )
-        srdf = vcat(srdf, srdf_to_add)
+        srdf = vcat(to_add, srdf)
     end
-    srdf[:, "imageid"] .= map(x -> split(x, ".")[1], srdf.filename)
-    filter!(x -> x.filename ∉ to_delete, srdf)
     CSV.write("$datadir/srimages.csv", sort(srdf))
 end
 
-function upload_images(to_add, to_delete)
+function upload_images(to_add)
     if !isempty(to_add) && !isempty(readdir("$datadir/srimages"))
         logtag("IMAGES", "uploading images")
         run(`rclone --retries=10 copyto $datadir/srimages r2:cdn/images/cards`)
-    end
-    if !isempty(to_delete)
-        open("$datadir/todelete", "w") do f
-            for fn in to_delete
-                write(f, "$fn\n")
-            end
-        end
-        logtag("IMAGES", "deleting stale images")
-        run(`rclone --retries=10 delete r2:cdn/images/cards --files-from=$datadir/todelete --no-traverse`)
     end
     qrun(
         `rclone --retries=10 copyto $datadir/srimages.csv r2:rsys/database/import/images.csv`,
@@ -200,18 +228,15 @@ function encode_images()
     mkpath(datadir)
     import_data()
     run(`python hash.py`)
-    matched, to_add, to_delete = get_diffs()
-    logtag(
-        "IMAGES",
-        "keeping $(length(matched)) adding $(length(to_add)) and deleting $(length(to_delete))",
-    )
-    open("$datadir/matched.txt", "w") do f foreach(x -> println(f, x), matched) end
-    open("$datadir/to_add.txt", "w") do f foreach(x -> println(f, x), to_add) end
-    open("$datadir/to_delete.txt", "w") do f foreach(x -> println(f, x), to_delete) end
+    to_add = get_new_images()
+    logtag("IMAGES", "adding $(length(to_add)) images")
+    open("$datadir/to_add.txt", "w") do f
+        foreach(x -> println(f, x), to_add)
+    end
     downsample(to_add)
     sr_images(to_add)
-    save_image_metadata(to_delete)
-    upload_images(to_add, to_delete)
+    save_image_metadata()
+    upload_images(to_add)
     rm(datadir, recursive = true, force = true)
 end
 
