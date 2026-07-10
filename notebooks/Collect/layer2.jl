@@ -6,7 +6,7 @@ const LAYER_1_URLS = split(ARGS[3], ",")
 const DEFAULT_IMPERSONATE = parse(Bool, ARGS[4])
 const DEFAULT_TIMEOUT = parse(Int, ARGS[5])
 const USE_SHARED_IPS = parse(Bool, ARGS[6])
-const API_VERSION = "5.3.0"
+const API_VERSION = "5.3.1"
 const ANIMEPLANET_LOGIN = false
 
 import CSV
@@ -595,6 +595,12 @@ function mal_get_media(resource::Resource, medium::String, itemid::Integer)
         logstatus("mal_get_media", r, url)
         return HTTP.Response(r)
     end
+    function cat_uniq(x, y)
+        if isnothing(x)
+            return y
+        end
+        vcat([x], [v for v in y if v != x])
+    end
     json = JSON3.read(r.body)
     details = Dict(
         "version" => API_VERSION,
@@ -610,7 +616,7 @@ function mal_get_media(resource::Resource, medium::String, itemid::Integer)
         "updated_at" => optget(json, "updated_at"),
         "media_type" => json["media_type"],
         "nsfw" => json["nsfw"],
-        "pictures" => json["pictures"],
+        "pictures" => cat_uniq(optget(json, "main_picture"), json["pictures"]),
         "background" => json["background"],
         "recommendations" => [
             Dict(

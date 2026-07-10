@@ -21,18 +21,19 @@ function docker_login()
 end
 
 function is_image_up_to_date()
-    function get_digest(output)
+    function get_digest(cmd)
         try
+            output = read(cmd, String)
             match(r"sha256:[0-9a-f]{64}", output).match
         catch e
-            logerror(e)
+            logerror("$e")
             ""
         end
     end
     name = docker_login()
     fmt = "'{{index .RepoDigests 0}}'"
-    local_digest = get_digest(read(`docker inspect --format=$fmt $name`, String))
-    remote_digest = get_digest(read(`docker buildx imagetools inspect $name`, String))
+    local_digest = get_digest(`docker inspect --format=$fmt $name`)
+    remote_digest = get_digest(`docker buildx imagetools inspect $name`)
     local_digest == remote_digest
 end
 

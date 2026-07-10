@@ -30,6 +30,7 @@ function get_mal_urls()
         if ismissing(json)
             continue
         end
+        is_cover_image = true
         for img in JSON3.read(json)
             url = nothing
             for k in [:large, :medium]
@@ -40,11 +41,12 @@ function get_mal_urls()
             end
             if !isnothing(url)
                 url = split(url, "?")[1]
-                push!(urls, ("mal", df.medium[i], df.itemid[i], url))
+                push!(urls, ("mal", df.medium[i], df.itemid[i], url, is_cover_image))
+                is_cover_image = false
             end
         end
     end
-    DataFrames.DataFrame(urls, [:source, :medium, :itemid, :imageurl])
+    DataFrames.DataFrame(urls, [:source, :medium, :itemid, :imageurl, :coverimage])
 end
 
 function get_anilist_urls()
@@ -65,10 +67,10 @@ function get_anilist_urls()
         end
         if !isnothing(url)
             url = split(url, "?")[1]
-            push!(urls, ("anilist", df.medium[i], df.itemid[i], url))
+            push!(urls, ("anilist", df.medium[i], df.itemid[i], url, true))
         end
     end
-    DataFrames.DataFrame(urls, [:source, :medium, :itemid, :imageurl])
+    DataFrames.DataFrame(urls, [:source, :medium, :itemid, :imageurl, :coverimage])
 end
 
 function get_kitsu_urls()
@@ -89,10 +91,10 @@ function get_kitsu_urls()
         end
         if !isnothing(url)
             url = split(url, "?")[1]
-            push!(urls, ("kitsu", df.medium[i], df.itemid[i], url))
+            push!(urls, ("kitsu", df.medium[i], df.itemid[i], url, true))
         end
     end
-    DataFrames.DataFrame(urls, [:source, :medium, :itemid, :imageurl])
+    DataFrames.DataFrame(urls, [:source, :medium, :itemid, :imageurl, :coverimage])
 end
 
 function get_animeplanet_urls()
@@ -104,15 +106,12 @@ function get_animeplanet_urls()
             continue
         end
         url = split(url, "?")[1]
-        push!(urls, ("animeplanet", df.medium[i], df.itemid[i], url))
+        push!(urls, ("animeplanet", df.medium[i], df.itemid[i], url, true))
     end
-    DataFrames.DataFrame(urls, [:source, :medium, :itemid, :imageurl])
+    DataFrames.DataFrame(urls, [:source, :medium, :itemid, :imageurl, :coverimage])
 end
 
 function get_path(df, i)
-    source = df.source[i]
-    medium = df.medium[i]
-    itemid = df.itemid[i]
     url = df.imageurl[i]
     stem = split(url, ".")[end]
     hash = shahash(url)
