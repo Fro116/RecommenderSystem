@@ -1,5 +1,5 @@
 # Anime Recommendations and Manga Recommendations
-This is a recommender system for anime and manga that is trained on over 1.8 billion user-item interactions from MyAnimeList, AniList, Kitsu, and Anime-Planet.
+This is a recommender system for anime and manga that is trained on over 2 billion user-item interactions from MyAnimeList, AniList, Kitsu, and Anime-Planet.
 
 Details on the recommender system can be found by inspecting the source code at `notebooks`. The main steps are
 1. Stitching multiple snapshots of a user's list to create a timestamped history of interactions.

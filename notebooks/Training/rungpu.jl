@@ -14,12 +14,12 @@ function write_entrypoint(num_gpus)
 end
 
 function provision_instance()
-    get_instances() = copy(JSON3.parse(read(`vastai show instances --raw`, String)))
+    get_instances() = copy(JSON3.parse(read(`vastai show instances-v1 --raw`, String))[:instances])
     @assert isempty(get_instances()) "instance already exists"
     for gpu_config in ["8xB200", "4xB200", "8xH100"]
         node_price = Dict(
-            "8xB200" => 48,
-            "4xB200" => 24,
+            "8xB200" => 64,
+            "4xB200" => 32,
             "8xH100" => 32,
         )[gpu_config]
         duration = Dict(
@@ -32,10 +32,13 @@ function provision_instance()
             "B200" => """gpu_name in ["B200"]""",
             "H100" => """gpu_name in ["H200", "H100_SXM"]""",
         )[gpu_type]
+        ceil_str(x) = string(round(x, digits=1, RoundUp))
+        duration_days = ceil_str(duration/24)
+        duration_query = "duration>=$duration_days"
         offers = copy(
             JSON3.parse(
                 read(
-                    `vastai search offers num_gpus=$num_gpus $gpu_query 'cuda_max_good>=12.8' datacenter=true verified=true --raw`,
+                    `vastai search offers num_gpus=$num_gpus $gpu_query $duration_query 'cuda_max_good>=12.8' datacenter=true verified=true --raw`,
                     String,
                 ),
             ),
@@ -46,7 +49,7 @@ function provision_instance()
             offer_id = string(x[:id])
             if x[:dph_total] > node_price
                 logerror(
-                    "skipping $instance_id because price $(x[:dph_total]) > $node_price",
+                    "skipping $offer_id because price $(x[:dph_total]) > $node_price",
                 )
                 continue
             end
@@ -71,7 +74,7 @@ function launch_job(instance_id::String, duration::Real)
     run(`vastai start instance $instance_id`)
     logtag("RUNGPU", "waiting for instance to reach 'running' state ...")
     started = false
-    max_wait = time() + 300
+    max_wait = time() + 600
     while time() < max_wait
         if get_instance_status(instance_id) == "running"
             started = true
@@ -108,7 +111,7 @@ function launch_job(instance_id::String, duration::Real)
 end
 
 function destroy_instance(instance_id)
-    run(`vastai destroy instance $instance_id`)
+    run(`vastai destroy instance $instance_id -y`)
 end
 
 function launch_job()

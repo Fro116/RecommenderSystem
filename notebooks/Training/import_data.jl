@@ -1,5 +1,6 @@
 import CSV
 import DataFrames
+import JLD2
 import Glob
 import Memoize: @memoize
 import MsgPack
@@ -31,8 +32,8 @@ function download_data(datetag::AbstractString)
         ["$(s)_$(m).csv" for s in SOURCES for m in MEDIUMS],
         ["$m.groups.csv" for m in MEDIUMS],
         ["$(s)_media_relations.csv" for s in SOURCES],
-        ["images.csv"],
-        ["embeddings.json", "search_embeddings.jld2"],
+        ["summaries.json", "images.csv"],
+        ["$(x)_embeddings.jld2" for x in ["document", "image", "query"]],
     )
     for fn in files
         cmd = "$retrieval/$fn $datadir/$fn"
@@ -70,14 +71,71 @@ function shuffle_col!(df, col)
     df[:, col] .= map(x -> remap[x], df[:, col])
 end
 
+function add_text_embeddings(df)
+    document_embeddings = JLD2.load("$datadir/document_embeddings.jld2")
+    for i = 1:length(df)
+        x = copy(df[i])
+        x[:text_embedding] = document_embeddings["documents"][x[:keys]]
+        df[i] = x
+    end
+    df
+end
+
+function add_image_embeddings(df)
+    image_embeddings = JLD2.load("$datadir/image_embeddings.jld2")
+    image_df = CSV.read(
+        "$datadir/images.csv",
+        DataFrames.DataFrame,
+        types = Dict("imageid" => String),
+    )
+    coverimage_hashes = Dict()
+    for i = 1:DataFrames.nrow(image_df)
+        if !image_df.coverimage[i]
+            continue
+        end
+        key = [image_df.medium[i], image_df.source[i], image_df.itemid[i]]
+        val = get(image_embeddings["images"], image_df.imagehash[i], nothing)
+        if isnothing(val)
+            logerror("could not find image embedding for $key $(image_df.imagehash[i])")
+        else
+            coverimage_hashes[key] = val
+        end
+    end
+    num_missing = 0
+    for i = 1:length(df)
+        x = copy(df[i])
+        found = false
+        x[:image_embedding] = zeros(Float32, 3072)
+        for k in x[:keys]
+            if k in keys(coverimage_hashes)
+                x[:image_embedding] = coverimage_hashes[k]
+                found = true
+                break
+            end
+        end
+        if !found
+            num_missing += 1
+        end
+        df[i] = x
+    end
+    @assert num_missing / length(df) <= 0.01
+    logtag(
+        "IMPORT_DATA",
+        "could not find image embeddings for $(num_missing / length(df)) items",
+    )
+    df
+end
+
 function get_media_groups(medium::AbstractString)
     fn = "$datadir/$medium.groups.csv"
-    groups = copy(JSON3.read("$datadir/embeddings.json"))
+    groups = copy(JSON3.read("$datadir/summaries.json"))
     groups = [x for x in groups if x[:metadata][:medium] == medium]
     mids = Random.shuffle(1:length(groups))
     for i = 1:length(groups)
         groups[i][:matchedid] = mids[i]
     end
+    add_text_embeddings(groups)
+    add_image_embeddings(groups)
     open("$datadir/$medium.json", "w") do f
         JSON3.write(f, groups)
     end
@@ -225,7 +283,7 @@ function import_data(datetag::AbstractString)
     save_template = "rclone --retries=10 copyto {INPUT} r2:rsys/database/training/{OUTPUT}"
     files = vcat(
         ["$m.csv" for m in MEDIUMS],
-        ["list_tag", "images.csv", "media_relations.csv"],
+        ["list_tag", "images.csv", "media_relations.csv", "query_embeddings.jld2"],
         ["$m.json" for m in MEDIUMS],
     )
     for f in files
