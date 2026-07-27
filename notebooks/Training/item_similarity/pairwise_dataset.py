@@ -1,14 +1,15 @@
-import json
 import h5py
+import ijson
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import numpy as np
 
 datadir = "../../../data/training"
 
 with open("../transformer.model.py") as f:
     exec(f.read())
+
 
 def get_transformer_embeddings():
     device = "cpu"
@@ -27,35 +28,36 @@ def get_transformer_embeddings():
     n_1 = model.config["vocab_sizes"]["1_matchedid"]
     embs = model.item_embedding(torch.arange(0, n_0 + n_1))
     return {
-        "masked.0": embs[:n_0, :].detach().numpy(),
-        "masked.1": embs[n_0:n_0+n_1, :].detach().numpy(),
+        "transformer.0": embs[:n_0, :].detach().numpy(),
+        "transformer.1": embs[n_0 : n_0 + n_1, :].detach().numpy(),
     }
+
 
 def get_num_items(medium):
     m = {0: "manga", 1: "anime"}[medium]
-    col = "matchedid"
-    df = pd.read_csv(f"{datadir}/{m}.csv", low_memory=False)
-    return int(df[col].max()) + 1
-        
-def get_text_embeddings():
+    df = pd.read_csv(f"{datadir}/{m}.csv", usecols=["matchedid"])
+    return int(df["matchedid"].max()) + 1
+
+
+def get_content_embeddings():
     ret = {}
     for medium in [0, 1]:
-        metadata_embs = np.zeros((get_num_items(medium), 3072))
-        analysis_embs = np.zeros((get_num_items(medium), 3072))
+        text_embs = np.zeros((get_num_items(medium), 3072), dtype=np.float32)
+        image_embs = np.zeros((get_num_items(medium), 3072), dtype=np.float32)
         m = {0: "manga", 1: "anime"}[medium]
-        with open(f"{datadir}/{m}.json") as f:
-            embs = json.load(f)
-        for x in embs:
-            metadata_embs[x['matchedid'], :] = x['embedding']['metadata']
-            analysis_embs[x['matchedid'], :] = x['embedding']['analysis']
-        ret[f"metadata.{medium}"] = metadata_embs
-        ret[f"analysis.{medium}"] = analysis_embs
+        with open(f"{datadir}/{m}.json", "rb") as f:
+            for x in ijson.items(f, "item"):
+                text_embs[x["matchedid"], :] = x["text_embedding"]["embedding"]
+                image_embs[x["matchedid"], :] = x["image_embedding"]
+        ret[f"text.{medium}"] = text_embs
+        ret[f"image.{medium}"] = image_embs
     return ret
+
 
 def save_embeddings():
     ds = [
         get_transformer_embeddings(),
-        get_text_embeddings(),
+        get_content_embeddings(),
     ]
     ret = {}
     for d in ds:
@@ -64,5 +66,6 @@ def save_embeddings():
     with h5py.File(f"{datadir}/item_similarity/features.h5", "w") as hf:
         for k, v in ret.items():
             hf.create_dataset(k, data=v)
+
 
 save_embeddings()

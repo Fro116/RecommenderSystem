@@ -2,6 +2,7 @@ curl_cffi==0.14.0
 fastapi==0.116.2
 h5py==3.14.0
 hdf5plugin==5.1.0
+ijson==3.5.1
 msgpack==1.1.1
 numpy==2.3.3
 pandas==2.3.2

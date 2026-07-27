@@ -1,6 +1,5 @@
 import argparse
 import logging
-import random
 
 import h5py
 import hdf5plugin
@@ -27,7 +26,7 @@ class LTRDataset(Dataset):
         else:
             self.max_num_positives = self.num_items_per_query
         self.load_queries()
-        self.load_hard_negatives()
+        self.load_hard_negatives(logger)
 
     def load_queries(self):
         df = pd.read_csv(f"{args.datadir}/pairs.{args.medium}.csv")
@@ -50,45 +49,37 @@ class LTRDataset(Dataset):
                     key=lambda x: x[1],
                     reverse=True,
                 ),
-                "maxid": self.config["vocab_sizes"][args.medium],
             }
             queries.append(r)
-        self.allqueries = queries
         self.queries = [x for x in queries if x["targets"]]
 
-    def load_hard_negatives(self):
+    def load_hard_negatives(self, logger):
+        logger.info(f"loading {self.datasplit} negatives")
         config = self.config
         m = config["vocab_sizes"][args.medium]
-        n = config["embed_dim"]
-        if self.datasplit == "training":
-            output_path = f"{args.datadir}/output.embeddings.{args.medium}.h5"
-            M = np.zeros((m, n), dtype=np.float32)
-            with h5py.File(output_path) as hf:
-                for i in range(m):
-                    M[i, :] = hf[f"{args.medium}.{i}"][:]
-                temperature_exp = float(np.exp(hf["temperature"][:][0]))
-            M = torch.tensor(M).to(args.device)
-            idxs = [x["sourceid"] for x in self.allqueries]
-            chunk_size = 4096
-            batches = [idxs[i : i + chunk_size] for i in range(0, len(idxs), chunk_size)]
-            for batch in batches:
-                with torch.no_grad():
-                    with torch.amp.autocast(f"cuda:{args.device}", dtype=torch.bfloat16):
-                        sample_probs[batch, :] = (
-                            torch.exp((M[batch, :] @ M.T) * temperature_exp).cpu().numpy()
-                        )
-            del M
-        self.sample_probs = {}
-        for x in self.queries:
-            i = x["sourceid"]
-            w = sample_probs[i, :].copy()
-            w[i] = 0
-            sample_mask = testmask[i, :] if self.datasplit == "training" else ~testmask[i, :]
-            w[sample_mask] = 0
-            for v, _ in x["targets"][: self.max_num_positives]:
-                w[v] = 0   
-            w /= w.sum()
-            self.sample_probs[i] = w
+        output_path = f"{args.datadir}/output.embeddings.{args.medium}.h5"
+        M = np.zeros((m, config["embed_dim"]), dtype=np.float32)
+        with h5py.File(output_path) as hf:
+            for i in range(m):
+                M[i, :] = hf[f"{args.medium}.{i}"][:]
+        M = torch.tensor(M).to(args.device)
+        self.hard_negatives = {}
+        idxs = [x["sourceid"] for x in self.queries]
+        chunk_size = 4096
+        batches = [idxs[i : i + chunk_size] for i in range(0, len(idxs), chunk_size)]
+        targets = {x["sourceid"]: x["targets"] for x in self.queries}
+        for batch in batches:
+            with torch.no_grad():
+                with torch.amp.autocast(f"cuda:{args.device}", dtype=torch.bfloat16):
+                    scores = (M[batch, :] @ M.T).to(torch.float32).cpu().numpy()
+            for n, i in enumerate(batch):
+                w = scores[n, :].copy()
+                w[i] = -np.inf
+                sample_mask = testmask[i, :] if self.datasplit == "training" else ~testmask[i, :]
+                w[sample_mask] = -np.inf
+                for v, _ in targets[i][: self.max_num_positives]:
+                    w[v] = -np.inf
+                self.hard_negatives[i] = np.argsort(w)[-self.num_items_per_query:].astype(np.int32)
 
     def __len__(self):
         return len(self.queries)
@@ -96,7 +87,6 @@ class LTRDataset(Dataset):
     def __getitem__(self, idx):
         query_data = self.queries[idx]
         source_id = query_data["sourceid"]
-        max_id = query_data["maxid"]
         popularity = query_data["popularity"]
         positive_items = query_data["targets"][: self.max_num_positives]
         positive_y = [item[0] for item in positive_items]
@@ -104,12 +94,7 @@ class LTRDataset(Dataset):
         num_positives = len(positive_y)
         num_negatives_to_sample = self.num_items_per_query - num_positives
         if num_negatives_to_sample > 0:
-            p = self.sample_probs[source_id]
-            negative_y = list(
-                np.argpartition(p, -num_negatives_to_sample)[
-                    -num_negatives_to_sample:
-                ]
-            )
+            negative_y = list(self.hard_negatives[source_id][-num_negatives_to_sample:])
         else:
             negative_y = []
         y = np.array(positive_y + negative_y, dtype=np.int64)
@@ -140,19 +125,17 @@ class LTRModel(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.retrieval_embeddings = nn.Embedding(
+        self.transformer_embeddings = nn.Embedding(
             config["vocab_sizes"][args.medium], 2048
         )
-        self.metadata_embeddings = nn.Embedding(
+        self.content_embeddings = nn.Embedding(
             config["vocab_sizes"][args.medium], 3072
         )
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
-        if args.features == "rettext":
+        if args.features == "content":
             encoder = nn.Linear(2048 + 3072, config["embed_dim"], bias=False)
-        elif args.features == "retrieval":
+        elif args.features == "transformer":
             encoder = nn.Linear(2048, config["embed_dim"], bias=False)
-        elif args.features == "text":
-            encoder = nn.Linear(3072, config["embed_dim"], bias=False)
         else:
             assert False
         self.encoder = nn.Sequential(nn.Dropout(0.1), encoder)
@@ -161,30 +144,25 @@ class LTRModel(nn.Module):
         return float(self.logit_scale.detach())
 
     def load_pretrained_embeddings(self, filepath):
-        vocab_size = self.config["vocab_sizes"][args.medium]
         with h5py.File(filepath, "r") as hf:
-            self.retrieval_embeddings.weight.data.copy_(
-                torch.tensor(hf[f"masked.{args.medium}"][:])
+            self.transformer_embeddings.weight.data.copy_(
+                torch.tensor(hf[f"transformer.{args.medium}"][:])
             )
-            self.metadata_embeddings.weight.data.copy_(
-                torch.tensor(hf[f"metadata.{args.medium}"][:])
+            self.content_embeddings.weight.data.copy_(
+                torch.tensor(hf[f"image.{args.medium}"][:])
             )
-        self.retrieval_embeddings.weight.requires_grad = False
-        self.metadata_embeddings.weight.requires_grad = False
+        self.transformer_embeddings.weight.requires_grad = False
+        self.content_embeddings.weight.requires_grad = False
 
     def embed(self, ids):
-        if args.features == "rettext":
-            f_ret = self.retrieval_embeddings(ids)
-            f_text = self.metadata_embeddings(ids)
+        if args.features == "content":
+            f_ret = self.transformer_embeddings(ids)
+            f_text = self.content_embeddings(ids)
             encoded_features = self.encoder(torch.cat([f_ret, f_text], dim=-1))
             return F.normalize(encoded_features, dim=-1)
-        elif args.features == "retrieval":
-            f_ret = self.retrieval_embeddings(ids)
+        elif args.features == "transformer":
+            f_ret = self.transformer_embeddings(ids)
             encoded_features = self.encoder(f_ret)
-            return F.normalize(encoded_features, dim=-1)
-        elif args.features == "text":
-            f_text = self.metadata_embeddings(ids)
-            encoded_features = self.encoder(f_text)
             return F.normalize(encoded_features, dim=-1)
         else:
             assert False
@@ -399,7 +377,6 @@ def train():
     logger = get_logger("clip")
     logger.setLevel(logging.DEBUG)
     config = training_config()
-    rng = np.random.default_rng(seed=42)
     num_epochs = 1024
     model = LTRModel(config)
     model.load_pretrained_embeddings(f"{args.datadir}/features.h5")
@@ -418,6 +395,7 @@ def train():
             drop_last=False,
             num_workers=8,
             worker_init_fn=worker_init_fn,
+            persistent_workers=False,
         )
         for x in ["training", "test"]
     }
@@ -441,14 +419,7 @@ def train():
         train_epoch(model, dataloaders["training"], optimizer, scheduler, scaler)
         generate_embeddings(model)
         for x in ["training", "test"]:
-            dataloaders[x] = DataLoader(
-                LTRDataset(datasplit=x, config=config, logger=logger),
-                batch_size=config["batch_size"],
-                shuffle=x == "training",
-                drop_last=False,
-                num_workers=8,
-                worker_init_fn=worker_init_fn,
-            )
+            dataloaders[x].dataset.load_hard_negatives(logger)
         training_loss = get_loss(model, "training")
         logger.info(f"Epoch: {epoch}, Training Loss: {training_loss}")
         test_loss = get_loss(model, "test")
@@ -506,7 +477,6 @@ parser.add_argument("--features", type=str)
 args = parser.parse_args()
 with h5py.File(f"{args.datadir}/pairs.{args.medium}.h5", "r") as f:
     testmask = f["testmask"][:] != 0
-sample_probs = np.zeros((get_num_items(args.medium), get_num_items(args.medium)), np.float32)
 
 if __name__ == "__main__":
     print(

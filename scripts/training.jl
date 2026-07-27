@@ -56,18 +56,15 @@ end
 
 function run_finetune()
     last_date = get_last_finetune_date()
-    while true
-        lock(gpulock) do
-            latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
-            if latest == last_date
-                return
-            end
-            runcmd("cd Finetune && julia run.jl $latest")
-            last_date = latest
+    lock(gpulock) do
+        latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
+        if latest == last_date
+            return
         end
-        sleep(3600)
+        runcmd("cd Finetune && julia run.jl $latest")
+        last_date = latest
     end
 end
 
-Threads.@spawn @handle_errors run_finetune()
+Threads.@spawn @periodic "RUN_FINETUNE" 3600 @handle_errors run_finetune()
 @scheduled "RUN_TRAINING" "02:00" @handle_errors run_training()
