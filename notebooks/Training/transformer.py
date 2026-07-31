@@ -27,6 +27,7 @@ from torch.nn.attention.flex_attention import (
 )
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, IterableDataset
+from torchao.float8 import Float8LinearConfig, convert_to_float8_training
 from tqdm import tqdm
 
 with open("transformer.model.py") as f:
@@ -636,6 +637,8 @@ def train():
             drop_last=False,
             num_workers=w,
             persistent_workers=True,
+            prefetch_factor=2,
+            pin_memory=True,
             collate_fn=collate,
             worker_init_fn=worker_init_fn,
         )
@@ -665,12 +668,17 @@ def train():
             model.load_state_dict(checkpoint["model"])
             del checkpoint["model"]
     model = model.to(local_rank)
+    if not config["finetune"]:
+        convert_to_float8_training(
+            model,
+            config=Float8LinearConfig.from_recipe_name("tensorwise"),
+            module_filter_fn=lambda mod, fqn: fqn.startswith("transformers."),
+        )
     model = torch.compile(model)
     model = DDP(
         model,
         device_ids=[local_rank],
         output_device=local_rank,
-        find_unused_parameters=True,
     )
     optimizer = create_optimizer(model, config)
     scheduler = create_learning_rate_schedule(

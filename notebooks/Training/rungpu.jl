@@ -23,9 +23,9 @@ function provision_instance()
             "8xH100" => 32,
         )[gpu_config]
         duration = Dict(
-            "8xB200" => 50,
-            "4xB200" => 100,
-            "8xH100" => 100,
+            "8xB200" => 35,
+            "4xB200" => 70,
+            "8xH100" => 70,
         )[gpu_config]
         num_gpus, gpu_type = split(gpu_config, "x")
         gpu_query = Dict(
@@ -55,7 +55,7 @@ function provision_instance()
             end
             disk_size = 96
             logtag("RUNGPU", "provisioning $gpu_config instance for price $(x[:dph_total])")
-            create_cmd = """vastai create instance $offer_id --image vastai/pytorch:cuda-12.8.1-auto --env '-p 1111:1111 -p 6006:6006 -p 8080:8080 -p 8384:8384 -p 72299:72299 -e OPEN_BUTTON_PORT=1111 -e OPEN_BUTTON_TOKEN=1 -e JUPYTER_DIR=/ -e DATA_DIRECTORY=/workspace/ -e PORTAL_CONFIG="localhost:1111:11111:/:Instance Portal|localhost:8080:18080:/:Jupyter|localhost:8080:8080:/terminals/1:Jupyter Terminal|localhost:8384:18384:/:Syncthing|localhost:6006:16006:/:Tensorboard"' --onstart-cmd 'entrypoint.sh' --disk $disk_size --jupyter --ssh --direct"""
+            create_cmd = """vastai create instance $offer_id --image vastai/pytorch:@vastai-automatic-tag --env '-p 1111:1111 -p 6006:6006 -p 8080:8080 -p 8384:8384 -p 72299:72299 -e OPEN_BUTTON_PORT=1111 -e OPEN_BUTTON_TOKEN=1 -e JUPYTER_DIR=/ -e DATA_DIRECTORY=/workspace/ -e PORTAL_CONFIG="localhost:1111:11111:/:Instance Portal|localhost:8080:18080:/:Jupyter|localhost:8080:8080:/terminals/1:Jupyter Terminal|localhost:8384:18384:/:Syncthing|localhost:6006:16006:/:Tensorboard"' --onstart-cmd 'entrypoint.sh' --disk $disk_size --jupyter --ssh --direct"""
             run(`sh -c $create_cmd`)
             sleep(60)
             write_entrypoint(num_gpus)

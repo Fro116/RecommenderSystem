@@ -42,7 +42,7 @@ class ActionEmbedding(nn.Module):
                 4,  # source
                 1,  # has_rating
                 1,  # rating
-                16, # status
+                16,  # status
                 1,  # progress
             ]
         )
@@ -93,6 +93,7 @@ class ActionEmbedding(nn.Module):
         )
         return self.linear(emb)
 
+
 class ItemEmbedding(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -138,15 +139,15 @@ class DualItemEmbedding(nn.Module):
 def precompute_freqs_cis(dim: int, end: int, theta: float = 500000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device, dtype=torch.float32)
-    freqs = torch.outer(t, freqs) # Shape: (max_seq_len, dim // 2)
+    freqs = torch.outer(t, freqs)  # Shape: (max_seq_len, dim // 2)
     freqs_cos = torch.cos(freqs)
     freqs_sin = torch.sin(freqs)
     return freqs_cos, freqs_sin
 
 
 def apply_rotary_emb(x: torch.Tensor, freqs_cos: torch.Tensor, freqs_sin: torch.Tensor):
-    freqs_cos = freqs_cos.unsqueeze(2).float() # (B, S, 1, head_dim // 2)
-    freqs_sin = freqs_sin.unsqueeze(2).float() # (B, S, 1, head_dim // 2)
+    freqs_cos = freqs_cos.unsqueeze(2).float()  # (B, S, 1, head_dim // 2)
+    freqs_sin = freqs_sin.unsqueeze(2).float()  # (B, S, 1, head_dim // 2)
     x_reshaped = x.float().reshape(*x.shape[:-1], -1, 2)
     x0, x1 = x_reshaped.unbind(-1)
     x_out0 = x0 * freqs_cos - x1 * freqs_sin
@@ -201,11 +202,15 @@ class FlashAttention(nn.Module):
             self.lora_rank = 8
             self.lora_scaling = 16 / 8
             self.lora_dropout = nn.Dropout(0.1)
-            self.q_proj_lora_A = nn.Linear(config["embed_dim"], self.lora_rank, bias=False)
+            self.q_proj_lora_A = nn.Linear(
+                config["embed_dim"], self.lora_rank, bias=False
+            )
             self.q_proj_lora_B = nn.Linear(
                 self.lora_rank, self.num_heads * self.head_dim, bias=False
             )
-            self.v_proj_lora_A = nn.Linear(config["embed_dim"], self.lora_rank, bias=False)
+            self.v_proj_lora_A = nn.Linear(
+                config["embed_dim"], self.lora_rank, bias=False
+            )
             self.v_proj_lora_B = nn.Linear(
                 self.lora_rank, self.num_kv_heads * self.head_dim, bias=False
             )
@@ -222,19 +227,28 @@ class FlashAttention(nn.Module):
         q = self.q_proj(x)
         v = self.v_proj(x)
         if self.finetune:
-            q += self.q_proj_lora_B(self.q_proj_lora_A(self.lora_dropout(x))) * self.lora_scaling
-            v += self.v_proj_lora_B(self.v_proj_lora_A(self.lora_dropout(x))) * self.lora_scaling
+            q += (
+                self.q_proj_lora_B(self.q_proj_lora_A(self.lora_dropout(x)))
+                * self.lora_scaling
+            )
+            v += (
+                self.v_proj_lora_B(self.v_proj_lora_A(self.lora_dropout(x)))
+                * self.lora_scaling
+            )
         q = q.view(B, S, self.num_heads, self.head_dim)
         k = k.view(B, S, self.num_kv_heads, self.head_dim)
         v = v.view(B, S, self.num_kv_heads, self.head_dim)
         q = apply_rotary_emb(q, freqs_cos, freqs_sin)
         k = apply_rotary_emb(k, freqs_cos, freqs_sin)
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
-        if self.num_kv_heads != self.num_heads:
-            num_groups = self.num_heads // self.num_kv_heads
-            k = k.repeat_interleave(num_groups, dim=1)
-            v = v.repeat_interleave(num_groups, dim=1)
-        attn_out = flex_attention(q, k, v, block_mask=block_mask)
+        attn_out = flex_attention(
+            q,
+            k,
+            v,
+            block_mask=block_mask,
+            enable_gqa=self.num_kv_heads != self.num_heads,
+            kernel_options=None if self.finetune else {"BACKEND": "FLASH"},
+        )
         return self.output_proj(attn_out.transpose(1, 2).contiguous().view(B, S, -1))
 
 
@@ -338,7 +352,7 @@ class RecommenderModel(nn.Module):
         weights.zero_()
         assert W.shape[0] + 1 == weights.shape[0] and W.shape[1] == weights.shape[1]
         W_t = torch.as_tensor(W, dtype=weights.dtype, device=weights.device)
-        weights[:W.shape[0], :].copy_(W_t)
+        weights[: W.shape[0], :].copy_(W_t)
 
     def mse(self, x, y, w):
         w_sum = w.sum().clamp(min=1e-8)
@@ -389,7 +403,7 @@ class RecommenderModel(nn.Module):
             randval = torch.rand(d["userid"].shape, device=d["userid"].device)
             mask_rate = self.config["mask_rate"]
             watch_mask = randval < mask_rate
-            rating_mask = (randval >= mask_rate) & (randval < 2*mask_rate)
+            rating_mask = (randval >= mask_rate) & (randval < 2 * mask_rate)
         d["token_mask_ids"] *= rating_mask
         for k in d:
             if k.endswith(".position") or k.endswith(".label") or k.endswith(".weight"):
@@ -437,7 +451,9 @@ class RecommenderModel(nn.Module):
             )
 
         maskfn = and_masks(document_mask, token_mask)
-        block_mask = create_block_mask(maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n)
+        block_mask = create_block_mask(
+            maskfn, B=m, H=None, Q_LEN=n, KV_LEN=n, BLOCK_SIZE=(256, 128)
+        )
         return self.transformers(e, block_mask, rope_input_pos)
 
     def train_forward(self, d, evaluate):
