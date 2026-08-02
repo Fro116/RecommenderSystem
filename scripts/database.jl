@@ -7,4 +7,4 @@ function update()
     run(`$workdir/../notebooks/Import/database.sh $workdir/../secrets`)
 end
 
-@scheduled "DATABASE" "09:00" @handle_errors update()
+@scheduled "DATABASE" "14:00" @handle_errors update()

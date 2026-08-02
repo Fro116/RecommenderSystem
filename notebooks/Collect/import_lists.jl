@@ -21,4 +21,4 @@ function import_lists()
     end
 end
 
-@scheduled "IMPORT_LISTS" "2:30" @handle_errors import_lists()
+@scheduled "IMPORT_LISTS" "07:30" @handle_errors import_lists()

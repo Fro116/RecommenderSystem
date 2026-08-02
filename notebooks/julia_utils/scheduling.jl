@@ -16,16 +16,18 @@ macro periodic(tag::AbstractString, secs::Real, expr)
     end
 end
 
-macro scheduled(tag::AbstractString, time_str::AbstractString, expr)
+macro scheduled(tag::AbstractString, utc_time_str::AbstractString, expr)
     quote
         while true
-            now = Dates.now()
-            target_time = Dates.DateTime(Dates.format(now, "yyyy-mm-dd") * "T" * $(esc(time_str)), "yyyy-mm-ddTHH:MM:SS")
-            if target_time < now
+            now_utc = Dates.now(Dates.UTC)
+            target_time = Dates.DateTime(
+                Dates.format(now_utc, "yyyy-mm-dd") * "T" * $(esc(utc_time_str)),
+                "yyyy-mm-ddTHH:MM:SS")
+            if target_time < now_utc
                 target_time += Dates.Day(1)
             end
-            while Dates.now() < target_time
-                sleep(max(target_time - Dates.now(), Dates.Second(0)))
+            while Dates.now(Dates.UTC) < target_time
+                sleep(max(target_time - Dates.now(Dates.UTC), Dates.Second(0)))
             end
             logtag($(esc(tag)), "START")
             $(esc(expr))

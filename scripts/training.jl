@@ -67,4 +67,4 @@ function run_finetune()
 end
 
 Threads.@spawn @periodic "RUN_FINETUNE" 3600 @handle_errors run_finetune()
-@scheduled "RUN_TRAINING" "02:00" @handle_errors run_training()
+@scheduled "RUN_TRAINING" "07:00" @handle_errors run_training()
