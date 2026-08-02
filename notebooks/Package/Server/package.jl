@@ -15,7 +15,8 @@ function embed_py(basedir::String)
     mediums = [0, 1]
     files = vcat(
         ["manga.csv", "anime.csv", "finetune_tag", "training_tag"],
-        ["transformer.masked.$m.$t.finetune.pt" for m in mediums for t in ["watch", "rating"]],
+        ["transformer.masked.finetune.base.pt"],
+        ["transformer.masked.$m.$t.finetune.lora.pt" for m in mediums for t in ["watch", "rating"]],
     )
     for f in files
         copy("data/finetune/$f", app)
@@ -68,10 +69,13 @@ function compress_media_json(app, medium)
     json = open(fn) do f
         JSON3.read(f)
     end
+    fields_to_keep = [:matchedid, :keys, :title, :english_title, :genres, :synopsis, :metadata]
     json = Base.copy(json)
     for x in json
-        for k in [:recommendations, :reviews, :embedding]
-            delete!(x, k)
+        for k in collect(keys(x))
+            if k ∉ fields_to_keep
+                delete!(x, k)
+            end
         end
     end
     open(fn, "w") do f
@@ -118,9 +122,24 @@ function build(basedir::String, name::String, tag::String)
         "gcloud auth login --quiet --cred-file=secrets/gcp.auth.json",
         "docker tag $name $repo/$name:$tag",
         "docker push $repo/$name:$tag",
-        "docker system prune -af --filter until=24h",
     ]
     cmd = join(cmds, " && ")
+    run(`sh -c $cmd`)
+    repo = read("secrets/aws.docker.txt", String)
+    region = read("secrets/aws.region.txt", String)
+    account = read("secrets/aws.account.txt", String)
+    cmds = [
+        "export AWS_SHARED_CREDENTIALS_FILE=secrets/aws.credentials",
+        "aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin $account.dkr.ecr.$region.amazonaws.com",
+        "docker tag $name $repo/$name:$tag",
+        "docker push $repo/$name:$tag",
+    ]
+    cmd = join(cmds, " && ")
+    run(`sh -c $cmd`)
+    cmds = [
+        "docker image prune -f",
+        "docker builder prune -f --keep-storage=32GB",
+    ]
     run(`sh -c $cmd`)
 end
 

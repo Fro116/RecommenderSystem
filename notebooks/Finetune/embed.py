@@ -181,14 +181,19 @@ def load_model(medium, task):
     datadir = "../../data/finetune"
     mtask = {"retrieval": "watch", "ranking": "rating"}[task]
     checkpoint = torch.load(
-        f"{datadir}/transformer.masked.{medium}.{mtask}.finetune.pt",
+        f"{datadir}/transformer.masked.{medium}.{mtask}.finetune.lora.pt",
         weights_only=False,
         map_location=device,
     )
     config = checkpoint["config"]
     config["forward"] = "inference"
     model = RecommenderModel(config)
-    model.load_state_dict(checkpoint["model"])
+    base = torch.load(
+        f"{datadir}/transformer.masked.finetune.base.pt",
+        weights_only=False, map_location=device
+    )["model"]
+    model.load_state_dict(base, strict=False)
+    model.load_state_dict(checkpoint["model"], strict=False)
     model = model.to(device)
     model = torch.compile(model)
     model = DDP(

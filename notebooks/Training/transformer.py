@@ -646,10 +646,6 @@ def train():
     }
     model = RecommenderModel(config)
     model.load_pretrained_embeddings(args.datadir)
-    logger.info(
-        f"Created model with {sum(p.numel() for p in model.parameters())} parameters"
-        f" and {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters"
-    )
     checkpoint = None
     if config["finetune"]:
         model.load_state_dict(
@@ -667,6 +663,10 @@ def train():
             logger.info(f"loading model from epoch {checkpoint['epoch']}")
             model.load_state_dict(checkpoint["model"])
             del checkpoint["model"]
+    logger.info(
+        f"Created model with {sum(p.numel() for p in model.parameters())} parameters"
+        f" and {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters"
+    )
     model = model.to(local_rank)
     if not config["finetune"]:
         convert_to_float8_training(

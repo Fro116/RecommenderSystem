@@ -100,15 +100,46 @@ class ItemEmbedding(nn.Module):
         self.config = config
         vocab_size = sum(config["vocab_sizes"][f"{m}_matchedid"] for m in ALL_MEDIUMS)
         embed_dim = config["embed_dim"]
-        metadata_dim = config["metadata_emb_size"]
         self.vocab_size = vocab_size
+        self.fused = config["finetune"] and config["forward"] == "inference"
+        if self.fused:
+            self.register_buffer(
+                "fused_embedding", torch.empty(vocab_size + 1, embed_dim)
+            )
+            return
+        metadata_dim = config["metadata_emb_size"]
         self.matchedid_embedding = MaskedEmbedding(vocab_size, embed_dim)
         self.metadata_embedding = MaskedEmbedding(vocab_size, metadata_dim)
         for p in self.metadata_embedding.parameters():
             p.requires_grad = False
         self.projection_layer = nn.Linear(metadata_dim, embed_dim)
+        self.register_load_state_dict_pre_hook(self.reject_fused_checkpoint)
+        if config["finetune"]:
+            self.register_load_state_dict_post_hook(lambda module, _: module.fuse())
+
+    def fuse(self):
+        if self.fused:
+            return
+        with torch.no_grad():
+            fused = self.matchedid_embedding.embedding.weight + F.linear(
+                self.metadata_embedding.embedding.weight,
+                self.projection_layer.weight,
+                self.projection_layer.bias,
+            )
+        self.register_buffer("fused_embedding", fused)
+        del self.matchedid_embedding
+        del self.metadata_embedding
+        del self.projection_layer
+        self.fused = True
+
+    @staticmethod
+    def reject_fused_checkpoint(module, state_dict, prefix, *args):
+        assert (prefix + "fused_embedding") not in state_dict
 
     def forward(self, x):
+        if self.fused:
+            idx = torch.where(x == -1, self.fused_embedding.shape[0] - 1, x)
+            return F.embedding(idx, self.fused_embedding)
         matched = self.matchedid_embedding(x)
         metadata = self.projection_layer(self.metadata_embedding(x))
         return matched + metadata
@@ -125,14 +156,17 @@ class DualItemEmbedding(nn.Module):
         if medium == 0:
             start, end = 0, K
         elif medium == 1:
-            start, end = K, -1
+            start, end = K, self.item_embedding.vocab_size
         else:
             assert False
-        m1_sliced = self.item_embedding.matchedid_embedding.embedding.weight[start:end]
-        m2_sliced = self.item_embedding.metadata_embedding.embedding.weight[start:end]
-        W = self.item_embedding.projection_layer.weight
-        b = self.item_embedding.projection_layer.bias
-        items = m1_sliced + F.linear(m2_sliced, W, bias=b)
+        if self.item_embedding.fused:
+            items = self.item_embedding.fused_embedding[start:end]
+        else:
+            m1 = self.item_embedding.matchedid_embedding.embedding.weight[start:end]
+            m2 = self.item_embedding.metadata_embedding.embedding.weight[start:end]
+            W = self.item_embedding.projection_layer.weight
+            b = self.item_embedding.projection_layer.bias
+            items = m1 + F.linear(m2, W, bias=b)
         return F.linear(x, items)
 
 
@@ -464,7 +498,7 @@ class RecommenderModel(nn.Module):
         embeds = self.to_embedding(d)
         e0 = embeds[:, 0::2]
         e1 = embeds[:, 1::2]
-        topk = self.config["mask_topk"] * self.config["local_batch_size"]
+        topk = self.config["mask_topk"] * d["userid"].shape[0]
         losses = []
         for medium in ALL_MEDIUMS:
             for metric in ALL_METRICS:
@@ -472,7 +506,6 @@ class RecommenderModel(nn.Module):
                 l = d[f"{medium}.{metric}.label"]
                 p = d[f"{medium}.{metric}.position"]
                 e = e0 if metric == "watch" else e1
-                w = d[f"{medium}.{metric}.weight"]
                 _, bp = torch.topk(w.reshape(-1), k=topk)
                 embed = e.reshape(-1, e.shape[-1])[bp, :]
                 labels = l.reshape(-1)[bp]
