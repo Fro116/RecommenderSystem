@@ -109,14 +109,6 @@ end
 
 function build(basedir::String, name::String, tag::String)
     run(`docker build --network host -t $name $basedir`)
-    username, password, project = split(read("secrets/docker.auth.txt", String), "\n")
-    cmds = [
-        "docker login -u $username -p '$password'",
-        "docker tag $name $username/$project-$name:$tag",
-        "docker push $username/$project-$name:$tag"
-    ]
-    cmd = join(cmds, " && ")
-    run(`sh -c $cmd`)
     repo = read("secrets/gcp.docker.txt", String)
     cmds = [
         "gcloud auth login --quiet --cred-file=secrets/gcp.auth.json",
@@ -144,7 +136,8 @@ function build(basedir::String, name::String, tag::String)
 end
 
 cd("../../..")
-basedir = "data/package/server"
+const basedir = "data/package/server"
+const finetune_tag = read("data/finetune/finetune_tag", String)
 if ispath(basedir)
     rm(basedir; recursive = true)
 end
@@ -157,3 +150,4 @@ layer3(basedir)
 database(basedir)
 compute(basedir)
 build(basedir, "server", "latest")
+build(basedir, "server", finetune_tag)

@@ -10,10 +10,7 @@ cd ../../
 workdir=`pwd`
 source venv/bin/activate
 export JULIA_PROJECT="$workdir/juliaenv"
-export JULIA_NUM_THREADS="16"
-if [ "$name" = "training" ]; then
-    export JULIA_NUM_THREADS="32"
-fi;
+export JULIA_NUM_THREADS="auto"
 
 logjl="$workdir/RecommenderSystem/notebooks/Collect/logrotate.jl"
 name=$1

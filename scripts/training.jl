@@ -9,12 +9,8 @@ cd("../notebooks")
 const gpulock = ReentrantLock()
 
 function runcmd(x)
-    logtag("CRON", "running $x")
+    logtag("TRAINING", "running $x")
     run(`sh -c $x`)
-end
-
-function teecmd(x, filename)
-    "($x) 2>&1 | tee $filename"
 end
 
 function import_db(name::String)
@@ -22,6 +18,7 @@ function import_db(name::String)
     if !ispath(logdir)
         mkpath(logdir)
     end
+    teecmd(x, filename) = "($x) 2>&1 | tee $filename"
     runcmd(teecmd("cd Import/$name && julia save_$(name).jl", "$logdir/$name.log"))
 end
 
@@ -45,26 +42,5 @@ function run_training()
     end
 end
 
-function get_last_finetune_date()
-    text = read(`rclone cat r2:rsys/database/import/metrics.finetune.usermodel.csv`, String)
-    if isempty(text)
-        return nothing
-    end
-    df = CSV.read(IOBuffer(text), DataFrames.DataFrame)
-    string(maximum(df.finetune_tag))
-end
 
-function run_finetune()
-    last_date = get_last_finetune_date()
-    lock(gpulock) do
-        latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
-        if latest == last_date
-            return
-        end
-        runcmd("cd Finetune && julia run.jl $latest")
-        last_date = latest
-    end
-end
-
-Threads.@spawn @periodic "RUN_FINETUNE" 3600 @handle_errors run_finetune()
 @scheduled "RUN_TRAINING" "07:00" @handle_errors run_training()
