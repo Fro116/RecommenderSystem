@@ -31,6 +31,7 @@ refresh_table() {
         -c "\copy ${db}_staging FROM STDIN WITH (FORMAT csv, HEADER true)"
 
   psql "$connstr" -v ON_ERROR_STOP=1 <<EOF
+ALTER TABLE ${db}_staging SET LOGGED;
 SET maintenance_work_mem = '1GB';
 $idx_ddl
 BEGIN;

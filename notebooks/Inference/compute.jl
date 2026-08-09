@@ -5,24 +5,25 @@ import Oxygen
 import UUIDs
 import Random
 import Serialization
+
+const secretdir = "../../secrets"
+const PORT = parse(Int, ARGS[1])
+const MODEL_URL = ARGS[2]
+const DATABASE_WRITE_URL = ARGS[3]
+const TUNNEL = parse(Bool, ARGS[4])
+const datadir = "../../data/finetune"
+const finetune_tag = read("$datadir/finetune_tag", String)
+const serverid = "$(finetune_tag)-$(UUIDs.uuid4())"
+
 include("../Training/import_list.jl")
 include("../julia_utils/database.jl")
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
 include("../Finetune/embed.jl")
-
-const secretdir = "../../secrets"
-const TUNNEL = length(ARGS) >= 1 ? parse(Bool, ARGS[1]) : false
-const PORT = 8080
-const DATABASE_WRITE_URL = read("$secretdir/url.database.txt", String)
-const datadir = "../../data/finetune"
-const MODEL_URL = read("$secretdir/url.embed.txt", String)
 include("render.jl")
 
 sanitize(x) = strip(x)
-
-const serverid = UUIDs.uuid4()
 
 function difftime(speedscope)
     tags = [x[1] for x in speedscope[2:end]]
@@ -59,7 +60,7 @@ function read_autocomplete_user(data::Dict)::HTTP.Response
     source = data["source"]
     prefix = data["prefix"]
     table = "autocomplete_users"
-    df = with_db(:inference_read, 3) do db
+    df = with_db(rand([:inference_read, :inference_read2]), 3, false) do db
         query = "SELECT * FROM $table WHERE (source, prefix) = (\$1, \$2)"
         stmt = db_prepare(db, query)
         DataFrames.DataFrame(LibPQ.execute(stmt, (source, prefix)))
@@ -75,7 +76,7 @@ function read_autocomplete_item(data::Dict)::HTTP.Response
     medium = data["medium"]
     prefix = data["prefix"]
     table = "autocomplete_items"
-    df = with_db(:inference_read, 3) do db
+    df = with_db(rand([:inference_read, :inference_read2]), 3, false) do db
         query = "SELECT * FROM $table WHERE (medium, prefix) = (\$1, \$2)"
         stmt = db_prepare(db, query)
         DataFrames.DataFrame(LibPQ.execute(stmt, (medium, prefix)))
@@ -286,12 +287,12 @@ end
 function read_user_history(data::Dict)
     source = data["source"]
     username = data["username"]
-    tables = get(data, "tables", ["user_histories", "online_user_histories"])
+    tables = [("user_histories", :inference_read), ("online_user_histories", :inference_read2)]
     allow_online = get(data, "online_history", false)
     tasks = []
-    for table in tables
+    for (table, dbconn) in tables
         task = Threads.@spawn begin
-            df = with_db(:inference_read, 3) do db
+            df = with_db(dbconn, 3, false) do db
                 query = "SELECT * FROM $table WHERE (source, lower(username)) = (\$1, lower(\$2))"
                 stmt = db_prepare(db, query)
                 DataFrames.DataFrame(LibPQ.execute(stmt, (source, username)))

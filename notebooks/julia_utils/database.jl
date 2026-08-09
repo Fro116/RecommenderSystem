@@ -12,7 +12,7 @@ end
 function get_db_connection(conntype::Symbol, max_retries::Real)
     if conntype in [:update, :prioritize, :garbage_collect, :monitor, :write]
         dbname = "collect"
-    elseif conntype in [:inference_read, :inference_write]
+    elseif conntype in [:inference_read, :inference_read2, :inference_write]
         dbname = "inference"
     else
         @assert false
@@ -49,7 +49,7 @@ end
 const DATABASES = Dict()
 const DATABASE_LOCK = ReentrantLock()
 
-function with_db(f, conntype::Symbol, max_retries::Real=Inf)
+function with_db(f, conntype::Symbol, max_retries::Real=Inf, transaction=true)
     db = lock(DATABASE_LOCK) do
         if conntype ∉ keys(DATABASES)
             conn = get_db_connection(conntype, max_retries)
@@ -68,6 +68,9 @@ function with_db(f, conntype::Symbol, max_retries::Real=Inf)
         while retries <= max_retries
             retries += 1
             try
+                if !transaction
+                    return f(db)
+                end
                 LibPQ.execute(db.conn, "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;")
                 x = f(db)
                 LibPQ.execute(db.conn, "END;")
