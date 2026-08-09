@@ -15,12 +15,13 @@ include("../Training/history_tools.jl")
 const SOURCES = ["mal", "anilist", "kitsu", "animeplanet"]
 const datadir = "../../data/finetune"
 
+runcmd(x::String) = run(`sh -c $x`)
+
 function download_data(finetune_tag::AbstractString)
     rm(datadir, force = true, recursive = true)
     mkpath(datadir)
     download = "rclone --retries=10 copyto r2:rsys/database"
-    cmd = "$download/training/latest $datadir/training_tag"
-    run(`sh -c $cmd`)
+    runcmd("$download/training/latest $datadir/training_tag")
     tag = read("$datadir/training_tag", String)
     files = vcat(
         ["$m.csv" for m in ["manga", "anime"]],
@@ -29,18 +30,17 @@ function download_data(finetune_tag::AbstractString)
         ["watches.$m.jld2" for m in [0, 1]],
         ["transformer.masked.$stem" for stem in ["csv", "pt"]],
         ["pairwise.embeddings.$stem" for stem in ["jld2", "csv"]],
-        ["images.csv", "media_relations.csv"],
-        ["media_embeddings.h5" ],
+        ["media_relations.csv", "media_embeddings.h5"],
     )
     for fn in files
-        cmd = "$download/training/$tag/$fn $datadir/$fn"
-        run(`sh -c $cmd`)
+        runcmd("$download/training/$tag/$fn $datadir/$fn")
     end
+    runcmd("$download/import/images.csv $datadir/images.csv")
     open("$datadir/finetune_tag", "w") do f
         write(f, finetune_tag)
     end
     tag = read("$datadir/finetune_tag", String)
-    run(`rclone --retries=10 copyto r2:rsys/database/lists/$tag/histories.csv.zstd $datadir/histories.csv.zstd`)
+    runcmd("$download/lists/$tag/histories.csv.zstd $datadir/histories.csv.zstd")
     run(`unzstd $datadir/histories.csv.zstd`)
     rm("$datadir/histories.csv.zstd")
     run(

@@ -16,7 +16,10 @@ function embed_py(basedir::String)
     files = vcat(
         ["manga.csv", "anime.csv", "finetune_tag", "training_tag"],
         ["transformer.masked.finetune.base.pt"],
-        ["transformer.masked.$m.$t.finetune.lora.pt" for m in mediums for t in ["watch", "rating"]],
+        [
+            "transformer.masked.$m.$t.finetune.lora.pt" for m in mediums for
+            t in ["watch", "rating"]
+        ],
     )
     for f in files
         copy("data/finetune/$f", app)
@@ -69,7 +72,8 @@ function compress_media_json(app, medium)
     json = open(fn) do f
         JSON3.read(f)
     end
-    fields_to_keep = [:matchedid, :keys, :title, :english_title, :genres, :synopsis, :metadata]
+    fields_to_keep =
+        [:matchedid, :keys, :title, :english_title, :genres, :synopsis, :metadata]
     json = Base.copy(json)
     for x in json
         for k in collect(keys(x))
@@ -97,7 +101,13 @@ function compute(basedir::String)
     files = vcat(
         ["$m.$stem" for m in mediums for stem in ["csv", "json"]],
         ["media_relations.$m.jld2" for m in [0, 1]],
-        ["training_tag", "finetune_tag", "model.registry.jld2", "images.csv", "item_similarity.jld2"],
+        [
+            "training_tag",
+            "finetune_tag",
+            "model.registry.jld2",
+            "images.csv",
+            "item_similarity.jld2",
+        ],
     )
     for f in files
         copy("data/finetune/$f", app)
@@ -107,32 +117,40 @@ function compute(basedir::String)
     compress_media_json.(app, mediums)
 end
 
-function build(basedir::String, name::String, tag::String)
-    run(`docker build --network host -t $name $basedir`)
-    repo = read("secrets/gcp.docker.txt", String)
-    cmds = [
-        "gcloud auth login --quiet --cred-file=secrets/gcp.auth.json",
-        "docker tag $name $repo/$name:$tag",
-        "docker push $repo/$name:$tag",
-    ]
+function runcmds(cmds)
     cmd = join(cmds, " && ")
     run(`sh -c $cmd`)
+end
+
+function build(basedir::String, name::String, tags::Vector{String})
+    run(`docker build --network host -t $name $basedir`)
+    # deploy to gcp
+    repo = read("secrets/gcp.docker.txt", String)
+    runcmds([
+        "gcloud auth login --quiet --cred-file=secrets/gcp.auth.json",
+        reduce(
+            vcat,
+            ["docker tag $name $repo/$name:$tag", "docker push $repo/$name:$tag"] for
+            tag in tags
+        )...,
+    ])
+    # deploy to aws
     repo = read("secrets/aws.docker.txt", String)
     region = read("secrets/aws.region.txt", String)
     account = read("secrets/aws.account.txt", String)
-    cmds = [
+    runcmds([
         "export AWS_SHARED_CREDENTIALS_FILE=secrets/aws.credentials",
-        "aws ecr get-login-password --region us-east-2 | docker login --username AWS --password-stdin $account.dkr.ecr.$region.amazonaws.com",
-        "docker tag $name $repo/$name:$tag",
-        "docker push $repo/$name:$tag",
-    ]
-    cmd = join(cmds, " && ")
-    run(`sh -c $cmd`)
-    cmds = [
-        "docker image prune -f",
-        "docker builder prune -f --keep-storage=32GB",
-    ]
-    run(`sh -c $cmd`)
+        "export AWS_PAGER=''",
+        "aws ecr get-login-password --region $region | docker login --username AWS --password-stdin $account.dkr.ecr.$region.amazonaws.com",
+        reduce(
+            vcat,
+            ["docker tag $name $repo/$name:$tag", "docker push $repo/$name:$tag"] for
+            tag in tags
+        )...,
+        "aws autoscaling start-instance-refresh --auto-scaling-group-name '$(name)-autoscale-group' --preferences '{\"MinHealthyPercentage\": 100, \"InstanceWarmup\": 600 }' --region $region",
+    ])
+    # cleanup
+    runcmds(["docker image prune -f", "docker builder prune -f --reserved-space=32GB"])
 end
 
 cd("../../..")
@@ -149,5 +167,4 @@ layer2(basedir)
 layer3(basedir)
 database(basedir)
 compute(basedir)
-build(basedir, "server", "latest")
-build(basedir, "server", finetune_tag)
+build(basedir, "server", [finetune_tag, "latest"])

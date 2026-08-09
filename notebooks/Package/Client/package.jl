@@ -5,28 +5,25 @@ function copy(file::String, dst::String)
     cp(file, joinpath(dst, file))
 end
 
+function runcmds(cmds)
+    cmd = join(cmds, " && ")
+    run(`sh -c $cmd`)
+end
+
 function build(basedir::String, name::String, tag::String, args::String)
     run(`docker build -t $name $basedir`)
     repo = read("secrets/gcp.docker.txt", String)
     project = read("secrets/gcp.project.txt", String)
     region = read("secrets/gcp.region.txt", String)
-    run(`docker tag $name $repo/$name:$tag`)
-    run(`docker push $repo/$name:$tag`)
-    cmds = [
-        "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet",
-        "gcloud run deploy {app} --image={repo}/{app}:{tag} --region={region} --project={project} {args}",
-    ]
-    deploy = replace(
-        join(cmds, " && "),
-        "{repo}" => repo,
-        "{project}" => project,
-        "{region}" => region,
-        "{app}" => name,
-        "{tag}" => tag,
-        "{args}" => args,
+    runcmds(
+        [
+            "gcloud auth login --cred-file=secrets/gcp.auth.json --quiet",
+            "docker tag $name $repo/$name:$tag",
+            "docker push $repo/$name:$tag",
+            "gcloud run deploy $name --image=$repo/$name:$tag --region=$region --project=$project $args",
+        ]
     )
-    run(`sh -c $deploy`)
-    run(`docker system prune -af --filter until=24h`)
+    runcmds(["docker image prune -f", "docker builder prune -f --reserved-space=32GB"])
 end
 
 cd("../../..")
