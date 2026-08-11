@@ -122,8 +122,25 @@ function render_card(d)
 end
 
 function is_unreleased(status, startdate)
-    if !ismissing(startdate) && Dates.Date(startdate) < Dates.now()
-        return false
+    if !ismissing(startdate)
+        today_parts = parse.(Int, split(Dates.format(Dates.now(), "yyyy-mm-dd"), "-"))
+        start_parts = parse.(Int, split(startdate, "-"))
+        while !isempty(start_parts) && start_parts[end] == 1
+            pop!(start_parts)
+        end
+        matches = 0
+        for (tp, sp) in zip(today_parts, start_parts)
+            if tp > sp
+                return false
+            elseif tp < sp
+                break
+            else
+                matches += 1
+            end
+        end
+        if matches == length(today_parts)
+            return false
+        end
     end
     if !ismissing(status) && status in ["Upcoming", "TBA"]
         return true
@@ -211,6 +228,7 @@ end
             "missing_images" => get_missing_images(),
         )
     end
+    max_ts = Dates.Date(read("$datadir/training_tag", String), Dates.DateFormat("yyyymmdd"))
     for (k, v) in collect(info)
         if is_unreleased(v["status"], v["startdate"])
             delete!(info, k)

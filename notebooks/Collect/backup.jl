@@ -71,4 +71,4 @@ function backup()
     archive(date)
 end
 
-@scheduled "BACKUP" "06:00" @handle_errors backup()
+@scheduled "BACKUP" "05:01" @handle_errors backup()

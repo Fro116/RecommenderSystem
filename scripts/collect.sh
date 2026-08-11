@@ -11,6 +11,7 @@ logs="$workdir/RecommenderSystem/logs/collect"
 mkdir -p $logs && rm -f $logs/*.log
 source venv/bin/activate
 export JULIA_PROJECT="$workdir/juliaenv"
+export JULIA_NUM_THREADS="auto,auto"
 ulimit -S -n 4096
 cd RecommenderSystem/notebooks/Collect
 ./deploy.sh

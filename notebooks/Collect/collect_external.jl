@@ -51,4 +51,4 @@ function save()
     save_external("item_similarity_manual", "item_similarity_manual.csv")
 end
 
-@scheduled "EXTERNAL" "05:30" @handle_errors save()
+@scheduled "EXTERNAL" "04:00" @handle_errors save()

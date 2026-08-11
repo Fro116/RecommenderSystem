@@ -78,15 +78,25 @@ end
 function get_media_groups(medium::Int)
     df = get_media_groups(Dict(0 => "manga", 1 => "anime")[medium])
     function is_unreleased(status, startdate)
-        if !ismissing(startdate) && Dates.Date(startdate) < Dates.now()
-            return false
-        end
         if !ismissing(status) && status in ["Upcoming", "TBA"]
+            return true
+        end
+        if !ismissing(startdate) && Dates.Date(startdate) > Dates.now()
             return true
         end
         false
     end
-    filter(x -> !is_unreleased(x.status, x.startdate), df)
+    seen_ids = Set()
+    unreleased_ids = Set()
+    for i = 1:DataFrames.nrow(df)
+        if df.matchedid[i] ∉ seen_ids
+            if is_unreleased(df.status[i], df.startdate[i])
+                push!(unreleased_ids, df.matchedid[i])
+            end
+            push!(seen_ids, df.matchedid[i])
+        end
+    end
+    filter(x -> x.matchedid ∉ unreleased_ids, df)
 end
 
 function get_title_records(medium::Int)

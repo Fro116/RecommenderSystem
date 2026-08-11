@@ -1,11 +1,38 @@
 import CSV
 import DataFrames
+import Dates
 import JLD2
 import HDF5
 import LinearAlgebra
 import ProgressMeter: @showprogress, next!
 
 const datadir = "../../data/finetune"
+
+function get_unreleased_matchedids(medium::Int)
+    medium_str = Dict(0 => "manga", 1 => "anime")[medium]
+    df = CSV.read("$datadir/$medium_str.csv", DataFrames.DataFrame)
+    max_ts = Dates.Date(read("$datadir/training_tag", String), Dates.DateFormat("yyyymmdd"))
+    function is_unreleased(status, startdate)
+        if !ismissing(status) && status in ["Upcoming", "TBA"]
+            return true
+        end
+        if !ismissing(startdate) && Dates.Date(startdate) > max_ts
+            return true
+        end
+        false
+    end
+    seen_ids = Set()
+    unreleased_ids = Set()
+    for i = 1:DataFrames.nrow(df)
+        if df.matchedid[i] ∉ seen_ids
+            if is_unreleased(df.status[i], df.startdate[i])
+                push!(unreleased_ids, df.matchedid[i])
+            end
+            push!(seen_ids, df.matchedid[i])
+        end
+    end
+    unreleased_ids
+end
 
 function get_adaptations(medium::Int)
     df = CSV.read("$datadir/media_relations.csv", DataFrames.DataFrame)
@@ -21,7 +48,11 @@ function get_adaptations(medium::Int)
         source_matchedid = df.source_matchedid,
         target_matchedid = df.target_matchedid,
     )
-    df = DataFrames.filter(x -> x.source_matchedid != 0 && x.target_matchedid != 0, df)
+    invalid_sourceids = get_unreleased_matchedids(medium)
+    invalid_targetids = get_unreleased_matchedids(1 - medium)
+    push!(invalid_sourceids, 0)
+    push!(invalid_targetids, 0)
+    df = DataFrames.filter(x -> x.source_matchedid ∉ invalid_sourceids && x.target_matchedid ∉ invalid_targetids, df)
     df
 end
 
