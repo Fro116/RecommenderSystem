@@ -21,4 +21,4 @@ function import_lists()
     end
 end
 
-@periodic 600 "IMPORT_LISTS" @handle_errors import_lists()
+@periodic "IMPORT_LISTS" 600  @handle_errors import_lists()

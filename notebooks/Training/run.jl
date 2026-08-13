@@ -61,6 +61,7 @@ end
 
 function train(datetag::AbstractString)
     logtag("TRAIN", "running on $datetag")
+    start_ts = time()
     run(`julia import_data.jl $datetag`)
     for m in [0, 1]
         run(`julia media_relations.jl $m`)
@@ -70,11 +71,15 @@ function train(datetag::AbstractString)
     if !check_gpu_success()
         logerror("rungpu failed")
         exit(1)
+    else
+        logtag("TRAIN", "rungpu succeeded")
     end
     cmd = "cd item_similarity && julia run.jl"
     run(`sh -c $cmd`)
     run(`rclone --retries=10 copyto $datadir/list_tag r2:rsys/database/training/latest`)
     prune_directories("training", 2)
+    ts = time() - start_ts
+    logtag("TRAIN", "finished $datetag after $(ts) seconds")
 end
 
 train(ARGS[1])

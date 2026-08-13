@@ -6,7 +6,15 @@ include("../notebooks/julia_utils/scheduling.jl")
 include("../notebooks/julia_utils/stdout.jl")
 cd("../notebooks")
 
-const gpulock = ReentrantLock()
+function days_since_last_train()
+    str = read(`rclone lsf r2:rsys/database/training`, String)
+    tags = sort([chop(x) for x in split(str) if endswith(x, "/")])
+    if isempty(tags)
+        return Inf
+    end
+    last_train = Dates.DateTime(tags[end], Dates.dateformat"yyyymmdd")
+    (Dates.now() - last_train) / Dates.Day(1)
+end
 
 function runcmd(x)
     logtag("TRAINING", "running $x")
@@ -23,24 +31,26 @@ function import_db(name::String)
 end
 
 function run_training()
-    if Dates.dayofmonth(Dates.today()) ∉ [8, 23]
+    days = days_since_last_train()
+    if days < 15
         return
     end
-    for x in ["media", "autocomplete_users", "autocomplete_items", "embeddings"]
+    logtag("TRAINING", "retraining after $days days")
+    for x in ["media", "images", "embeddings", "autocomplete_users"]
         import_db(x)
     end
-    lock(gpulock) do
-        import_db("images")
-    end
-    lock(gpulock) do
+    datetag = Dates.format(Dates.today(), "yyyymmdd")
+    latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
+    while datetag != latest
+        logtag("TRAIN_MODELS", "waiting for $datetag, latest $latest")
+        sleep(600)
         datetag = Dates.format(Dates.today(), "yyyymmdd")
         latest = read(`rclone cat r2:rsys/database/lists/latest`, String)
-        if datetag != latest
-            logtag("TRAIN_MODELS", "list $datetag is not ready, using $latest")
-        end
-        runcmd("cd Training && julia run.jl $latest")
+    end
+    runcmd("cd Training && julia run.jl $latest")
+    for x in ["autocomplete_items"]
+        import_db(x)
     end
 end
 
-
-@scheduled "RUN_TRAINING" "07:00" @handle_errors run_training()
+@scheduled "RUN_TRAINING" "11:00" @handle_errors run_training()

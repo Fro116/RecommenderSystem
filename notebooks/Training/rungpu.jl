@@ -14,8 +14,9 @@ function write_entrypoint(num_gpus)
 end
 
 function provision_instance()
-    get_instances() = copy(JSON3.parse(read(`vastai show instances-v1 --raw`, String))[:instances])
-    @assert isempty(get_instances()) "instance already exists"
+    get_instances() = copy(JSON3.parse(read(`vastai show instances-v1 --raw`, String)))
+    existing_ids = [x[:id] for x in get_instances()]
+    @assert length(existing_ids) <= 1 "instances already exist"
     for gpu_config in ["8xB200", "4xB200", "8xH100"]
         node_price = Dict(
             "8xB200" => 64,
@@ -59,8 +60,8 @@ function provision_instance()
             run(`sh -c $create_cmd`)
             sleep(60)
             write_entrypoint(num_gpus)
-            instance = only(get_instances())
-            return string(instance[:id]), duration
+            instance_id = only([x[:id] for x in get_instances() if x ∉ existing_ids])
+            return string(instance_id), duration
         end
     end
     nothing
@@ -98,7 +99,7 @@ function launch_job(instance_id::String, duration::Real)
     run(ssh_command)
     logtag("RUNGPU", "waiting for job completion")
     finished = false
-    max_wait = time() + duration * 3600
+    max_wait = time() + duration * 1.2 * 3600
     while time() < max_wait
         if get_instance_status(instance_id) != "running"
             finished = true

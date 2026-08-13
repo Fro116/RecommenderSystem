@@ -546,7 +546,7 @@ def get_training_config():
             "gender": 4,
             "source": 4,
         },
-        "metadata_emb_size": 3076,
+        "metadata_emb_size": 3072 * 2 + 4,
         "min_ts": min_ts,
         "max_ts": max_ts,
         "rating_mean": 7.6287384,
