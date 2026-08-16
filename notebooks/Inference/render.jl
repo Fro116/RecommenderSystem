@@ -338,12 +338,16 @@ function ranking(state, idxs, speedscope)
     Threads.@threads for i = 1:length(state["users"])
         s = state["users"][i]
         source = s["source"]
+        if "$m.ranking" in keys(s["embeds"]) && s["embeds"]["$m.ranking_idxs"] == idxs
+            continue
+        end
         u = copy(s["user"])
         u["embeds"] = Dict(k => s["embeds"][k] for k in ["$m.retrieval"])
         d_embed = query_model(u, m, idxs .- 1)
         if isnothing(d_embed)
             return HTTP.Response(500, []), false
         end
+        d_embed["$m.ranking_idxs"] = idxs
         s["embeds"] = merge(s["embeds"], d_embed)
     end
     push!(speedscope, ("ranking_model", time()))
@@ -359,60 +363,71 @@ function ranking(state, idxs, speedscope)
 end
 
 function reranking!(state, idxs, r, partialk, speedscope)
+    # setup
     medium = state["medium"]
+    decay = Float32(state["penalties"]["decay"])
     ids = Dict(x => i for (i, x) in Iterators.enumerate(idxs))
-    mmr_penalties = zeros(Float32, length(idxs))
-    embs = item_similarity["embeddings.$medium"][:, idxs]
+    r = convert(Vector{Float32}, r)
+    n = length(idxs)
+    score = zeros(Float32, n)
+    related = relations["$(medium).related"]::SparseArrays.SparseMatrixCSC{Float32,Int32}
+    related_rows = SparseArrays.rowvals(related)
+    related_vals = SparseArrays.nonzeros(related)
+    # mmr penalty
+    mmr_penalties = zeros(Float32, n)
+    mmr_penalty = Float32(state["penalties"]["mmr_penalty"])
+    embs = convert(Matrix{Float32}, item_similarity["embeddings.$medium"][:, idxs])
     pairwise_similarity = embs' * embs
-    related_idx = Set()
+    function apply_mmr_penalty!(mmr_penalties, id)
+        similarity = view(pairwise_similarity, :, id)
+        @. mmr_penalties = max(mmr_penalties * decay, similarity * mmr_penalty)
+    end
+    # same series penalty
+    same_series_penalties = zeros(Float32, n)
+    same_series_penalty = Float32(state["penalties"]["same_series_penalty"])
+    function apply_same_series_penalty!(same_series_penalties, id)
+        same_series_penalties .*= decay
+        for k in SparseArrays.nzrange(related, idxs[id])
+            i = related_rows[k]
+            if related_vals[k] != 0 && haskey(ids, i)
+                same_series_penalties[ids[i]] += same_series_penalty
+            end
+        end
+    end
+    # related penalty
+    related_penalties = zeros(Float32, n)
+    related_penalty = Float32(state["penalties"]["related_penalty"])
+    related_ids = zeros(Float32, n)
     for u in state["users"]
         for x in u["user"]["items"]
             if x["medium"] != medium ||
-               x["status"] in [status_map["deleted"], status_map["planned"]]
+               x["status"] in (status_map["deleted"], status_map["planned"])
                 continue
             end
-            for (i, v) in zip(
-                SparseArrays.findnz(relations["$(medium).related"][:, x["matchedid"]+1])...,
-            )
-                if v != 0
-                    push!(related_idx, i)
+            for k in SparseArrays.nzrange(related, x["matchedid"] + 1)
+                i = related_rows[k]
+                if related_vals[k] != 0 && haskey(ids, i)
+                    related_ids[ids[i]] = 1
                 end
             end
         end
     end
-    function apply_same_series_penalty!(r, id)
-        for (i, v) in
-            zip(SparseArrays.findnz(relations["$(medium).related"][:, idxs[id]])...)
-            if v != 0 && i in keys(ids)
-                r[ids[i]] -= state["penalties"]["same_series_penalty"]
-            end
+    function apply_related_penalty!(related_penalties, id)
+        related_penalties .*= decay
+        if related_ids[id] != 0
+            @. related_penalties += related_ids * related_penalty
         end
     end
-    function apply_related_penalty!(r, id)
-        if idxs[id] in related_idx
-            for i in related_idx
-                if i in keys(ids)
-                    r[ids[i]] -= state["penalties"]["related_penalty"]
-                end
-            end
-        end
-    end
-    function apply_mmr_penalty!(mmr_penalties, id)
-        mmr_penalties .=
-            max.(
-                mmr_penalties,
-                pairwise_similarity[:, id] .*
-                state["penalties"]["mmr_penalty"],
-            )
-    end
-    selected_ids = []
-    for _ = 1:partialk
-        score = r - mmr_penalties
+    # ordering
+    selected_ids = Int[]
+    sizehint!(selected_ids, n)
+    for _ in 1:min(partialk, n)
+        @. score = r - mmr_penalties - same_series_penalties - related_penalties
         bestid = argmax(score)
         push!(selected_ids, bestid)
-        r[bestid] = -Inf
-        apply_same_series_penalty!(r, bestid)
-        apply_related_penalty!(r, bestid)
+        r[bestid] = -Inf32
+        apply_same_series_penalty!(same_series_penalties, bestid)
+        apply_related_penalty!(related_penalties, bestid)
         apply_mmr_penalty!(mmr_penalties, bestid)
     end
     push!(speedscope, ("reranking", time()))
@@ -423,7 +438,7 @@ function render(state, pagination, speedscope)
     # add types
     for u in state["users"]
         for k in keys(u["embeds"])
-            if k ∉ ["version"]
+            if k ∉ ["version", "0.ranking_idxs", "1.ranking_idxs"]
                 u["embeds"][k] = Float32.(u["embeds"][k])
             end
         end

@@ -12,6 +12,7 @@ const MODEL_URL = ARGS[2]
 const DATABASE_WRITE_URL = ARGS[3]
 const TUNNEL = parse(Bool, ARGS[4])
 const datadir = "../../data/finetune"
+const training_tag = read("$datadir/training_tag", String)
 const finetune_tag = read("$datadir/finetune_tag", String)
 const serverid = "$(finetune_tag)-$(UUIDs.uuid4())"
 
@@ -388,6 +389,7 @@ function decode_state(r::HTTP.Request)
                 "same_series_penalty" => 0,
                 "related_penalty" => 0,
                 "mmr_penalty" => 0,
+                "decay" => exp(log(0.5) / 12),
             )
         )
         uri = HTTP.URI(r.target)
@@ -396,12 +398,14 @@ function decode_state(r::HTTP.Request)
                 "same_series_penalty" => 1,
                 "related_penalty" => 1,
                 "mmr_penalty" => 1,
+                "decay" => exp(log(0.5) / 12),
             )
         elseif uri.path == "/add_item"
             state["penalties"] = Dict(
                 "same_series_penalty" => 0,
                 "related_penalty" => 0,
                 "mmr_penalty" => 0,
+                "decay" => exp(log(0.5) / 12),
             )
         else
             logerror("decode_state: unknown path $(uri.path)")
@@ -515,7 +519,7 @@ Oxygen.@post "/set_media" function set_media_endpoint(r::HTTP.Request)::HTTP.Res
     state["medium"] = medium
     Threads.@threads for i = 1:length(state["users"])
         u = state["users"][i]
-        if "masked.$medium" in keys(u["embeds"])
+        if "$medium.retrieval" in keys(u["embeds"])
             continue
         end
         d_embed = query_model(u["user"], medium, nothing)
@@ -527,6 +531,14 @@ Oxygen.@post "/set_media" function set_media_endpoint(r::HTTP.Request)::HTTP.Res
     render_state(state, pagination, encoding, nothing, speedscope)
 end
 
+Oxygen.@get "/version" function version_endpoint(r::HTTP.Request)::HTTP.Response
+    encoding = nothing
+    if occursin("gzip", HTTP.header(r, "Accept-Encoding", ""))
+        encoding = :gzip
+    end
+    ret = Dict("pretrain" => training_tag, "finetune" => finetune_tag)
+    HTTP.Response(200, encode(ret, :json, encoding)...)
+end
 
 function compile_source(port::Integer, compile_source::AbstractString)
     test_users = CSV.read(
@@ -628,6 +640,7 @@ function compile(port::Integer)
     get_images()
     get_missing_images()
     get_media_info.([0, 1])
+    HTTP.get("http://localhost:$PORT/version")
     Threads.@threads for source in ["mal", "anilist", "kitsu", "animeplanet"]
         compile_source(port, source)
     end
