@@ -10,6 +10,7 @@ import React, {
 } from "react";
 import { useNavigate } from "react-router-dom";
 import { SourceType, AutocompleteItem, API_BASE, SOURCE_MAP } from "./types";
+import Footer from "./Footer";
 
 type QueryMode = "user" | "item";
 type ItemType = "anime" | "manga";
@@ -533,9 +534,7 @@ const HomePage: React.FC = () => {
         </div>
       )}
 
-      <footer className="home-footer">
-        <p>Recs☆Moe is a recommender system for anime&nbsp;and&nbsp;manga</p>
-      </footer>
+      <Footer fixed />
     </>
   );
 };

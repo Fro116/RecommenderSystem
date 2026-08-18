@@ -71,26 +71,6 @@
   box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
 }
 
-/* Footer */
-.home-footer {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  width: 100%;
-  background-color: #f0f0f0;
-  border-top: 1px solid #f48fb1;
-  padding: 12px 20px;
-  z-index: 10;
-}
-
-.home-footer p {
-  margin: 0;
-  text-align: center;
-  font-size: clamp(11px, 3.8vw, 14px);
-  color: #666;
-  font-weight: 500;
-}
-
 /* Error banner - HomePage also has an error banner */
 .error-banner {
   background-color: #fdecea;
@@ -128,12 +108,5 @@
   .source-button {
     flex: 1 1 45%;
     margin: 6px;
-  }
-}
-
-@media (max-width: 414px) {
-  .home-footer {
-    padding-left: 10px;
-    padding-right: 10px;
   }
 }

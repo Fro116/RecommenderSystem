@@ -1,0 +1,320 @@
+/* AboutPage specific styles */
+
+/* Header — geometry mirrors ViewPage's `.header--toggle` / `.header-toggle`
+   so the two bars are interchangeable: same double padding, same full-width
+   inner row, same 36px row height that ViewPage gets from its toggles. */
+header.header--about {
+  padding: 10px 20px 0;
+}
+
+.about-header-bar {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  margin-bottom: 10px;
+  min-height: 36px;
+}
+
+/* Matches the type of ViewPage's `.recommendations-title h2`, so both pages
+   name themselves in the same slot at the same scale. Kept as its own rule
+   rather than reusing that class, which carries ViewPage layout with it. */
+.about-header-title {
+  flex-grow: 1;
+  font-size: 20px;
+  font-weight: 500;
+  color: #333;
+  text-align: left;
+  margin: 0;
+}
+
+/* Body */
+.about-main {
+  flex: 1 0 auto;
+  display: flex;
+  justify-content: center;
+  padding: 32px 20px 40px;
+}
+
+.about-card {
+  width: 100%;
+  max-width: 720px;
+  padding: 32px;
+  background-color: #f7f7f7;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+}
+
+.about-lede {
+  font-size: 16px;
+  line-height: 1.6;
+  color: #555;
+  margin: 0;
+}
+
+.about-lede + .about-lede {
+  margin-top: 14px;
+}
+
+/* Prose links carry no colour or underline at rest — weight alone marks them,
+   the same signal `.recsmoe-brand-link` uses inside a heading */
+.about-inline-link {
+  color: #333;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.about-inline-link:hover {
+  color: #fb8c00;
+}
+
+.about-inline-link:focus-visible {
+  outline: 2px solid #fb8c00;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.about-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 28px 0;
+  color: #f48fb1;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.about-divider::before,
+.about-divider::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background-color: #e0e0e0;
+}
+
+.about-section-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #333;
+  margin: 0 0 14px 0;
+}
+
+.about-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Link rows reuse the two-tone split of the homepage's query mode button */
+.about-link-row {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  background-color: #e0e0e0;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  color: #333;
+  text-decoration: none;
+  overflow: hidden;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.about-link-row:hover {
+  border-color: #fb8c00;
+  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+}
+
+.about-link-row:focus-visible {
+  outline: none;
+  border-color: #fb8c00;
+  box-shadow: 0 0 0 3px rgba(251, 140, 0, 0.35);
+}
+
+.about-link-label {
+  flex: 0 0 150px;
+  padding: 12px 16px;
+  font-size: 15px;
+  font-weight: bold;
+  color: #333;
+  background-color: #ffffff;
+  display: grid;
+  place-items: center;
+}
+
+.about-link-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  font-size: 15px;
+  color: #333;
+  text-align: left;
+  border-left: 1px solid #ccc;
+  transition: color 0.15s ease;
+}
+
+.about-link-row:hover .about-link-value {
+  color: #fb8c00;
+}
+
+.about-link-icon {
+  display: flex;
+  flex-shrink: 0;
+  color: #f48fb1;
+}
+
+.about-link-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Fact rows share the split layout of the link rows, but sit flatter: no
+   shadow and no hover, since there is nothing to click */
+.about-facts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.about-fact-row {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  background-color: #f0f0f0;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.about-fact-label {
+  flex: 0 0 150px;
+  padding: 12px 16px;
+  font-size: 15px;
+  font-weight: bold;
+  color: #333;
+  background-color: #ffffff;
+  display: grid;
+  place-items: center;
+}
+
+.about-fact-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  font-size: 15px;
+  color: #333;
+  border-left: 1px solid #e0e0e0;
+}
+
+.about-fact-value.is-pending {
+  color: #888;
+}
+
+/* Before the fetch resolves the cell is empty. A non-breaking space keeps its
+   line box, so the row does not grow when the date arrives — which matters on
+   mobile, where the value sits in its own row below the label rather than
+   being stretched to the label's height. */
+.about-fact-value:empty::before {
+  content: "\00a0";
+}
+
+.about-note {
+  margin: 14px 0 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #666;
+}
+
+@media (max-width: 600px) {
+  /* ViewPage keeps its 10px/20px header padding at every width and centres
+     the title below 600px; match both rather than inventing a mobile inset */
+  .about-header-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  .about-header-title {
+    width: 100%;
+    flex-grow: 0;
+    text-align: center;
+    font-size: 18px;
+  }
+
+  .about-main {
+    padding: 20px 12px 32px;
+  }
+
+  .about-card {
+    padding: 20px 16px;
+    border-radius: 12px;
+  }
+
+  .about-lede {
+    font-size: 15px;
+  }
+
+  .about-divider {
+    margin: 24px 0;
+  }
+
+  /* Stack the label above the value so long URLs keep a full-width line */
+  .about-link-row {
+    flex-direction: column;
+  }
+
+  .about-link-label {
+    flex: none;
+    width: 100%;
+    display: block;
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid #ccc;
+  }
+
+  .about-link-value {
+    padding: 10px 14px;
+    border-left: none;
+  }
+
+  .about-fact-row {
+    flex-direction: column;
+  }
+
+  .about-fact-label {
+    flex: none;
+    width: 100%;
+    display: block;
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid #e0e0e0;
+  }
+
+  .about-fact-value {
+    padding: 10px 14px;
+    border-left: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .about-inline-link,
+  .about-link-row,
+  .about-link-value {
+    transition: none;
+  }
+}

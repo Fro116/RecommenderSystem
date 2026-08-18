@@ -3,6 +3,7 @@ import React, { useState, useEffect } from "react";
 import { Routes, Route, useLocation } from "react-router-dom";
 import HomePage from "./HomePage";
 import ViewPage from "./ViewPage";
+import AboutPage from "./AboutPage";
 import NotFoundPage from "./NotFoundPage";
 import "./Global.css";
 import {
@@ -55,15 +56,30 @@ const App: React.FC = () => {
   }, []);
 
   const isHomePage = location.pathname === "/";
+  const isAboutPage = location.pathname === "/about";
 
   const containerClass = isHomePage ? "container homepage" : "container";
-  const containerStyle: React.CSSProperties = isHomePage
-    ? { height: "calc(var(--vh, 1vh) * 100)", overflowY: "hidden" }
-    : {
-        display: "flex",
-        flexDirection: "column",
-        minHeight: "calc(var(--vh, 1vh) * 100)",
-      };
+  let containerStyle: React.CSSProperties;
+  if (isHomePage) {
+    containerStyle = {
+      height: "calc(var(--vh, 1vh) * 100)",
+      overflowY: "hidden",
+    };
+  } else if (isAboutPage) {
+    // Let the page grow past the viewport so short screens can still scroll
+    containerStyle = {
+      display: "flex",
+      flexDirection: "column",
+      height: "auto",
+      minHeight: "calc(var(--vh, 1vh) * 100)",
+    };
+  } else {
+    containerStyle = {
+      display: "flex",
+      flexDirection: "column",
+      minHeight: "calc(var(--vh, 1vh) * 100)",
+    };
+  }
 
   return (
     <div className={containerClass} style={containerStyle}>
@@ -77,6 +93,7 @@ const App: React.FC = () => {
           path="/item/:itemType/:source/:itemid"
           element={<ViewPage isMobile={isMobile} />}
         />
+        <Route path="/about" element={<AboutPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </div>

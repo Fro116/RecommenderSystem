@@ -1,0 +1,92 @@
+/* Shared site footer */
+.site-footer {
+  flex-shrink: 0;
+  width: 100%;
+  background-color: #f0f0f0;
+  border-top: 1px solid #f48fb1;
+  padding: 12px 20px;
+}
+
+/* The homepage viewport does not scroll, so its footer is pinned */
+.site-footer--fixed {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+}
+
+.site-footer-inner {
+  margin: 0;
+  /* Three tracks with equal outer columns, so the tagline in the middle is
+     centred against the whole footer rather than against the space the nav
+     leaves over. The nav sits in the right column, pushed to its far edge. */
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 4px 24px;
+  text-align: center;
+  font-size: clamp(11px, 3.8vw, 14px);
+  font-weight: 500;
+  color: #666;
+}
+
+.site-footer-tagline {
+  grid-column: 2;
+  /* Lets the tagline wrap instead of forcing the footer to overflow
+     sideways when the nav grows */
+  min-width: 0;
+}
+
+.site-footer-nav {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 14px;
+}
+
+.site-footer-link {
+  color: #666;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.site-footer-link:hover {
+  color: #fb8c00;
+  text-decoration: underline;
+}
+
+.site-footer-link:focus-visible {
+  outline: 2px solid #fb8c00;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (max-width: 600px) {
+  /* Back to a centred two-row stack: tagline, then the links as a unit */
+  .site-footer-inner {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .site-footer-nav {
+    flex-basis: 100%;
+  }
+}
+
+@media (max-width: 414px) {
+  .site-footer {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site-footer-link {
+    transition: none;
+  }
+}
