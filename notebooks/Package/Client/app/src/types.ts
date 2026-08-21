@@ -1,5 +1,3 @@
-// src/types.ts
-
 export interface Result {
   title: string;
   english_title?: string;
@@ -94,14 +92,6 @@ export const SOURCE_MAP: Record<SourceType, string> = {
   Kitsu: "kitsu",
   "Anime-Planet": "animeplanet",
 };
-
-/* Tag swatches used to be emitted as light `hsl()` colours and darkened at
-   runtime by Dark Reader. Since the hue is derived per tag there is no fixed
-   palette to substitute, so the transform is reproduced here: Dark Reader's
-   `modifyBgHSL` against the default dark scheme background (#181a1b). Under the
-   default theme its filter matrix is the identity, so the RGB round trip below
-   is the whole of it. Verified to match Dark Reader 4.9.105 exactly across all
-   360 hues at both call sites. */
 
 interface Hsl {
   h: number;
@@ -204,8 +194,6 @@ export const stringToHslColor = (str: string, s: number, l: number): string => {
   for (let i = 0; i < str.length; i++) {
     hash = str.charCodeAt(i) + ((hash << 5) - hash);
   }
-  /* `hash % 360` can be negative; browsers normalise the hue before it reaches
-     the cascade, so normalise here too. */
   const h = ((hash % 360) + 360) % 360;
   const { r, g, b } = hslToRgb(
     darkenBackground(rgbToHsl(hslToRgb({ h, s: s / 100, l: l / 100 }))),

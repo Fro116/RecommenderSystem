@@ -1,12 +1,3 @@
-/* Global.css */
-
-/* Baseline dark theme.
-   These rules replace the user-agent sheet Dark Reader used to inject at
-   runtime. The anonymous cascade layer is load-bearing, not cosmetic: layered
-   normal declarations lose to the unlayered page rules below (so `body` keeps
-   its own background), while layered `!important` declarations still beat
-   unlayered normal ones (so `html` keeps this background). That is exactly the
-   cascade Dark Reader relied on. */
 @layer {
   html {
     background-color: #181a1b !important;
@@ -65,8 +56,6 @@
   }
 }
 
-/* Previously passed to Dark Reader as a dynamic-theme fix. Unlayered and
-   !important, matching how Dark Reader injected it. */
 header input::placeholder {
   color: #8c8c8c !important;
 }

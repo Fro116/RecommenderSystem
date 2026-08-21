@@ -1,4 +1,3 @@
-// src/components/DetailPane.tsx
 import "./DetailPane.css";
 import React from "react";
 import {
@@ -26,17 +25,13 @@ const DetailPane: React.FC<DetailPaneProps> = ({
     y: number;
   } | null>(null);
 
-  // Handle closing the pane with the Escape key
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         onClose();
       }
     };
-
     document.addEventListener("keydown", handleKeyDown);
-
-    // Cleanup the event listener when the component unmounts
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
@@ -46,7 +41,6 @@ const DetailPane: React.FC<DetailPaneProps> = ({
     return null;
   }
 
-  // Stop background scroll when pane is open
   React.useEffect(() => {
     document.body.style.overflow = "hidden";
     return () => {
@@ -61,8 +55,6 @@ const DetailPane: React.FC<DetailPaneProps> = ({
 
   const handleContentMouseUp = (e: React.MouseEvent) => {
     if (!isMobile || !mouseDownPos) return;
-
-    // Don't close if user is clicking a link
     let target = e.target as HTMLElement;
     while (target && target !== e.currentTarget) {
       if (target.tagName === "A") {
@@ -71,8 +63,6 @@ const DetailPane: React.FC<DetailPaneProps> = ({
       }
       target = target.parentElement as HTMLElement;
     }
-
-    // Check if the mouse moved more than a few pixels (i.e., dragging to select text)
     const deltaX = Math.abs(e.clientX - mouseDownPos.x);
     const deltaY = Math.abs(e.clientY - mouseDownPos.y);
     if (deltaX < 5 && deltaY < 5) {

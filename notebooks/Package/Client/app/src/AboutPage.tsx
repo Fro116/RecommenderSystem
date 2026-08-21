@@ -1,4 +1,3 @@
-// src/AboutPage.tsx
 import "./Header.css";
 import "./AboutPage.css";
 import React, { useEffect, useState } from "react";
@@ -8,9 +7,6 @@ import Footer from "./Footer";
 
 const CONTACT_EMAIL = "contact@recs.moe";
 const SOURCE_URL = "https://github.com/Fro116/RecommenderSystem";
-// Displayed without the host, which the label cell now names. iOS has none of
-// the first fonts in the stack and falls back to Geneva, wide enough that the
-// full URL overflowed the row by a character on a 420px screen.
 const SOURCE_LABEL = "Fro116/RecommenderSystem";
 
 interface VersionInfo {
@@ -23,9 +19,6 @@ type VersionState =
   | { status: "ready"; info: VersionInfo }
   | { status: "error" };
 
-// Builds are tagged yyyymmdd. Parse the parts by hand: `new Date("20260812")`
-// is engine-dependent, and an ISO parse is UTC-based, which renders as the
-// previous day for anyone west of Greenwich.
 const formatBuildDate = (value?: string): string | null => {
   if (!value || !/^\d{8}$/.test(value)) {
     return null;
@@ -82,7 +75,6 @@ const CodeIcon: React.FC = () => (
   </svg>
 );
 
-// Links inside running prose, as opposed to the full-width `.about-link-row`
 const InlineLink: React.FC<{ href: string; children: React.ReactNode }> = ({
   href,
   children,
@@ -130,10 +122,6 @@ const AboutPage: React.FC = () => {
   }, []);
 
   const versionCell = (key: keyof VersionInfo) => {
-    // Nothing is rendered while the request is in flight. The response
-    // normally lands in well under a second, so a "Loading…" label would only
-    // flash and vanish. `.about-fact-value:empty` holds the row's height so
-    // the layout does not shift when the date arrives.
     if (version.status === "loading") {
       return { text: "", pending: true };
     }

@@ -1,4 +1,3 @@
-// src/HomePage.tsx
 import "./Header.css";
 import "./HomePage.css";
 import React, {
@@ -190,16 +189,11 @@ const HomePage: React.FC = () => {
     e.preventDefault();
 
     if (queryMode === "item") {
-      // If in item mode and there's at least one suggestion,
-      // treat 'Enter' as a click on the first suggestion.
       if (autocompleteResults.length > 0) {
         handleAutocompleteClick(autocompleteResults[0]);
       }
-      // If there are no suggestions, do nothing.
       return;
     }
-
-    // The rest of the function handles 'user' mode searches.
     if (!query.trim()) return;
     triggerSearch(query);
     setQuery("");
@@ -216,7 +210,6 @@ const HomePage: React.FC = () => {
       const val = item.username!;
       triggerSearch(val);
     } else {
-      // For item search, navigate to the view page and let it handle the fetch.
       const { source, itemid } = item;
       if (source && itemid) {
         navigate(`/item/${itemType}/${source}/${itemid}`);

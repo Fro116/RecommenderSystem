@@ -1,4 +1,3 @@
-// src/App.tsx
 import React, { useState, useEffect } from "react";
 import { Routes, Route, useLocation } from "react-router-dom";
 import HomePage from "./HomePage";
@@ -11,7 +10,6 @@ const App: React.FC = () => {
   const [isMobile, setIsMobile] = useState<boolean>(false);
   const location = useLocation();
 
-  // viewport height and mobile detection
   useEffect(() => {
     const vh = window.innerHeight * 0.01;
     document.documentElement.style.setProperty("--vh", `${vh}px`);
@@ -35,7 +33,6 @@ const App: React.FC = () => {
       overflowY: "hidden",
     };
   } else if (isAboutPage) {
-    // Let the page grow past the viewport so short screens can still scroll
     containerStyle = {
       display: "flex",
       flexDirection: "column",

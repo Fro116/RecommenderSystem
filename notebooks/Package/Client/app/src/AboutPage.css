@@ -1,8 +1,3 @@
-/* AboutPage specific styles */
-
-/* Header — geometry mirrors ViewPage's `.header--toggle` / `.header-toggle`
-   so the two bars are interchangeable: same double padding, same full-width
-   inner row, same 36px row height that ViewPage gets from its toggles. */
 header.header--about {
   padding: 10px 20px 0;
 }
@@ -17,9 +12,6 @@ header.header--about {
   min-height: 36px;
 }
 
-/* Matches the type of ViewPage's `.recommendations-title h2`, so both pages
-   name themselves in the same slot at the same scale. Kept as its own rule
-   rather than reusing that class, which carries ViewPage layout with it. */
 .about-header-title {
   flex-grow: 1;
   font-size: 20px;
@@ -29,7 +21,6 @@ header.header--about {
   margin: 0;
 }
 
-/* Body */
 .about-main {
   flex: 1 0 auto;
   display: flex;
@@ -57,8 +48,6 @@ header.header--about {
   margin-top: 14px;
 }
 
-/* Prose links carry no colour or underline at rest — weight alone marks them,
-   the same signal `.recsmoe-brand-link` uses inside a heading */
 .about-inline-link {
   color: #c8c3bc;
   font-weight: 600;
@@ -110,7 +99,6 @@ header.header--about {
   gap: 12px;
 }
 
-/* Link rows reuse the two-tone split of the homepage's query mode button */
 .about-link-row {
   display: flex;
   align-items: stretch;
@@ -178,8 +166,6 @@ header.header--about {
   overflow-wrap: anywhere;
 }
 
-/* Fact rows share the split layout of the link rows, but sit flatter: no
-   shadow and no hover, since there is nothing to click */
 .about-facts {
   list-style: none;
   margin: 0;
@@ -225,10 +211,6 @@ header.header--about {
   color: #9d9488;
 }
 
-/* Before the fetch resolves the cell is empty. A non-breaking space keeps its
-   line box, so the row does not grow when the date arrives — which matters on
-   mobile, where the value sits in its own row below the label rather than
-   being stretched to the label's height. */
 .about-fact-value:empty::before {
   content: "\00a0";
 }
@@ -241,8 +223,6 @@ header.header--about {
 }
 
 @media (max-width: 600px) {
-  /* ViewPage keeps its 10px/20px header padding at every width and centres
-     the title below 600px; match both rather than inventing a mobile inset */
   .about-header-bar {
     flex-wrap: wrap;
     justify-content: center;
@@ -273,7 +253,6 @@ header.header--about {
     margin: 24px 0;
   }
 
-  /* Stack the label above the value so long URLs keep a full-width line */
   .about-link-row {
     flex-direction: column;
   }

@@ -1,7 +1,6 @@
 import "./CardImage.css";
-// src/components/CardImage.tsx
 import React, { useState, useEffect } from "react";
-import { Result, getBiggestImageUrl } from "../types"; // Import types and helper
+import { Result, getBiggestImageUrl } from "../types";
 
 interface CardImageProps {
   item: Result;
@@ -19,7 +18,7 @@ const CardImage: React.FC<CardImageProps> = ({ item, onClick }) => {
   useEffect(() => {
     const newSrc =
       getBiggestImageUrl(item.image) || getBiggestImageUrl(item.missing_image);
-    setSrc(newSrc || ""); // Ensure src is always a string
+    setSrc(newSrc || "");
     setIsFallback(!getBiggestImageUrl(item.image));
   }, [item.image, item.missing_image]);
 
@@ -37,15 +36,15 @@ const CardImage: React.FC<CardImageProps> = ({ item, onClick }) => {
         height={targetHeight}
         onError={(e) => {
           e.currentTarget.onerror = null;
-          setSrc(initialMissingImageUrl || ""); // Fallback
+          setSrc(initialMissingImageUrl || "");
           setIsFallback(true);
         }}
       />
       {isFallback &&
-        src && ( // Show overlay only if it's a fallback AND there's a src (even if broken)
+        src && (
           <div className="card-placeholder-overlay">Missing Image</div>
         )}
-      {!src && ( // Show overlay if there's no image URL at all
+      {!src && (
         <div className="card-placeholder-overlay">No Image Available</div>
       )}
     </div>

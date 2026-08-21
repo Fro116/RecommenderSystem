@@ -1,5 +1,3 @@
-/* Header.css */
-/* Header and search form */
 header {
   padding: 20px;
   text-align: center;
@@ -48,7 +46,6 @@ header input:hover {
   box-shadow: 0 0 8px rgba(201, 112, 0, 0.3);
 }
 
-/* Autocomplete UI */
 .autocomplete-container {
   position: absolute;
   top: 100%;
@@ -114,7 +111,6 @@ header input:hover {
   image-rendering: high-quality;
 }
 
-/* STYLES for Autocomplete Item Text */
 .autocomplete-item-text-wrapper {
   display: flex;
   flex-direction: column;
@@ -150,10 +146,9 @@ header input:hover {
   text-align: center;
 }
 
-/* Query Mode Dropdown Button */
 .query-mode-button {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   width: 100%;
   padding: 0;
   background-color: #2a2d2f;
@@ -216,7 +211,6 @@ header input:hover {
   color: #c8c3bc;
 }
 
-/* Query Mode Dropdown List */
 .query-mode-list {
   position: absolute;
   top: calc(100% + 4px);
@@ -235,7 +229,7 @@ header input:hover {
 
 .query-mode-item {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   padding: 0;
   cursor: pointer;
   transition: background-color 0.15s ease;
@@ -264,6 +258,8 @@ header input:hover {
   background-color: #181a1b;
   color: #c8c3bc;
   text-align: center;
+  display: grid;
+  place-items: center;
 }
 
 .query-mode-description {
@@ -274,9 +270,10 @@ header input:hover {
   text-align: left;
   border-left: 1px solid #3e4446;
   margin-top: 0;
+  display: grid;
+  align-items: center;
 }
 
-/* Responsive tweaks for header elements */
 @media (max-width: 600px) {
   header {
     padding-left: 0;
@@ -297,16 +294,22 @@ header input:hover {
     width: 100%;
   }
 
-  .query-mode-button-title {
+  .query-mode-button-title,
+  .query-mode-list .query-mode-title {
     flex-basis: 30%;
+    padding: 10px 12px;
   }
 
   .query-mode-button-description {
-    font-size: 15px;
+    padding: 10px 34px 10px 12px;
   }
 
-  .query-mode-list .query-mode-title {
-    flex-basis: 30%;
+  .query-mode-description {
+    padding: 10px 12px;
+  }
+
+  .query-mode-button-chevron {
+    padding: 0 11px;
   }
 
   .autocomplete-container {
