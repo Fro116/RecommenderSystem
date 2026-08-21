@@ -2,8 +2,8 @@
 .site-footer {
   flex-shrink: 0;
   width: 100%;
-  background-color: #f0f0f0;
-  border-top: 1px solid #f48fb1;
+  background-color: #202325;
+  border-top: 1px solid #7e0c33;
   padding: 12px 20px;
 }
 
@@ -27,7 +27,7 @@
   text-align: center;
   font-size: clamp(11px, 3.8vw, 14px);
   font-weight: 500;
-  color: #666;
+  color: #a8a095;
 }
 
 .site-footer-tagline {
@@ -48,14 +48,14 @@
 }
 
 .site-footer-link {
-  color: #666;
+  color: #a8a095;
   font-weight: 600;
   text-decoration: none;
   transition: color 0.15s ease;
 }
 
 .site-footer-link:hover {
-  color: #fb8c00;
+  color: #ff9b1c;
   text-decoration: underline;
 }
 

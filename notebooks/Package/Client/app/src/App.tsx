@@ -6,13 +6,6 @@ import ViewPage from "./ViewPage";
 import AboutPage from "./AboutPage";
 import NotFoundPage from "./NotFoundPage";
 import "./Global.css";
-import {
-  enable as enableDarkMode,
-  disable as disableDarkMode,
-  setFetchMethod,
-  isEnabled as isDarkReaderEnabled,
-  type DynamicThemeFix,
-} from "darkreader";
 
 const App: React.FC = () => {
   const [isMobile, setIsMobile] = useState<boolean>(false);
@@ -29,30 +22,6 @@ const App: React.FC = () => {
     window.addEventListener("resize", handleResize);
     setIsMobile(window.matchMedia?.("(hover: none)").matches ?? false);
     return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
-  // DarkReader
-  useEffect(() => {
-    if (typeof window !== "undefined" && typeof window.fetch === "function") {
-      setFetchMethod(window.fetch);
-    }
-    const fixes: DynamicThemeFix = {
-      css: `
-        header input::placeholder {
-          color: #8c8c8c !important;
-        }
-      `,
-      invert: [],
-      ignoreInlineStyle: [],
-      ignoreImageAnalysis: [],
-      disableStyleSheetsProxy: false,
-    };
-    enableDarkMode({}, fixes);
-    return () => {
-      if (isDarkReaderEnabled()) {
-        disableDarkMode();
-      }
-    };
   }, []);
 
   const isHomePage = location.pathname === "/";

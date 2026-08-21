@@ -3,10 +3,10 @@
 header {
   padding: 20px;
   text-align: center;
-  background: #f7f7f7;
+  background: #1d1f20;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-  color: #333;
-  border-bottom: 1px solid #f48fb1;
+  color: #c8c3bc;
+  border-bottom: 1px solid #7e0c33;
 }
 
 header.header--toggle {
@@ -26,10 +26,10 @@ header input {
   font-size: 16px;
   text-align: center;
   margin-bottom: 10px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid #393d40;
   border-radius: 8px;
-  background-color: #fff;
-  color: #333;
+  background-color: #181a1b;
+  color: #c8c3bc;
   transition:
     border 0.15s ease,
     box-shadow 0.15s ease;
@@ -37,15 +37,15 @@ header input {
 
 header input.searched:hover,
 header input.searched:focus {
-  border-color: #e0e0e0;
+  border-color: #393d40;
   box-shadow: none;
 }
 
 header input:focus,
 header input:hover {
   outline: none;
-  border-color: #fb8c00;
-  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+  border-color: #b46400;
+  box-shadow: 0 0 8px rgba(201, 112, 0, 0.3);
 }
 
 /* Autocomplete UI */
@@ -56,8 +56,8 @@ header input:hover {
   width: 100%;
   max-height: 80vh;
   overflow-y: auto;
-  background: #fff;
-  border: 1px solid #ccc;
+  background: #181a1b;
+  border: 1px solid #3e4446;
   border-top: none;
   border-radius: 0 0 8px 8px;
   z-index: 1000;
@@ -74,7 +74,7 @@ header input:hover {
 }
 
 .autocomplete-item:hover {
-  background-color: #f0f0f0;
+  background-color: #202325;
 }
 
 .autocomplete-avatar {
@@ -91,7 +91,7 @@ header input:hover {
 
 .autocomplete-unmatch {
   font-weight: bold;
-  color: #fb8c00;
+  color: #ff9b1c;
 }
 
 .autocomplete-avatar-user {
@@ -109,7 +109,7 @@ header input:hover {
   border-radius: 4px;
   margin-right: 16px;
   flex-shrink: 0;
-  background-color: #f0f0f0;
+  background-color: #202325;
   image-rendering: -webkit-optimize-contrast;
   image-rendering: high-quality;
 }
@@ -129,7 +129,7 @@ header input:hover {
 
 .autocomplete-metadata {
   font-size: 15px;
-  color: #777;
+  color: #9d9488;
   margin-top: 2px;
 }
 
@@ -156,9 +156,9 @@ header input:hover {
   align-items: center;
   width: 100%;
   padding: 0;
-  background-color: #e0e0e0;
-  border: 1px solid #ccc;
-  color: #333333;
+  background-color: #2a2d2f;
+  border: 1px solid #3e4446;
+  color: #c8c3bc;
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
   cursor: pointer;
@@ -171,8 +171,8 @@ header input:hover {
 }
 
 .query-mode-button:hover {
-  border-color: #fb8c00;
-  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+  border-color: #b46400;
+  box-shadow: 0 0 8px rgba(201, 112, 0, 0.3);
 }
 
 .query-mode-button-title {
@@ -180,8 +180,8 @@ header input:hover {
   padding: 10px 16px;
   font-size: 16px;
   font-weight: bold;
-  background-color: #ffffff;
-  color: #333;
+  background-color: #181a1b;
+  color: #c8c3bc;
   display: grid;
   place-items: center;
 }
@@ -190,9 +190,9 @@ header input:hover {
   flex-grow: 1;
   padding: 10px 44px 10px 16px;
   font-size: 15px;
-  color: #333;
+  color: #c8c3bc;
   text-align: left;
-  border-left: 1px solid #ccc;
+  border-left: 1px solid #3e4446;
   display: grid;
   align-items: center;
 }
@@ -200,7 +200,7 @@ header input:hover {
 .query-mode-button-value {
   font-size: 18px;
   font-weight: 600;
-  color: #333;
+  color: #c8c3bc;
 }
 
 .query-mode-button-chevron {
@@ -213,7 +213,7 @@ header input:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #333333;
+  color: #c8c3bc;
 }
 
 /* Query Mode Dropdown List */
@@ -222,8 +222,8 @@ header input:hover {
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  background-color: #e0e0e0;
-  border: 1px solid #ccc;
+  background-color: #2a2d2f;
+  border: 1px solid #3e4446;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   list-style: none;
@@ -239,7 +239,7 @@ header input:hover {
   padding: 0;
   cursor: pointer;
   transition: background-color 0.15s ease;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid #35393b;
 }
 
 .query-mode-item:last-child {
@@ -247,13 +247,13 @@ header input:hover {
 }
 
 .query-mode-item:hover {
-  background-color: #f0f0f0;
+  background-color: #202325;
 }
 
 .query-mode-item.active .query-mode-description {
-  background-color: #f48fb1;
-  color: #fff;
-  border-left-color: #f48fb1;
+  background-color: #720b2e;
+  color: #e8e6e3;
+  border-left-color: #7e0c33;
 }
 
 .query-mode-title {
@@ -261,8 +261,8 @@ header input:hover {
   padding: 10px 16px;
   font-size: 16px;
   font-weight: bold;
-  background-color: #ffffff;
-  color: #333;
+  background-color: #181a1b;
+  color: #c8c3bc;
   text-align: center;
 }
 
@@ -270,9 +270,9 @@ header input:hover {
   flex-grow: 1;
   padding: 10px 16px;
   font-size: 15px;
-  color: #333;
+  color: #c8c3bc;
   text-align: left;
-  border-left: 1px solid #ccc;
+  border-left: 1px solid #3e4446;
   margin-top: 0;
 }
 

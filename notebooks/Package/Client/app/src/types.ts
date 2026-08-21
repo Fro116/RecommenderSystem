@@ -95,11 +95,120 @@ export const SOURCE_MAP: Record<SourceType, string> = {
   "Anime-Planet": "animeplanet",
 };
 
+/* Tag swatches used to be emitted as light `hsl()` colours and darkened at
+   runtime by Dark Reader. Since the hue is derived per tag there is no fixed
+   palette to substitute, so the transform is reproduced here: Dark Reader's
+   `modifyBgHSL` against the default dark scheme background (#181a1b). Under the
+   default theme its filter matrix is the identity, so the RGB round trip below
+   is the whole of it. Verified to match Dark Reader 4.9.105 exactly across all
+   360 hues at both call sites. */
+
+interface Hsl {
+  h: number;
+  s: number;
+  l: number;
+}
+
+interface Rgb {
+  r: number;
+  g: number;
+  b: number;
+}
+
+const scale = (
+  x: number,
+  inLow: number,
+  inHigh: number,
+  outLow: number,
+  outHigh: number,
+): number => ((x - inLow) * (outHigh - outLow)) / (inHigh - inLow) + outLow;
+
+const hslToRgb = ({ h, s, l }: Hsl): Rgb => {
+  if (s === 0) {
+    const v = Math.round(l * 255);
+    return { r: v, g: v, b: v };
+  }
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  const [r, g, b] = (
+    h < 60
+      ? [c, x, 0]
+      : h < 120
+        ? [x, c, 0]
+        : h < 180
+          ? [0, c, x]
+          : h < 240
+            ? [0, x, c]
+            : h < 300
+              ? [x, 0, c]
+              : [c, 0, x]
+  ).map((n) => Math.round((n + m) * 255));
+  return { r, g, b };
+};
+
+const rgbToHsl = ({ r, g, b }: Rgb): Hsl => {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const c = max - min;
+  const l = (max + min) / 2;
+  if (c === 0) {
+    return { h: 0, s: 0, l };
+  }
+  let h =
+    (max === rn
+      ? ((gn - bn) / c) % 6
+      : max === gn
+        ? (bn - rn) / c + 2
+        : (rn - gn) / c + 4) * 60;
+  if (h < 0) {
+    h += 360;
+  }
+  return { h, s: c / (1 - Math.abs(2 * l - 1)), l };
+};
+
+/* #181a1b, Dark Reader's default dark scheme background */
+const DARK_SCHEME_BACKGROUND = rgbToHsl({ r: 0x18, g: 0x1a, b: 0x1b });
+const MAX_BG_LIGHTNESS = 0.4;
+
+const darkenBackground = ({ h, s, l }: Hsl): Hsl => {
+  const pole = DARK_SCHEME_BACKGROUND;
+  const isBlue = h > 200 && h < 280;
+  const isNeutral = s < 0.12 || (l > 0.8 && isBlue);
+
+  if (l < 0.5) {
+    const lx = scale(l, 0, 0.5, 0, MAX_BG_LIGHTNESS);
+    return isNeutral ? { h: pole.h, s: pole.s, l: lx } : { h, s, l: lx };
+  }
+
+  let lx = scale(l, 0.5, 1, MAX_BG_LIGHTNESS, pole.l);
+  if (isNeutral) {
+    return { h: pole.h, s: pole.s, l: lx };
+  }
+
+  let hx = h;
+  if (h > 60 && h < 180) {
+    hx = h > 120 ? scale(h, 120, 180, 135, 180) : scale(h, 60, 120, 60, 105);
+  }
+  if (hx > 40 && hx < 80) {
+    lx *= 0.75;
+  }
+  return { h: hx, s, l: lx };
+};
+
 export const stringToHslColor = (str: string, s: number, l: number): string => {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     hash = str.charCodeAt(i) + ((hash << 5) - hash);
   }
-  const h = hash % 360;
-  return `hsl(${h}, ${s}%, ${l}%)`;
+  /* `hash % 360` can be negative; browsers normalise the hue before it reaches
+     the cascade, so normalise here too. */
+  const h = ((hash % 360) + 360) % 360;
+  const { r, g, b } = hslToRgb(
+    darkenBackground(rgbToHsl(hslToRgb({ h, s: s / 100, l: l / 100 }))),
+  );
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 };

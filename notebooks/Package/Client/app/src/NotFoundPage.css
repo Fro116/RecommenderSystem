@@ -51,20 +51,20 @@
   cursor: pointer;
   outline: none;
   text-align: center;
-  color: #ffffff;
+  color: #e8e6e3;
   position: relative; /* Ensure text is on top of the overlay */
   z-index: 2;
   transition: color 0.2s ease-in-out;
 }
 
 .not-found-text-content:hover {
-  color: #cccccc;
+  color: #c8c3bc;
 }
 
 .not-found-text-content .not-found-title {
   font-size: clamp(5em, 22vw, 7em);
   font-weight: bold;
-  color: #f48fb1;
+  color: #f382a8;
   margin-top: 0;
   margin-bottom: 0.1em;
   line-height: 1;
@@ -74,7 +74,7 @@
 }
 
 .not-found-text-content:hover .not-found-title {
-  color: #d870a0;
+  color: #d973a2;
 }
 
 .not-found-text-content .not-found-message {

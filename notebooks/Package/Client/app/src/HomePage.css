@@ -7,8 +7,8 @@
 .source-selection-container {
   margin-top: 20px;
   padding: 16px 16px 20px;
-  background-color: #f7f7f7;
-  border: 1px solid #e0e0e0;
+  background-color: #1d1f20;
+  border: 1px solid #393d40;
   border-radius: 12px;
   width: 80%;
   margin-left: auto;
@@ -19,7 +19,7 @@
   text-align: center;
   font-size: 16px;
   font-weight: 400;
-  color: #666;
+  color: #a8a095;
   margin: 0 0 16px 0;
   display: flex;
   justify-content: center;
@@ -46,40 +46,40 @@
   font-size: 16px;
   font-weight: 500;
   cursor: pointer;
-  border: 1px solid #ccc;
+  border: 1px solid #3e4446;
   border-radius: 9999px;
-  background-color: #e0e0e0;
-  color: #333333;
+  background-color: #2a2d2f;
+  color: #c8c3bc;
   transition:
     border-color 0.15s ease,
     box-shadow 0.15s ease;
 }
 
 .source-button:hover {
-  border-color: #fb8c00;
-  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+  border-color: #b46400;
+  box-shadow: 0 0 8px rgba(201, 112, 0, 0.3);
 }
 
 .source-button.selected {
-  background-color: #f48fb1;
-  color: #fff;
-  border-color: #ccc;
+  background-color: #720b2e;
+  color: #e8e6e3;
+  border-color: #3e4446;
 }
 
 .source-button.selected:hover {
-  border-color: #fb8c00;
-  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+  border-color: #b46400;
+  box-shadow: 0 0 8px rgba(201, 112, 0, 0.3);
 }
 
 /* Error banner - HomePage also has an error banner */
 .error-banner {
-  background-color: #fdecea;
-  color: #611a15;
+  background-color: #3b0b06;
+  color: #e79791;
   padding: 10px 20px;
   border-radius: 8px;
   margin: 12px auto;
   max-width: 600px;
-  border: 1px solid #f5c6cb;
+  border: 1px solid #68121b;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -90,7 +90,7 @@
   border: none;
   font-size: 22px;
   cursor: pointer;
-  color: #611a15;
+  color: #e79791;
   line-height: 1;
 }
 

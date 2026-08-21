@@ -752,7 +752,7 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
                     textAlign: "center",
                     gridColumn: "1 / -1",
                     padding: "20px",
-                    color: "#777",
+                    color: "#9d9488",
                   }}
                 >
                   End of results.

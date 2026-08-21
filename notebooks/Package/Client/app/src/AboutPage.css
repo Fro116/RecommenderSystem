@@ -24,7 +24,7 @@ header.header--about {
   flex-grow: 1;
   font-size: 20px;
   font-weight: 500;
-  color: #333;
+  color: #c8c3bc;
   text-align: left;
   margin: 0;
 }
@@ -41,15 +41,15 @@ header.header--about {
   width: 100%;
   max-width: 720px;
   padding: 32px;
-  background-color: #f7f7f7;
-  border: 1px solid #e0e0e0;
+  background-color: #1d1f20;
+  border: 1px solid #393d40;
   border-radius: 12px;
 }
 
 .about-lede {
   font-size: 16px;
   line-height: 1.6;
-  color: #555;
+  color: #b2aca2;
   margin: 0;
 }
 
@@ -60,14 +60,14 @@ header.header--about {
 /* Prose links carry no colour or underline at rest — weight alone marks them,
    the same signal `.recsmoe-brand-link` uses inside a heading */
 .about-inline-link {
-  color: #333;
+  color: #c8c3bc;
   font-weight: 600;
   text-decoration: none;
   transition: color 0.15s ease;
 }
 
 .about-inline-link:hover {
-  color: #fb8c00;
+  color: #ff9b1c;
 }
 
 .about-inline-link:focus-visible {
@@ -81,7 +81,7 @@ header.header--about {
   align-items: center;
   gap: 12px;
   margin: 28px 0;
-  color: #f48fb1;
+  color: #f382a8;
   font-size: 14px;
   line-height: 1;
 }
@@ -91,13 +91,13 @@ header.header--about {
   content: "";
   flex: 1 1 auto;
   height: 1px;
-  background-color: #e0e0e0;
+  background-color: #2a2d2f;
 }
 
 .about-section-title {
   font-size: 17px;
   font-weight: 600;
-  color: #333;
+  color: #c8c3bc;
   margin: 0 0 14px 0;
 }
 
@@ -115,11 +115,11 @@ header.header--about {
   display: flex;
   align-items: stretch;
   width: 100%;
-  background-color: #e0e0e0;
-  border: 1px solid #ccc;
+  background-color: #2a2d2f;
+  border: 1px solid #3e4446;
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-  color: #333;
+  color: #c8c3bc;
   text-decoration: none;
   overflow: hidden;
   transition:
@@ -128,14 +128,14 @@ header.header--about {
 }
 
 .about-link-row:hover {
-  border-color: #fb8c00;
-  box-shadow: 0 0 8px rgba(251, 140, 0, 0.3);
+  border-color: #b46400;
+  box-shadow: 0 0 8px rgba(201, 112, 0, 0.3);
 }
 
 .about-link-row:focus-visible {
   outline: none;
-  border-color: #fb8c00;
-  box-shadow: 0 0 0 3px rgba(251, 140, 0, 0.35);
+  border-color: #b46400;
+  box-shadow: 0 0 0 3px rgba(201, 112, 0, 0.35);
 }
 
 .about-link-label {
@@ -143,8 +143,8 @@ header.header--about {
   padding: 12px 16px;
   font-size: 15px;
   font-weight: bold;
-  color: #333;
-  background-color: #ffffff;
+  color: #c8c3bc;
+  background-color: #181a1b;
   display: grid;
   place-items: center;
 }
@@ -157,20 +157,20 @@ header.header--about {
   gap: 10px;
   padding: 12px 16px;
   font-size: 15px;
-  color: #333;
+  color: #c8c3bc;
   text-align: left;
-  border-left: 1px solid #ccc;
+  border-left: 1px solid #3e4446;
   transition: color 0.15s ease;
 }
 
 .about-link-row:hover .about-link-value {
-  color: #fb8c00;
+  color: #ff9b1c;
 }
 
 .about-link-icon {
   display: flex;
   flex-shrink: 0;
-  color: #f48fb1;
+  color: #f382a8;
 }
 
 .about-link-text {
@@ -193,8 +193,8 @@ header.header--about {
   display: flex;
   align-items: stretch;
   width: 100%;
-  background-color: #f0f0f0;
-  border: 1px solid #e0e0e0;
+  background-color: #202325;
+  border: 1px solid #393d40;
   border-radius: 8px;
   overflow: hidden;
 }
@@ -204,8 +204,8 @@ header.header--about {
   padding: 12px 16px;
   font-size: 15px;
   font-weight: bold;
-  color: #333;
-  background-color: #ffffff;
+  color: #c8c3bc;
+  background-color: #181a1b;
   display: grid;
   place-items: center;
 }
@@ -217,12 +217,12 @@ header.header--about {
   align-items: center;
   padding: 12px 16px;
   font-size: 15px;
-  color: #333;
-  border-left: 1px solid #e0e0e0;
+  color: #c8c3bc;
+  border-left: 1px solid #393d40;
 }
 
 .about-fact-value.is-pending {
-  color: #888;
+  color: #9d9488;
 }
 
 /* Before the fetch resolves the cell is empty. A non-breaking space keeps its
@@ -237,7 +237,7 @@ header.header--about {
   margin: 14px 0 0 0;
   font-size: 14px;
   line-height: 1.6;
-  color: #666;
+  color: #a8a095;
 }
 
 @media (max-width: 600px) {
@@ -284,7 +284,7 @@ header.header--about {
     display: block;
     text-align: left;
     padding: 10px 14px;
-    border-bottom: 1px solid #ccc;
+    border-bottom: 1px solid #3e4446;
   }
 
   .about-link-value {
@@ -302,7 +302,7 @@ header.header--about {
     display: block;
     text-align: left;
     padding: 10px 14px;
-    border-bottom: 1px solid #e0e0e0;
+    border-bottom: 1px solid #393d40;
   }
 
   .about-fact-value {

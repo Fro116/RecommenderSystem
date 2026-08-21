@@ -1,4 +1,76 @@
 /* Global.css */
+
+/* Baseline dark theme.
+   These rules replace the user-agent sheet Dark Reader used to inject at
+   runtime. The anonymous cascade layer is load-bearing, not cosmetic: layered
+   normal declarations lose to the unlayered page rules below (so `body` keeps
+   its own background), while layered `!important` declarations still beat
+   unlayered normal ones (so `html` keeps this background). That is exactly the
+   cascade Dark Reader relied on. */
+@layer {
+  html {
+    background-color: #181a1b !important;
+  }
+
+  html {
+    color-scheme: dark !important;
+  }
+
+  iframe {
+    color-scheme: dark !important;
+  }
+
+  html,
+  body {
+    background-color: #181a1b;
+  }
+
+  html,
+  body {
+    border-color: #736b5e;
+    color: #e8e6e3;
+  }
+
+  a {
+    color: #3391ff;
+  }
+
+  table {
+    border-color: #545b5e;
+  }
+
+  mark {
+    color: #e8e6e3;
+  }
+
+  ::placeholder {
+    color: #b2aba1;
+  }
+
+  input:-webkit-autofill,
+  textarea:-webkit-autofill,
+  select:-webkit-autofill {
+    background-color: #404400 !important;
+    color: #e8e6e3 !important;
+  }
+
+  ::selection {
+    background-color: #004daa !important;
+    color: #e8e6e3 !important;
+  }
+
+  ::-moz-selection {
+    background-color: #004daa !important;
+    color: #e8e6e3 !important;
+  }
+}
+
+/* Previously passed to Dark Reader as a dynamic-theme fix. Unlayered and
+   !important, matching how Dark Reader injected it. */
+header input::placeholder {
+  color: #8c8c8c !important;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -6,7 +78,7 @@
 body {
   margin: 0;
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-  background-color: #fafafa;
+  background-color: #1b1d1e;
 }
 
 .container {
