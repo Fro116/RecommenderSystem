@@ -14,9 +14,7 @@ function write_entrypoint(num_gpus)
 end
 
 function provision_instance()
-    get_instances() = copy(JSON3.parse(read(`vastai show instances-v1 --raw`, String)))
-    existing_ids = [x[:id] for x in get_instances()]
-    @assert length(existing_ids) <= 1 "instances already exist"
+    blacklisted_datacenters = [447869] # machines are often broken
     for gpu_config in ["8xB200", "4xB200", "8xH100"]
         node_price = Dict(
             "8xB200" => 64,
@@ -39,7 +37,7 @@ function provision_instance()
         offers = copy(
             JSON3.parse(
                 read(
-                    `vastai search offers num_gpus=$num_gpus $gpu_query $duration_query 'cuda_max_good>=12.8' datacenter=true verified=true --raw`,
+                    `vastai search offers num_gpus=$num_gpus $gpu_query $duration_query 'cuda_max_good>=13.0' datacenter=true verified=true --raw`,
                     String,
                 ),
             ),
@@ -48,6 +46,11 @@ function provision_instance()
         success = false
         for x in offers
             offer_id = string(x[:id])
+            datacenter_id = x[:host_id]
+            if datacenter_id in blacklisted_datacenters
+                logerror("skipping $offer_id because datacenter $(datacenter_id) is blacklisted")
+                continue
+            end
             if x[:dph_total] > node_price
                 logerror(
                     "skipping $offer_id because price $(x[:dph_total]) > $node_price",
@@ -56,11 +59,34 @@ function provision_instance()
             end
             disk_size = 96
             logtag("RUNGPU", "provisioning $gpu_config instance for price $(x[:dph_total])")
-            create_cmd = """vastai create instance $offer_id --image vastai/pytorch:@vastai-automatic-tag --env '-p 1111:1111 -p 6006:6006 -p 8080:8080 -p 8384:8384 -p 72299:72299 -e OPEN_BUTTON_PORT=1111 -e OPEN_BUTTON_TOKEN=1 -e JUPYTER_DIR=/ -e DATA_DIRECTORY=/workspace/ -e PORTAL_CONFIG="localhost:1111:11111:/:Instance Portal|localhost:8080:18080:/:Jupyter|localhost:8080:8080:/terminals/1:Jupyter Terminal|localhost:8384:18384:/:Syncthing|localhost:6006:16006:/:Tensorboard"' --onstart-cmd 'entrypoint.sh' --disk $disk_size --jupyter --ssh --direct"""
-            run(`sh -c $create_cmd`)
-            sleep(60)
+            env_args = "-p 1111:1111 -p 6006:6006 -p 8080:8080 -p 8384:8384 -p 72299:72299 " *
+                "-e OPEN_BUTTON_PORT=1111 -e OPEN_BUTTON_TOKEN=1 -e JUPYTER_DIR=/ -e DATA_DIRECTORY=/workspace/ " *
+                "-e PORTAL_CONFIG=\"localhost:1111:11111:/:Instance Portal|localhost:8080:18080:/:Jupyter|localhost:8080:8080:/terminals/1:Jupyter Terminal|localhost:8384:18384:/:Syncthing|localhost:6006:16006:/:Tensorboard\""
+            cmd_args = [
+                "vastai", "create", "instance", string(offer_id),
+                "--raw",
+                "--image", "vastai/pytorch:cuda-13.0.3-auto",
+                "--env", env_args,
+                "--onstart-cmd", "entrypoint.sh",
+                "--disk", string(disk_size),
+                "--jupyter",
+                "--ssh",
+                "--direct"
+            ]
+            instance_id = try
+                instance_json = copy(JSON3.parse(read(`$cmd_args`, String)))
+                @assert instance_json[:success]
+                instance_json[:new_contract]
+            catch e
+                logerror(e)
+                nothing
+            end
+            if isnothing(instance_id)
+                return nothing
+            end
+            logtag("RUNGPU", "provisioned $instance_id from $datacenter_id")
             write_entrypoint(num_gpus)
-            instance_id = only([x[:id] for x in get_instances() if x ∉ existing_ids])
+            sleep(60)
             return string(instance_id), duration
         end
     end

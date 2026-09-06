@@ -53,4 +53,4 @@ function run_training()
     end
 end
 
-@scheduled "RUN_TRAINING" "11:00" @handle_errors run_training()
+@periodic "RUN_TRAINING" 600 @handle_errors run_training()
