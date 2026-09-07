@@ -93,14 +93,6 @@ const AboutPage: React.FC = () => {
   const [version, setVersion] = useState<VersionState>({ status: "loading" });
 
   useEffect(() => {
-    const siteDefaultTitle = document.title;
-    document.title = "About | Recs☆Moe";
-    return () => {
-      document.title = siteDefaultTitle;
-    };
-  }, []);
-
-  useEffect(() => {
     const controller = new AbortController();
     fetch(`${API_BASE}/version`, { signal: controller.signal })
       .then((response) => {
@@ -167,9 +159,15 @@ const AboutPage: React.FC = () => {
             curated selections.
           </p>
           <p className="about-lede">
-            Don't have a profile? Switch the homepage from "Search by User" to
-            "Search by Title" and enter your favorite series to find similar
-            shows.
+            Don't have a profile? Switch the homepage from{" "}
+            <Link to="/" className="about-inline-link">
+              Search by User
+            </Link>{" "}
+            to{" "}
+            <Link to="/title" className="about-inline-link">
+              Search by Title
+            </Link>{" "}
+            and enter your favorite series to find similar shows.
           </p>
 
           <div className="about-divider" role="presentation">

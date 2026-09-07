@@ -12,9 +12,10 @@ const FOOTER_LINKS: FooterLink[] = [{ label: "About", to: "/about" }];
 
 interface FooterProps {
   fixed?: boolean;
+  heading?: boolean;
 }
 
-const Footer: React.FC<FooterProps> = ({ fixed = false }) => {
+const Footer: React.FC<FooterProps> = ({ fixed = false, heading = false }) => {
   const { pathname } = useLocation();
 
   const renderLink = (link: FooterLink) => {
@@ -41,14 +42,16 @@ const Footer: React.FC<FooterProps> = ({ fixed = false }) => {
     );
   };
 
+  const Tagline = heading ? "h1" : "span";
+
   return (
     <footer
       className={fixed ? "site-footer site-footer--fixed" : "site-footer"}
     >
       <div className="site-footer-inner">
-        <span className="site-footer-tagline">
+        <Tagline className="site-footer-tagline">
           Recs☆Moe is a recommender system for anime&nbsp;and&nbsp;manga
-        </span>
+        </Tagline>
         <nav className="site-footer-nav" aria-label="Site links">
           {FOOTER_LINKS.map((link) => (
             <React.Fragment key={link.label}>{renderLink(link)}</React.Fragment>

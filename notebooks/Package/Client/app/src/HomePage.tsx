@@ -14,44 +14,40 @@ import Footer from "./Footer";
 type QueryMode = "user" | "item";
 type ItemType = "anime" | "manga";
 
-const HomePage: React.FC = () => {
+interface HomePageProps {
+  mode?: QueryMode;
+}
+
+const HomePage: React.FC<HomePageProps> = ({ mode = "user" }) => {
   const [query, setQuery] = useState<string>("");
 
-  const getInitialQueryMode = (): QueryMode => {
-    const stored = localStorage.getItem("queryMode");
-    if (stored === "user" || stored === "item") return stored as QueryMode;
-    return "user";
-  };
-  const [queryMode, setQueryMode] = useState<QueryMode>(getInitialQueryMode());
-  useEffect(() => {
-    localStorage.setItem("queryMode", queryMode);
-  }, [queryMode]);
+  const queryMode = mode;
+  const [itemType, setItemType] = useState<ItemType>("anime");
+  const [activeSource, setActiveSource] = useState<SourceType>("MyAnimeList");
+  const [prefsRestored, setPrefsRestored] = useState<boolean>(false);
 
-  const getInitialItemType = (): ItemType => {
-    const stored = localStorage.getItem("itemType");
-    if (stored === "anime" || stored === "manga") return stored as ItemType;
-    return "anime";
-  };
-  const [itemType, setItemType] = useState<ItemType>(getInitialItemType());
   useEffect(() => {
-    localStorage.setItem("itemType", itemType);
-  }, [itemType]);
-
-  const getInitialSource = (): SourceType => {
-    const stored = localStorage.getItem("selectedSource");
-    if (
-      stored &&
-      ["MyAnimeList", "AniList", "Kitsu", "Anime-Planet"].includes(stored)
-    ) {
-      return stored as SourceType;
+    const storedItemType = localStorage.getItem("itemType");
+    if (storedItemType === "anime" || storedItemType === "manga") {
+      setItemType(storedItemType);
     }
-    return "MyAnimeList";
-  };
-  const [activeSource, setActiveSource] =
-    useState<SourceType>(getInitialSource());
+    const storedSource = localStorage.getItem("selectedSource");
+    if (
+      storedSource &&
+      ["MyAnimeList", "AniList", "Kitsu", "Anime-Planet"].includes(storedSource)
+    ) {
+      setActiveSource(storedSource as SourceType);
+    }
+    setPrefsRestored(true);
+  }, []);
+
   useEffect(() => {
-    localStorage.setItem("selectedSource", activeSource);
-  }, [activeSource]);
+    if (prefsRestored) localStorage.setItem("itemType", itemType);
+  }, [itemType, prefsRestored]);
+
+  useEffect(() => {
+    if (prefsRestored) localStorage.setItem("selectedSource", activeSource);
+  }, [activeSource, prefsRestored]);
 
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [autocompleteResults, setAutocompleteResults] = useState<
@@ -63,7 +59,7 @@ const HomePage: React.FC = () => {
   const [showModeDropdown, setShowModeDropdown] = useState<boolean>(false);
   const [fetchTrigger, setFetchTrigger] = useState(0);
 
-  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  const [windowWidth, setWindowWidth] = useState(0);
 
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -75,6 +71,7 @@ const HomePage: React.FC = () => {
     const handleResize = () => {
       setWindowWidth(window.innerWidth);
     };
+    handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
@@ -446,8 +443,8 @@ const HomePage: React.FC = () => {
                 <li
                   className={`query-mode-item ${queryMode === "user" ? "active" : ""}`}
                   onClick={() => {
-                    setQueryMode("user");
                     setShowModeDropdown(false);
+                    navigate("/");
                   }}
                 >
                   <div className="query-mode-title">Search by User</div>
@@ -458,8 +455,8 @@ const HomePage: React.FC = () => {
                 <li
                   className={`query-mode-item ${queryMode === "item" ? "active" : ""}`}
                   onClick={() => {
-                    setQueryMode("item");
                     setShowModeDropdown(false);
+                    navigate("/title");
                   }}
                 >
                   <div className="query-mode-title">Search by Title</div>
@@ -527,7 +524,7 @@ const HomePage: React.FC = () => {
         </div>
       )}
 
-      <Footer fixed />
+      <Footer fixed heading />
     </>
   );
 };

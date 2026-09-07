@@ -28,6 +28,9 @@
 .site-footer-tagline {
   grid-column: 2;
   min-width: 0;
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
 }
 
 .site-footer-nav {

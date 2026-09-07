@@ -4,6 +4,7 @@ import HomePage from "./HomePage";
 import ViewPage from "./ViewPage";
 import AboutPage from "./AboutPage";
 import NotFoundPage from "./NotFoundPage";
+import { PAGE_META } from "./metadata";
 import "./Global.css";
 
 const App: React.FC = () => {
@@ -21,6 +22,14 @@ const App: React.FC = () => {
     setIsMobile(window.matchMedia?.("(hover: none)").matches ?? false);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  useEffect(() => {
+    const meta = PAGE_META[location.pathname];
+    if (!meta) return;
+    document.title = meta.title;
+    const tag = document.querySelector('meta[name="description"]');
+    tag?.setAttribute("content", meta.description);
+  }, [location.pathname]);
 
   const isHomePage = location.pathname === "/";
   const isAboutPage = location.pathname === "/about";
@@ -51,6 +60,7 @@ const App: React.FC = () => {
     <div className={containerClass} style={containerStyle}>
       <Routes>
         <Route path="/" element={<HomePage />} />
+        <Route path="/title" element={<HomePage mode="item" />} />
         <Route
           path="/user/:source/:username"
           element={<ViewPage isMobile={isMobile} />}
