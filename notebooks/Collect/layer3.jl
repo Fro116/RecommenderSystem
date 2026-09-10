@@ -92,7 +92,15 @@ function get_session(token)
     if !isnothing(auth)
         return auth
     end
-    if token["resource"]["location"] == "kitsu"
+    if token["resource"]["location"] == "anilist"
+        r = request("anilist", Dict("token" => token, "endpoint" => "token"))
+        if r.status >= 400
+            logerror("anilist login failed")
+            return TOKEN_UNAVAILABLE::Errors
+        end
+        data = decode(r)
+        sessionid = data["token"]
+    elseif token["resource"]["location"] == "kitsu"
         r = request("kitsu", Dict("token" => token, "endpoint" => "token"))
         if r.status >= 400
             logerror("kitsu login failed with $token")
@@ -102,19 +110,11 @@ function get_session(token)
         sessionid = data["token"]
     elseif token["resource"]["location"] == "animeplanet"
         sessionid = string(UUIDs.uuid4())
-        r = request(
-            "animeplanet",
-            Dict("token" => token, "sessionid" => sessionid, "endpoint" => "login")
-        )
-        if r.status >= 400
-            logerror("animeplanet login failed with $token")
-            return TOKEN_UNAVAILABLE::Errors
-        end
     else
         @assert false
     end
     lock(SESSIONS_LOCK) do
-        expiry_secs = Dict("kitsu" => 86400, "animeplanet" => 14400)[token["resource"]["location"]]
+        expiry_secs = Dict("anilist" => 3600, "kitsu" => 86400, "animeplanet" => 14400)[token["resource"]["location"]]
         SESSIONS[token] = (sessionid, time(), time() + expiry_secs)
         if length(SESSIONS) > 10_000
             ks = collect(keys(SESSIONS))
@@ -462,9 +462,13 @@ function get_anilist_user(userid::Integer)
     end
     token = decode(r)
     try
+        auth = get_session(token)
+        if isa(auth, Errors)
+            return auth
+        end
         s = request(
             "anilist",
-            Dict("token" => token, "endpoint" => "user", "userid" => userid),
+            Dict("token" => token, "auth" => auth, "endpoint" => "user", "userid" => userid),
         )
         if s.status >= 400
             return NOT_FOUND::Errors
@@ -485,6 +489,10 @@ function get_anilist_list(medium::String, userid::Integer)
     end
     token = decode(r)
     try
+        auth = get_session(token)
+        if isa(auth, Errors)
+            return auth
+        end
         entries = []
         chunk = 1
         while true
@@ -492,6 +500,7 @@ function get_anilist_list(medium::String, userid::Integer)
                 "anilist",
                 Dict(
                     "token" => token,
+                    "auth" => auth,
                     "endpoint" => "list",
                     "userid" => userid,
                     "medium" => medium,
@@ -538,10 +547,15 @@ function get_anilist_fingerprint(medium::String, userid::Integer)
     end
     token = decode(r)
     try
+        auth = get_session(token)
+        if isa(auth, Errors)
+            return auth
+        end
         s = request(
             "anilist",
             Dict(
                 "token" => token,
+                "auth" => auth,
                 "endpoint" => "fingerprint",
                 "userid" => userid,
                 "medium" => medium,
@@ -577,10 +591,15 @@ function get_anilist_media(medium::String, itemid::Integer)
     end
     token = decode(r)
     try
+        auth = get_session(token)
+        if isa(auth, Errors)
+            return auth
+        end
         s = request(
             "anilist",
             Dict(
                 "token" => token,
+                "auth" => auth,
                 "endpoint" => "media",
                 "medium" => medium,
                 "itemid" => itemid,
@@ -643,15 +662,12 @@ function get_userid(source::String, username::String)
     end
     token = decode(r)
     args = Dict("token" => token, "endpoint" => "userid", "username" => username)
+    auth = get_session(token)
+    if isa(auth, Errors)
+        return auth
+    end
+    args["auth"] = auth
     if source == "kitsu"
-        auth = get_session(token)
-        if isa(auth, Errors)
-            return auth
-        end
-        if auth isa Errors
-            return auth
-        end
-        args["auth"] = auth
         args["key"] = "name"
     end
     try
@@ -993,7 +1009,7 @@ Oxygen.@post "/animeplanet_user" function animeplanet_user(r::HTTP.Request)::HTT
         if user_data["$(m)_count"] == 0
             continue
         end
-        list = @retry get_animeplanet_list(m, username, parallel=false)
+        list = @retry get_animeplanet_list(m, username)
         if isa(list, Errors)
             return HTTP.Response(Int(list), [])
         end
@@ -1010,7 +1026,7 @@ Oxygen.@post "/animeplanet_user_parallel" function animeplanet_user_parallel(r::
     user_data = Threads.@spawn @retry get_animeplanet_user(username)
     items = []
     for m in ["manga", "anime"]
-        push!(items, Threads.@spawn @retry get_animeplanet_list(m, username, parallel=true))
+        push!(items, Threads.@spawn @retry get_animeplanet_list(m, username))
     end
     fetch_user_parallel("animeplanet", user_data, items)
 end
@@ -1050,64 +1066,15 @@ function get_animeplanet_user(username::String)
     end
 end
 
-function get_animeplanet_list(medium::String, username::String; parallel::Bool)
-    if parallel
-        feed_task = Threads.@spawn @handle_errors get_animeplanet_feed(medium, username)
-        entries_task = Threads.@spawn @handle_errors get_animeplanet_entries(medium, username)
-        feed = fetch(feed_task)
-        entries = fetch(entries_task)
-    else
-        feed = get_animeplanet_feed(medium, username)
-        if feed isa Errors
-            return feed
-        end
-        entries = get_animeplanet_entries(medium, username)
-    end
-    for x in [feed, entries]
-        if x isa Errors
-            return x
-        end
+function get_animeplanet_list(medium::String, username::String)
+    entries = get_animeplanet_entries(medium, username)
+    if entries isa Errors
+        return entries
     end
     for x in entries
-        x["updated_at"] = get(feed, x["itemid"], nothing)
+        x["updated_at"] = nothing
     end
     entries
-end
-
-function get_animeplanet_feed(medium::String, username::String)
-    r = request(
-        "resources",
-        Dict("method" => "take", "location" => "animeplanet", "timeout" => TOKEN_TIMEOUT),
-    )
-    if r.status >= 400
-        return TOKEN_UNAVAILABLE::Errors
-    end
-    token = decode(r)
-    try
-        sessionid = get_session(token)
-        if sessionid isa Errors
-            return sessionid
-        end
-        s = request(
-            "animeplanet",
-            Dict(
-                "token" => token,
-                "sessionid" => sessionid,
-                "endpoint" => "feed",
-                "username" => username,
-                "medium" => medium,
-            ),
-        )
-        if s.status == 401
-            invalidate_session(token)
-            return INVALID_SESSION::Errors
-        elseif s.status >= 400
-            return NOT_FOUND::Errors
-        end
-        return decode(s)
-    finally
-        request("resources", Dict("method" => "put", "token" => token))
-    end
 end
 
 function get_animeplanet_entries(medium::String, username::String)

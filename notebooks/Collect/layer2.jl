@@ -3,11 +3,9 @@ module layer2
 const PORT = parse(Int, ARGS[1])
 const RATELIMIT_WINDOW = parse(Int, ARGS[2])
 const LAYER_1_URLS = split(ARGS[3], ",")
-const DEFAULT_IMPERSONATE = parse(Bool, ARGS[4])
-const DEFAULT_TIMEOUT = parse(Int, ARGS[5])
-const USE_SHARED_IPS = parse(Bool, ARGS[6])
+const DEFAULT_TIMEOUT = parse(Int, ARGS[4])
+const USE_SHARED_IPS = parse(Bool, ARGS[5])
 const API_VERSION = "5.3.1"
-const ANIMEPLANET_LOGIN = false
 
 import CSV
 import DataFrames
@@ -65,8 +63,9 @@ function load_resources()::Vector{Resource}
     malweb_resources =
         [Dict("location" => "malweb", "proxyurl" => x, "ratelimit" => 8) for x in ips]
 
+    anilist_url = split(read("../../secrets/anilist.api.txt", String), ",")
     anilist_resources =
-        [Dict("location" => "anilist", "proxyurl" => x, "ratelimit" => 8) for x in ips]
+        [Dict("location" => "anilist", "proxyurl" => x, "ratelimit" => 8, "url" => anilist_url) for x in ips]
 
     kitsu_credentials = []
     for x in readlines("../../secrets/kitsu.auth.txt")
@@ -301,11 +300,8 @@ function callproxy(
         "url" => url,
         "sessionid" => sessionid,
         "timeout" => DEFAULT_TIMEOUT,
+        "impersonate" => "chrome"
     )
-    if get(headers, "impersonate", DEFAULT_IMPERSONATE)
-        args["impersonate"] = "chrome"
-        delete!(headers, "impersonate")
-    end
     if !isnothing(body)
         @assert headers["Content-Type"] == "application/json"
         delete!(headers, "Content-Type")
@@ -329,7 +325,7 @@ function request(
     resource::Resource,
     method::String,
     url::String,
-    headers::Dict{String,<:Any} = Dict(),
+    headers::Dict{String,<:Any} = Dict{String,Any}(),
     body::Union{Vector{UInt8},Nothing} = nothing,
     ratelimit::Bool = true,
 )::Response
@@ -684,7 +680,7 @@ end
 
 function malweb_get_username(resource::Resource, userid::Integer)
     url = "https://myanimelist.net/comments.php?id=$userid"
-    r = request(resource, "GET", url, Dict("impersonate" => true))
+    r = request(resource, "GET", url)
     if r.status >= 400
         logstatus("malweb_get_username", r, url)
         return HTTP.Response(r)
@@ -700,14 +696,14 @@ end
 function malweb_get_media(resource::Resource, medium::String, itemid::Integer)
     ret = Dict()
     url = "https://myanimelist.net/$medium/$itemid"
-    r = request(resource, "GET", url, Dict("impersonate" => true))
+    r = request(resource, "GET", url)
     if r.status >= 400
         logstatus("malweb_get_media", r, url)
         return HTTP.Response(r)
     end
     ret["relations"] = malweb_get_media_relations(r.body, medium, itemid)
     url = "https://myanimelist.net/$medium/$itemid/$itemid/userrecs"
-    r = request(resource, "GET", url, Dict("impersonate" => true))
+    r = request(resource, "GET", url)
     if r.status >= 400
         logstatus("malweb_get_media", r, url)
         return HTTP.Response(r)
@@ -719,7 +715,7 @@ function malweb_get_media(resource::Resource, medium::String, itemid::Integer)
     while next_page
         reviews_page += 1
         url = "https://myanimelist.net/$medium/$itemid/$itemid/reviews?spoiler=on&p=$reviews_page"
-        r = request(resource, "GET", url, Dict("impersonate" => true))
+        r = request(resource, "GET", url)
         if r.status >= 400
             logstatus("malweb_get_media", r, url)
             return HTTP.Response(r)
@@ -917,7 +913,7 @@ end
 
 function malweb_get_user(resource::Resource, username::String)
     url = "https://myanimelist.net/profile/$username"
-    r = request(resource, "GET", url, Dict("impersonate" => true))
+    r = request(resource, "GET", url)
     if r.status >= 400
         logstatus("malweb_get_user", r, url)
         return HTTP.Response(r)
@@ -926,7 +922,7 @@ function malweb_get_user(resource::Resource, username::String)
         logerror(
             "malweb_get_user received empty payload for $username with status $(r.status)",
         )
-        r = request(resource, "GET", url, Dict("impersonate" => true))
+        r = request(resource, "GET", url)
         if isempty(r.body)
             return HTTP.Response(500, [])
         end
@@ -1023,7 +1019,7 @@ function malweb_get_user(resource::Resource, username::String)
 end
 
 function malweb_get_image(resource::Resource, url::String)
-    r = request(resource, "GET", url, Dict("impersonate" => true))
+    r = request(resource, "GET", url)
     if r.status >= 400
         logstatus("malweb_get_image", r, url)
         return HTTP.Response(r)
@@ -1043,17 +1039,19 @@ Oxygen.@post "/anilist" function anilist_api(r::HTTP.Request)::HTTP.Response
     end
     try
         if endpoint == "list"
-            return anilist_get_list(resource, data["userid"], data["medium"], data["chunk"])
+            return anilist_get_list(resource, data["auth"], data["userid"], data["medium"], data["chunk"])
         elseif endpoint == "fingerprint"
-            return anilist_get_fingerprint(resource, data["userid"], data["medium"])
+            return anilist_get_fingerprint(resource, data["auth"], data["userid"], data["medium"])
         elseif endpoint == "media"
-            return anilist_get_media(resource, data["medium"], data["itemid"])
+            return anilist_get_media(resource, data["auth"], data["medium"], data["itemid"])
         elseif endpoint == "userid"
-            return anilist_get_userid(resource, data["username"])
+            return anilist_get_userid(resource, data["auth"], data["username"])
         elseif endpoint == "user"
-            return anilist_get_user(resource, data["userid"])
+            return anilist_get_user(resource, data["auth"], data["userid"])
         elseif endpoint == "image"
             return anilist_get_image(resource, data["url"])
+        elseif endpoint == "token"
+            return anilist_get_token(resource)
         else
             logerror("anilist_api invalid endpoint $endpoint")
             return HTTP.Response(500, [])
@@ -1065,13 +1063,33 @@ Oxygen.@post "/anilist" function anilist_api(r::HTTP.Request)::HTTP.Response
     end
 end
 
+function anilist_get_token(resource::Resource)
+    url = "https://anilist.co"
+    r = request(resource, "GET", url)
+    if r.status >= 400
+        logerror("anilist_get_token failed")
+        return HTTP.Response(r)
+    end
+    m = match(r"window\.al_token\s*=\s*[\"']([^\"']+)[\"']", r.body)
+    token = m[1]
+    ret = Dict("token" => token)
+    HTTP.Response(200, encode(ret, :msgpack)...)
+end
+
+function anilist_encode(resource, auth, query, variables)
+    headers, body = encode(Dict("query" => query, "variables" => variables), :json)
+    headers[resource["url"][2]] = auth
+    headers, body
+end
+
 function anilist_get_list(
     resource::Resource,
+    auth::String,
     userid::Integer,
     medium::String,
     chunk::Integer,
 )
-    url = "https://graphql.anilist.co"
+    url = resource["url"][1]
     query = """
     query (\$userID: Int, \$MEDIA: MediaType, \$chunk: Int, \$perChunk: Int) {
         MediaListCollection (userId: \$userID, type: \$MEDIA, chunk: \$chunk, perChunk: \$perChunk) {
@@ -1117,7 +1135,7 @@ function anilist_get_list(
         resource,
         "POST",
         url,
-        encode(Dict("query" => query, "variables" => variables), :json)...,
+        anilist_encode(resource, auth, query, variables)...,
     )
     if r.status >= 400
         logstatus("anilist_get_list", r, url)
@@ -1164,8 +1182,8 @@ function anilist_get_list(
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function anilist_get_fingerprint(resource::Resource, userid::Integer, medium::String)
-    url = "https://graphql.anilist.co"
+function anilist_get_fingerprint(resource::Resource, auth::String, userid::Integer, medium::String)
+    url = resource["url"][1]
     query = """
     query (\$userID: Int, \$MEDIA: MediaType, \$chunk: Int, \$perChunk: Int, \$sort: [MediaListSort]) {
         MediaListCollection (userId: \$userID, type: \$MEDIA, chunk: \$chunk, perChunk: \$perChunk, sort: \$sort) {
@@ -1189,7 +1207,7 @@ function anilist_get_fingerprint(resource::Resource, userid::Integer, medium::St
         resource,
         "POST",
         url,
-        encode(Dict("query" => query, "variables" => variables), :json)...,
+        anilist_encode(resource, auth, query, variables)...,
     )
     if r.status >= 400
         logstatus("anilist_get_fingerprint", r, url)
@@ -1214,15 +1232,15 @@ function anilist_get_fingerprint(resource::Resource, userid::Integer, medium::St
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function anilist_get_userid(resource::Resource, username::String)
-    url = "https://graphql.anilist.co"
+function anilist_get_userid(resource::Resource, auth::String, username::String)
+    url = resource["url"][1]
     query = "query (\$username: String) { User (name: \$username) { id } }"
     variables = Dict("username" => username)
     r = request(
         resource,
         "POST",
         url,
-        encode(Dict("query" => query, "variables" => variables), :json)...,
+        anilist_encode(resource, auth, query, variables)...,
     )
     if r.status >= 400
         logerror("anilist_get_userid received status $(r.status) $(r.body) for $url")
@@ -1236,8 +1254,8 @@ function anilist_get_userid(resource::Resource, username::String)
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
-    url = "https://graphql.anilist.co"
+function anilist_get_media(resource::Resource, auth::String, medium::String, itemid::Integer)
+    url = resource["url"][1]
     initial_query = """
     query (\$id: Int, \$MEDIA: MediaType)
     {
@@ -1489,7 +1507,7 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
             resource,
             "POST",
             url,
-            encode(Dict("query" => query, "variables" => variables), :json)...,
+            anilist_encode(resource, auth, query, variables)...,
         )
         if r.status >= 400
             logstatus("anilist_get_media", r, url)
@@ -1606,8 +1624,8 @@ function anilist_get_media(resource::Resource, medium::String, itemid::Integer)
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function anilist_get_user(resource::Resource, userid::Integer)
-    url = "https://graphql.anilist.co"
+function anilist_get_user(resource::Resource, auth::String, userid::Integer)
+    url = resource["url"][1]
     query = """
     query (\$id: Int)
     {
@@ -1698,7 +1716,7 @@ function anilist_get_user(resource::Resource, userid::Integer)
         resource,
         "POST",
         url,
-        encode(Dict("query" => query, "variables" => variables), :json)...,
+        anilist_encode(resource, auth, query, variables)...,
     )
     if r.status >= 400
         logstatus("anilist_get_user", r, url)
@@ -1753,7 +1771,7 @@ function anilist_get_user(resource::Resource, userid::Integer)
 end
 
 function anilist_get_image(resource::Resource, url::String)
-    r = request(resource, "GET", url, Dict("impersonate" => true))
+    r = request(resource, "GET", url)
     if r.status >= 400
         logstatus("anilist_get_image", r, url)
         return HTTP.Response(r)
@@ -1805,7 +1823,6 @@ function kitsu_get_token(resource::Resource)
     body = Dict("grant_type" => "password", "username" => username, "password" => password)
     headers, content = encode(body, :json)
     headers = Dict{String,Any}(headers)
-    headers["impersonate"] = true
     r = request(resource, "POST", url, headers, content)
     if r.status >= 400
         logerror("kitsu_get_token failed for $username")
@@ -1826,7 +1843,7 @@ function kitsu_get_userid(resource::Resource, auth::String, username::String, ke
             query = Dict("filter[$key]" => username),
         ),
     )
-    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
+    headers = Dict("Authorization" => "Bearer $auth")
     r = request(resource, "GET", url, headers)
     if r.status >= 400
         logstatus("kitsu_get_userid", r, url)
@@ -1847,7 +1864,7 @@ function kitsu_get_media(resource::Resource, auth::String, medium::String, itemi
         "fields[mappings]" => "externalSite,externalId",
     )
     url = string(HTTP.URI("https://kitsu.app/api/edge/$medium/$itemid"; query = params))
-    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
+    headers = Dict("Authorization" => "Bearer $auth")
     r = request(resource, "GET", url, headers)
     if r.status >= 400
         logstatus("kitsu_get_media", r, url)
@@ -1936,7 +1953,7 @@ function kitsu_get_list(resource::Resource, auth::String, userid::Integer, offse
         params["page[offset]"] = offset
     end
     url = string(HTTP.URI("https://kitsu.app/api/edge/library-entries"; query = params))
-    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
+    headers = Dict("Authorization" => "Bearer $auth")
     r = request(resource, "GET", url, headers)
     if r.status >= 400
         logstatus("kitsu_get_list", r, url)
@@ -1989,7 +2006,7 @@ function kitsu_get_fingerprint(resource::Resource, auth::String, userid::Integer
         "fields[library-entries]" => "updatedAt",
     )
     url = string(HTTP.URI("https://kitsu.app/api/edge/library-entries"; query = params))
-    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
+    headers = Dict("Authorization" => "Bearer $auth")
     r = request(resource, "GET", url, headers)
     if r.status >= 400
         logstatus("kitsu_get_fingerprint", r, url)
@@ -2012,7 +2029,7 @@ end
 function kitsu_get_user(resource::Resource, auth::String, userid::Integer)
     params = Dict("include" => "stats")
     url = string(HTTP.URI("https://kitsu.app/api/edge/users/$userid"; query = params))
-    headers = Dict("Authorization" => "Bearer $auth", "impersonate" => true)
+    headers = Dict("Authorization" => "Bearer $auth")
     r = request(resource, "GET", url, headers)
     if r.status >= 400
         logstatus("kitsu_get_user", r, url)
@@ -2070,7 +2087,7 @@ function kitsu_get_user(resource::Resource, auth::String, userid::Integer)
 end
 
 function kitsu_get_image(resource::Resource, url::String)
-    r = request(resource, "GET", url, Dict("impersonate" => true))
+    r = request(resource, "GET", url)
     if r.status >= 400
         logstatus("kitsu_get_image", r, url)
         return HTTP.Response(r)
@@ -2117,17 +2134,8 @@ Oxygen.@post "/animeplanet" function animeplanet_api(r::HTTP.Request)::HTTP.Resp
             return animeplanet_get_user(resource, sessionid, data["username"])
         elseif endpoint == "username"
             return animeplanet_get_username(resource, sessionid, data["userid"])
-        elseif endpoint == "feed"
-            return animeplanet_get_feed(
-                resource,
-                sessionid,
-                data["medium"],
-                data["username"],
-            )
         elseif endpoint == "image"
             return animeplanet_get_image(resource, sessionid, data["url"])
-        elseif endpoint == "login"
-            return animeplanet_login(resource, sessionid)
         else
             logerror("animeplanet_api invalid endpoint $endpoint")
             return HTTP.Response(500, [])
@@ -2142,25 +2150,6 @@ end
 function parse_animeplanet_response(resource::Resource, url::String, sessionid::String, found::Function)
     r = request(resource, "GET", url, Dict("sessionid" => sessionid))
     text = r.body
-    if occursin("<title>Just a moment...</title>", text)
-        token = animeplanet_solve_challenge(resource, url, r)
-        if isnothing(token)
-            logerror("parse_animeplanet_response: failed challenge $r $url")
-            return HTTP.Response(500, [])
-        end
-        r = request(
-            resource,
-            "GET",
-            url,
-            Dict(
-                "sessionid" => sessionid,
-                "cookies" => [["cf_clearance", token, ".anime-planet.com"]],
-            ),
-            nothing,
-            false
-        )
-        text = r.body
-    end
     if occursin("<title>Just a moment...</title>", text)
         logerror("parse_animeplanet_response: failed after solving challenge $r $url")
         return HTTP.Response(500, [])
@@ -2693,40 +2682,6 @@ function animeplanet_get_user(resource::Resource, sessionid::String, username::S
     HTTP.Response(200, encode(ret, :msgpack)...)
 end
 
-function animeplanet_get_feed(
-    resource::Resource,
-    sessionid::String,
-    medium::String,
-    username::String,
-)
-    if !ANIMEPLANET_LOGIN
-        ret = Dict{String,Int}()
-        return HTTP.Response(200, encode(ret, :msgpack)...)
-    end
-    params = Dict("type" => medium)
-    url = string(
-        HTTP.URI("https://www.anime-planet.com/users/$username/feed", query = params),
-    )
-    text = parse_animeplanet_response(
-        resource,
-        url,
-        sessonid,
-        x -> !occursin("<h1>You searched for $username</h1>", x),
-    )
-    if text isa HTTP.Response
-        logstatus("animeplanet_get_feed", text, url)
-        return text
-    end
-    feed_entries = [x for x in split(text, "\n") if occursin("data-timestamp", x)]
-    ret = Dict{String,Int}()
-    for x in reverse(feed_entries)
-        title = extract(x, """href="/$medium/""", "\"")
-        updated_at = parse(Int, extract(x, "data-timestamp=\"", "\">"))
-        ret[title] = updated_at
-    end
-    HTTP.Response(200, encode(ret, :msgpack)...)
-end
-
 function animeplanet_get_username(resource::Resource, sessionid::String, userid::Integer)
     url = "https://www.anime-planet.com/forum/members/$userid?tooltip=true"
     text = parse_animeplanet_response(
@@ -2759,156 +2714,6 @@ function animeplanet_get_image(resource::Resource, sessionid::String, url::Strin
     end
     ret = Dict("version" => API_VERSION, "url" => url, "image" => r.body)
     HTTP.Response(200, encode(ret, :msgpack)...)
-end
-
-function animeplanet_solve_challenge(resource::Resource, url::String, request::Response)
-    proxy = replace(resource["proxyurl"], "http://" => "")
-    user_pass, host_port = split(proxy, "@")
-    username, password = split(user_pass, ":")
-    host, port = split(host_port, ":")
-    apikey = read("../../secrets/capsolver.apikey.txt", String)
-    payload = Dict(
-        "clientKey" => apikey,
-        "task" => Dict(
-            "type" => "AntiCloudflareTask",
-            "websiteURL" => url,
-            "userAgent" => "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
-            "html" => request.body,
-            "proxyType" => "http",
-            "proxyAddress" => host,
-            "proxyPort" => parse(Int, port),
-            "proxyLogin" => username,
-            "proxyPassword" => password,
-        )
-    )
-    try
-        res = HTTP.post(
-            "https://api.capsolver.com/createTask",
-            ["Content-Type" => "application/json"],
-            JSON3.write(payload),
-        )
-        resp = JSON3.read(String(res.body))
-        task_id = get(resp, :taskId, nothing)
-        if isnothing(task_id)
-            return nothing
-        end
-        for _ = 1:30
-            sleep(1)
-            poll_payload = Dict("clientKey" => apikey, "taskId" => task_id)
-            res = HTTP.post(
-                "https://api.capsolver.com/getTaskResult",
-                ["Content-Type" => "application/json"],
-                JSON3.write(poll_payload),
-            )
-            resp = JSON3.read(String(res.body))
-            status = get(resp, :status, "")
-            if status == "ready"
-                solution = get(resp, :solution, nothing)
-                if !isnothing(solution)
-                    # TODO refactor with solve_turnstile
-                    println("TOKEN $solution")
-                    return solution["cookies"]["cf_clearance"]
-                end
-            end
-            error_id = get(resp, :errorId, nothing)
-            if status == "failed" || (!isnothing(error_id) && error_id != 0)
-                logerror("status fail $resp")
-                return nothing
-            end
-        end
-    catch e
-        logerror("animeplanet_solve_challenge error $e")
-        return nothing
-    end
-end
-
-function animeplanet_solve_turnstile()
-    apikey = read("../../secrets/capsolver.apikey.txt", String)
-    sitekey = read("../../secrets/capsolver.animeplanet.txt", String)
-    payload = Dict(
-        "clientKey" => apikey,
-        "task" => Dict(
-            "type" => "AntiTurnstileTaskProxyLess",
-            "websiteKey" => sitekey,
-            "websiteURL" => "https://www.anime-planet.com",
-            "metadata" => Dict("action" => ""),
-        ),
-    )
-    try
-        res = HTTP.post(
-            "https://api.capsolver.com/createTask",
-            ["Content-Type" => "application/json"],
-            JSON3.write(payload),
-        )
-        resp = JSON3.read(String(res.body))
-        task_id = get(resp, :taskId, nothing)
-        if isnothing(task_id)
-            return nothing
-        end
-        for _ = 1:30
-            sleep(1)
-            poll_payload = Dict("clientKey" => apikey, "taskId" => task_id)
-            res = HTTP.post(
-                "https://api.capsolver.com/getTaskResult",
-                ["Content-Type" => "application/json"],
-                JSON3.write(poll_payload),
-            )
-            resp = JSON3.read(String(res.body))
-            status = get(resp, :status, "")
-            if status == "ready"
-                solution = get(resp, :solution, nothing)
-                if !isnothing(solution)
-                    return get(solution, :token, nothing)
-                end
-            end
-            error_id = get(resp, :errorId, nothing)
-            if status == "failed" || (!isnothing(error_id) && error_id != 0)
-                return nothing
-            end
-        end
-    catch e
-        logerror("animeplanet_solve_turnstile error $e")
-        return nothing
-    end
-end
-
-function animeplanet_login(resource::Resource, sessionid::String)
-    if !ANIMEPLANET_LOGIN
-        return HTTP.Response(200, [])
-    end
-    token = animeplanet_solve_turnstile()
-    if isnothing(token)
-        logerror("animeplanet_login solve turnstile failed on $resource")
-        return HTTP.Response(500, [])
-    end
-    url = "https://www.anime-planet.com/api/login"
-    creds = resource["credentials"]
-    d = Dict(
-        "_username" => creds["username"],
-        "_password" => creds["password"],
-        "_remember_me" => true,
-        "_token" => token,
-    )
-    headers, body = encode(d, :json)
-    headers["sessionid"] = sessionid
-    r = request(resource, "PUT", url, headers, body)
-    if r.status >= 400
-        logstatus("animeplanet_login", r, url; handled_errors = [])
-        return HTTP.Response(r)
-    end
-    callback_url = try
-        only(JSON3.parse(r.body)[:data][:callback])
-    catch
-        logerror("animeplanet_login parse callback failed $r $creds, sleeping for 3600s")
-        sleep(3600)
-        return HTTP.Response(500, [])
-    end
-    r = request(resource, "GET", callback_url, Dict("sessionid" => sessionid))
-    if r.status >= 400
-        logstatus("animeplanet_login callback", r, url; handled_errors = [])
-        return HTTP.Response(r)
-    end
-    HTTP.Response(200, [])
 end
 
 function compile(::Integer) end
