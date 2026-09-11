@@ -36,6 +36,7 @@ export interface AddItemPayload {
     medium: CardType;
     source: string;
     itemid: string;
+    usersource: string;
   };
 }
 
@@ -91,6 +92,16 @@ export const SOURCE_MAP: Record<SourceType, string> = {
   AniList: "anilist",
   Kitsu: "kitsu",
   "Anime-Planet": "animeplanet",
+};
+
+export const getStoredSource = (): string => {
+  const stored =
+    typeof window === "undefined"
+      ? null
+      : localStorage.getItem("selectedSource");
+  return stored && stored in SOURCE_MAP
+    ? SOURCE_MAP[stored as SourceType]
+    : SOURCE_MAP.MyAnimeList;
 };
 
 interface Hsl {

@@ -11,6 +11,7 @@ import {
   MediaTypePayload,
   Payload,
   getBiggestImageUrl,
+  getStoredSource,
   API_BASE,
   stringToHslColor,
 } from "./types";
@@ -253,6 +254,7 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
           medium: itemType === "anime" ? "Anime" : "Manga",
           source: source!,
           itemid: itemid!,
+          usersource: getStoredSource(),
         },
       };
     } else{

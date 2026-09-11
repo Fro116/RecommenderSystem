@@ -7,6 +7,86 @@ import {
   stringToHslColor,
 } from "../types";
 
+const INLINE_TAGS: Record<string, "em" | "strong" | "cite"> = {
+  i: "em",
+  em: "em",
+  b: "strong",
+  strong: "strong",
+  cite: "cite",
+};
+
+const BLOCK_TAGS = new Set(["p", "ul", "li"]);
+
+const TAG_RE = /<\s*(\/?)\s*([a-zA-Z][a-zA-Z0-9]*)([^>]*)>/g;
+
+const safeHref = (attrs: string): string | null => {
+  const match = attrs.match(/href\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i);
+  const raw = (match ? (match[2] ?? match[3] ?? match[4] ?? "") : "").trim();
+  return /^https?:\/\//i.test(raw) ? raw : null;
+};
+
+interface SynopsisFrame {
+  tag: string;
+  attrs: string;
+  children: React.ReactNode[];
+}
+
+const wrapFrame = (frame: SynopsisFrame, key: number): React.ReactNode => {
+  const { tag, attrs, children } = frame;
+  if (tag === "a") {
+    const href = safeHref(attrs);
+    return href ? (
+      <a key={key} href={href} target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
+    ) : (
+      <React.Fragment key={key}>{children}</React.Fragment>
+    );
+  }
+  const Tag = INLINE_TAGS[tag] ?? (tag as "p" | "ul" | "li");
+  return <Tag key={key}>{children}</Tag>;
+};
+
+const renderSynopsis = (raw: string): React.ReactNode[] => {
+  const text = raw
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]*<\s*\/?\s*br\s*\/?\s*>[ \t]*\n?/gi, "\n")
+    .replace(/\s*<\s*(\/?)\s*(p|ul|li)\s*([^>]*)>\s*/gi, "<$1$2$3>")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  const root: React.ReactNode[] = [];
+  const stack: SynopsisFrame[] = [];
+  const push = (node: React.ReactNode) =>
+    (stack.length ? stack[stack.length - 1].children : root).push(node);
+
+  let last = 0;
+  let key = 0;
+  let match: RegExpExecArray | null;
+  TAG_RE.lastIndex = 0;
+  while ((match = TAG_RE.exec(text)) !== null) {
+    const tag = match[2].toLowerCase();
+    if (match.index > last) push(text.slice(last, match.index));
+    last = TAG_RE.lastIndex;
+    if (!(tag in INLINE_TAGS) && !BLOCK_TAGS.has(tag) && tag !== "a") continue;
+    if (match[1] !== "/") {
+      stack.push({ tag, attrs: match[3], children: [] });
+      continue;
+    }
+    const open = stack.map((frame) => frame.tag).lastIndexOf(tag);
+    if (open === -1) continue;
+    while (stack.length > open) {
+      push(wrapFrame(stack.pop()!, key++));
+    }
+  }
+  if (last < text.length) push(text.slice(last));
+  while (stack.length) {
+    push(wrapFrame(stack.pop()!, key++));
+  }
+  return root;
+};
+
 interface DetailPaneProps {
   item: Result | null;
   cardType: CardType;
@@ -156,7 +236,13 @@ const DetailPane: React.FC<DetailPaneProps> = ({
   const SynopsisSection = () => (
     <div className="detail-pane-synopsis-section">
       <h4>Synopsis</h4>
-      <p>{item.synopsis || "No synopsis available."}</p>
+      {item.synopsis ? (
+        <div className="detail-pane-synopsis">
+          {renderSynopsis(item.synopsis)}
+        </div>
+      ) : (
+        <p>No synopsis available.</p>
+      )}
     </div>
   );
 

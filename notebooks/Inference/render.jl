@@ -87,15 +87,18 @@ end
     collect(values(groups))
 end
 
-function get_item_url(source::String, medium::String, itemid::String)
-    @assert medium in ["manga", "anime"]
-    source_map = Dict(
+function source_to_url()
+    Dict(
         "mal" => "https://myanimelist.net",
         "anilist" => "https://anilist.co",
         "kitsu" => "https://kitsu.app",
         "animeplanet" => "https://anime-planet.com",
     )
-    join([source_map[source], medium, itemid], "/")
+end
+
+function get_item_url(source::String, medium::String, itemid::String)
+    @assert medium in ["manga", "anime"]
+    join([source_to_url()[source], medium, itemid], "/")
 end
 
 function get_images(source, medium, itemid)
@@ -107,7 +110,7 @@ function get_images(source, medium, itemid)
     images[key]
 end
 
-function render_card(d)
+function render_card(d, card_source::String)
     d = copy(d)
     # choose a random image
     for k in ["image", "missing_image"]
@@ -118,6 +121,17 @@ function render_card(d)
         end
         delete!(d, "$(k)s")
     end
+    source_url = source_to_url()[card_source]
+    # redirect to source
+    url = first(d["urls"])
+    for u in d["urls"]
+        if occursin(source_url, u)
+            url = u
+            break
+        end
+    end
+    d["url"] = url
+    delete!(d, "urls")
     d
 end
 
@@ -206,11 +220,11 @@ end
         engtitle
     end
     for x in df
-        key = first(x[:keys])
+        primary_key = first(x[:keys])
         info[x[:matchedid]] = Dict{String,Any}(
             "title" => x[:title],
             "english_title" => english_title(x[:title], x[:english_title]),
-            "url" => get_item_url(key[2], key[1], key[3]),
+            "urls" => [get_item_url(k[2], k[1], k[3]) for k in x[:keys]],
             "type" => optval(x[:metadata][:mediatype]),
             "startdate" => optdate(x[:metadata][:dates][:startdate]),
             "enddate" => optdate(x[:metadata][:dates][:enddate]),
@@ -222,9 +236,9 @@ end
             "season" => season.(x[:metadata][:dates][:season]),
             "studios" => jsonlist(x[:metadata][:studios]),
             "source" => optval(x[:metadata][:source_material]),
-            "genres" => jsonlist(x[:genres]),
             "synopsis" => first(x[:synopsis]),
-            "images" => get_images(key[2], medium, key[3]),
+            "genres" => jsonlist(x[:genres]),
+            "images" => get_images(primary_key[2], medium, primary_key[3]),
             "missing_images" => get_missing_images(),
         )
     end
@@ -337,7 +351,6 @@ function ranking(state, idxs, speedscope)
     ts = time()
     Threads.@threads for i = 1:length(state["users"])
         s = state["users"][i]
-        source = s["source"]
         if "$m.ranking" in keys(s["embeds"]) && s["embeds"]["$m.ranking_idxs"] == idxs
             continue
         end
@@ -469,6 +482,6 @@ function render(state, pagination, speedscope)
     end
     ids = reranking!(state, idxs, r, eidx, speedscope) .- 1
     info = get_media_info(state["medium"])
-    view = [render_card(info[i]) for i in ids[sidx:eidx]]
+    view = [render_card(info[i], state["cardsource"]) for i in ids[sidx:eidx]]
     (view, total), true
 end

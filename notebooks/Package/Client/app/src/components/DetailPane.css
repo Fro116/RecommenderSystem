@@ -136,8 +136,34 @@
   margin-top: 24px;
 }
 
-.detail-pane-synopsis-section p {
+.detail-pane-synopsis-section p,
+.detail-pane-synopsis {
   white-space: pre-line;
+}
+
+.detail-pane-synopsis p,
+.detail-pane-synopsis ul {
+  margin: 0 0 12px 0;
+}
+
+.detail-pane-synopsis p:last-child,
+.detail-pane-synopsis ul:last-child {
+  margin-bottom: 0;
+}
+
+.detail-pane-synopsis ul {
+  padding-left: 1.5em;
+}
+
+.detail-pane-synopsis a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.15s ease;
+}
+
+.detail-pane-synopsis a:hover {
+  color: #ff9b1c;
 }
 
 @media (max-width: 768px) {

@@ -390,7 +390,8 @@ function decode_state(r::HTTP.Request)
                 "related_penalty" => 0,
                 "mmr_penalty" => 0,
                 "decay" => exp(log(0.5) / 12),
-            )
+            ),
+            "cardsource" => nothing
         )
         uri = HTTP.URI(r.target)
         if uri.path == "/add_user"
@@ -461,6 +462,9 @@ Oxygen.@post "/add_user" function add_user_endpoint(r::HTTP.Request)::HTTP.Respo
         return HTTP.Response(r_embed.status)
     end
     push!(state["users"], r_embed)
+    if isnothing(state["cardsource"])
+        state["cardsource"] = source
+    end
     render_state(state, pagination, encoding, followup_action, speedscope)
 end
 
@@ -501,6 +505,7 @@ Oxygen.@post "/add_item" function add_item_endpoint(r::HTTP.Request)::HTTP.Respo
     if isnothing(card)
         return HTTP.Response(404, [])
     end
+    card = render_card(card, action["usersource"])
     d_item = Dict(
         "medium" => medium,
         "matchedid" => matchedid,
@@ -510,6 +515,9 @@ Oxygen.@post "/add_item" function add_item_endpoint(r::HTTP.Request)::HTTP.Respo
         ),
     )
     push!(state["items"], d_item)
+    if isnothing(state["cardsource"])
+        state["cardsource"] = action["usersource"]
+    end
     render_state(state, pagination, encoding, nothing, speedscope)
 end
 
@@ -595,7 +603,7 @@ function compile_source(port::Integer, compile_source::AbstractString)
             status_exception = false,
         )
         logtag("STARTUP", "/add_item $compile_source")
-        apply_action("add_item", Dict("source" => source, "medium" => m, "itemid" => itemid))
+        apply_action("add_item", Dict("source" => source, "medium" => m, "itemid" => itemid, "usersource" => source))
     end
     for (source, username) in zip(test_users.source, test_users.username)
         if source != compile_source
