@@ -1,6 +1,7 @@
 data/
 logs/
 secrets/
+notebooks/Collect
 /coverage
 /build
 .ipynb_checkpoints/

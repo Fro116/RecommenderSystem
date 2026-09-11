@@ -1,11 +1,10 @@
-# Anime Recommendations and Manga Recommendations
-This is a recommender system for anime and manga that is trained on over 2 billion user-item interactions from MyAnimeList, AniList, Kitsu, and Anime-Planet.
+# Anime and Manga Recommendations
+This is a recommender system for anime and manga. It supports users on MyAnimeList, AniList, Kitsu, and Anime-Planet.
 
-Details on the recommender system can be found by inspecting the source code at `notebooks`. The main steps are
-1. Stitching multiple snapshots of a user's list to create a timestamped history of interactions.
-2. Training a rating model to predict the score that the user will give to an item. We follow an approach similar to [Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for Generative Recommendations](https://arxiv.org/abs/2402.17152).
-3. Training a retrieval model to predict the next item a user will watch. We use a cloze objective similar to [BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding](https://arxiv.org/pdf/1810.04805.pdf), but with modern transformer blocks and training recipes.
-4. Training a similarity model to suggest items that are semantically similar to a reference anime or manga. We take inspiration from [LambdaRank](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/MSR-TR-2010-82.pdf)
-5. Finetuning the models daily on recent data.
+Technical details can be found in the source code at `notebooks/Training`. The main steps are
+1. Pretraining a foundation model to predict the next item a user will watch or read, and the rating the user will assign to it. We follow an approach similar to [Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for Generative Recommendations](https://arxiv.org/abs/2402.17152), but with several modifications to handle anime and manga modalities. The model backbone is a 0.5B transformer that is trained on B200s.
+2. Constructing a similarity model to suggest items that are semantically similar to a reference anime or manga. This process begins by taking the embeddings from the foundation model and then aligning them to match human perceived relatedness. This creates two embedding spaces, one for anime and one for manga. Next we rotate the anime space on top of the manga space using adaptations as fixed points. In this unified space, one can, for example, find anime that are similar to a given manga, even if that manga was never adapted into an anime.
+3. Finetuning the models on recent data. The passage of time is an important predictor, as both popularity and ratings exhibit strong seasonal and freshness effects.
+4. Reranking to produce a list of recommendations. We switch from the point-wise task of finding the singular next show a user should watch to the list-wise task of producing a set of series. To show how these are different, imagine a user who has only watched several PreCure series. A sufficiently strong model might (correctly!) predict that the user will watch and enjoy other PreCure seasons. However, a list of only one franchise would be a poor recommendation. After showing N PreCure series, the marginal utility of the N+1st is near zero. Reranking promotes novelty and diversity within the returned lists.
 
-Once trained, the models are containerized and deployed on gpu instances. A website, which is currently in private beta and is pending release, queries this endpoint and lets users view their recommendations.
+A website, which is currently in private beta, hosts these models on GPUs and lets users view their recommendations.
