@@ -147,8 +147,8 @@ function build(basedir::String, name::String, tags::Vector{String})
             ["docker tag $name $repo/$name:$tag", "docker push $repo/$name:$tag"] for
             tag in tags
         )...,
-        "aws autoscaling start-instance-refresh --auto-scaling-group-name '$(name)-autoscale-group' --preferences '{\"MinHealthyPercentage\": 100, \"InstanceWarmup\": 600 }' --region $region",
     ])
+    run(`notebooks/Package/Server/deploy_aws.sh`, wait=false)
     # cleanup
     runcmds(["docker image prune -f", "docker builder prune -f --reserved-space=32GB"])
 end
