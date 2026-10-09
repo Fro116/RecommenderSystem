@@ -14,12 +14,12 @@ function write_entrypoint(num_gpus)
 end
 
 function provision_instance()
-    blacklisted_datacenters = [447869] # machines are often broken
+    blacklisted_datacenters = []
     for gpu_config in ["8xB200", "4xB200", "8xH100"]
         node_price = Dict(
-            "8xB200" => 64,
-            "4xB200" => 32,
-            "8xH100" => 32,
+            "8xB200" => 80,
+            "4xB200" => 40,
+            "8xH100" => 40,
         )[gpu_config]
         duration = Dict(
             "8xB200" => 35,
