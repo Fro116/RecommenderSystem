@@ -379,7 +379,7 @@ def train():
     config = training_config()
     num_epochs = 1024
     model = LTRModel(config)
-    model.load_pretrained_embeddings(f"{args.datadir}/features.h5")
+    model.load_pretrained_embeddings(f"{args.datadir}/../embeddings.h5")
     logger.info(
         f"Created model with {sum(p.numel() for p in model.parameters())} parameters"
         f" and {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters"

@@ -69,6 +69,7 @@ def get_num_items(medium):
 
 
 def get_training_config():
+    # TODO optimize
     config = {
         "vocab_sizes": {x: get_num_items(x) for x in [0, 1]},
         "learning_rate": 3e-4,
@@ -349,7 +350,7 @@ def generate_embeddings():
     model.to(args.device)
     model = torch.compile(model)
     model.eval()
-    output_path = f"{args.datadir}/output.embeddings.{args.medium}.h5"
+    output_path = f"{args.datadir}/search.retrieval.embeddings.{args.medium}.h5"
     temperature = model.get_temperature()
     with torch.no_grad():
         W = model.embed().to("cpu").numpy()

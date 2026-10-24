@@ -74,6 +74,7 @@ function train(datetag::AbstractString)
     else
         logtag("TRAIN", "rungpu succeeded")
     end
+    run(`python embeddings.py`)
     cmd = "cd item_similarity && julia run.jl"
     run(`sh -c $cmd`)
     run(`rclone --retries=10 copyto $datadir/list_tag r2:rsys/database/training/latest`)

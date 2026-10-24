@@ -91,4 +91,5 @@ function save_dataset()
     end
 end
 
+logtag("SEARCH", "saving datasets")
 save_dataset()

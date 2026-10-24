@@ -6,7 +6,7 @@ include("../../julia_utils/stdout.jl")
 
 const datadir = "../../../data/import/embeddings"
 const secretdir = "../../../secrets"
-const model_id = "gemini-3.5-flash"
+const model_id = "gemini-3.8-flash"
 const region = "global"
 
 function truncate_array(arr, p)
@@ -85,16 +85,18 @@ end
 
 function sanitize_key(json)
     x = copy(json)
-    for k in [:reviews, :recommendations]
-        for y in x[k]
-            delete!(y, :count)
-            if k == :recommendations
-                delete!(y, :matchedid)
-            end
-        end
+    for y in x[:reviews]
+        delete!(y, :count)
+        delete!(y, :username)
+    end
+    for y in x[:recommendations]
+        delete!(y, :count)
+        delete!(y, :matchedid)
+        delete!(y, :synopsis)
+    end
+    for k in [:reviews, :recommendations, :characters, :tags]
         x[k] = Set(x[k])
     end
-    x[:tags] = Set(x[:tags])
     delete!(x, :count)
     x
 end
@@ -147,6 +149,7 @@ function upload_batch_job()
     mkpath("$datadir/batch")
     max_requests_per_job = 200_000
     @assert length(jsons) <= max_requests_per_job
+    logtag("SUMMARIZE_DOCUMENTS", "running batch job on $(length(jsons)) documents")
     open("$datadir/batch/job.jsonl", "w") do f
         for json in jsons
             JSON3.write(f, json)

@@ -219,6 +219,17 @@ end
         end
         engtitle
     end
+    function pick_synopsis(synopses)
+        # prefer full synopsis over abridged ones like "second season of..."
+        best_synopsis = nothing
+        synopsis_min_chars = 100
+        for x in synopses
+            if isnothing(best_synopsis) || (length(best_synopsis) < synopsis_min_chars && length(x) >= synopsis_min_chars)
+                best_synopsis = x
+            end
+        end
+        best_synopsis
+    end
     for x in df
         primary_key = first(x[:keys])
         info[x[:matchedid]] = Dict{String,Any}(
@@ -236,7 +247,7 @@ end
             "season" => season.(x[:metadata][:dates][:season]),
             "studios" => jsonlist(x[:metadata][:studios]),
             "source" => optval(x[:metadata][:source_material]),
-            "synopsis" => first(x[:synopsis]),
+            "synopsis" => pick_synopsis(x[:synopsis]),
             "genres" => jsonlist(x[:genres]),
             "images" => get_images(primary_key[2], medium, primary_key[3]),
             "missing_images" => get_missing_images(),

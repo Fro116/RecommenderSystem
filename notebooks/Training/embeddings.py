@@ -5,9 +5,9 @@ import pandas as pd
 import torch
 import torch.nn as nn
 
-datadir = "../../../data/training"
+datadir = "../../data/training"
 
-with open("../transformer.model.py") as f:
+with open("transformer.model.py") as f:
     exec(f.read())
 
 
@@ -63,7 +63,7 @@ def save_embeddings():
     for d in ds:
         for k in d:
             ret[k] = d[k]
-    with h5py.File(f"{datadir}/item_similarity/features.h5", "w") as hf:
+    with h5py.File(f"{datadir}/embeddings.h5", "w") as hf:
         for k, v in ret.items():
             hf.create_dataset(k, data=v)
 

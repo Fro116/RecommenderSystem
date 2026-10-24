@@ -16,7 +16,6 @@ function get_embedding_matrix(medium)
                 continue
             end
             v = read(f, k)
-            v = convert.(Float32, v)
             registry[k] = convert.(Float32, v)
         end
     end
