@@ -40,6 +40,15 @@ export interface AddItemPayload {
   };
 }
 
+export interface AddSearchPayload {
+  state: string;
+  action: {
+    medium: CardType;
+    text: string;
+    usersource: string;
+  };
+}
+
 export interface MediaTypePayload {
   state: string;
   action: {
@@ -47,7 +56,11 @@ export interface MediaTypePayload {
   };
 }
 
-export type Payload = AddUserPayload | MediaTypePayload | AddItemPayload;
+export type Payload =
+  | AddUserPayload
+  | MediaTypePayload
+  | AddItemPayload
+  | AddSearchPayload;
 
 export interface AutocompleteItem {
   // User properties

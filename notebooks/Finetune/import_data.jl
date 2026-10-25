@@ -30,6 +30,7 @@ function download_data(finetune_tag::AbstractString)
         ["watches.$m.jld2" for m in [0, 1]],
         ["transformer.masked.$stem" for stem in ["csv", "pt"]],
         ["pairwise.embeddings.$stem" for stem in ["jld2", "csv"]],
+        ["search.embeddings.$stem" for stem in ["jld2"]],
         ["media_relations.csv", "media_embeddings.h5"],
     )
     for fn in files

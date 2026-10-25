@@ -105,7 +105,6 @@ class SearchModel(nn.Module):
             if args.features in ["both", "transformer"]
             else None
         )
-        # self.alpha = nn.Parameter(torch.zeros(()))
         self.dropout = nn.Dropout(config["dropout"])
 
     def get_temperature(self):
@@ -123,8 +122,6 @@ class SearchModel(nn.Module):
         self.content_embeddings.weight.requires_grad = False
 
     def embed(self):
-        if args.features == "notrain":
-            return F.normalize(self.content_embeddings.weight, dim=-1)
         content = 0
         transformer = 0
         if self.content_adapter is not None:

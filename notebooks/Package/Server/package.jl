@@ -107,6 +107,7 @@ function compute(basedir::String)
             "model.registry.jld2",
             "images.csv",
             "item_similarity.jld2",
+            "search.embeddings.jld2",
         ],
     )
     for f in files

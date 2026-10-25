@@ -20,8 +20,16 @@ export const PAGE_META: Record<string, PageMeta> = {
   "/title": {
     title: "Recs☆Moe | Time for another day of hard work!",
     description:
-      "Get recommendations for anime and manga with Recs☆Moe! Search for similar series, or link your profile to get personalized recs.",
+      "Search for series that are similar to a given anime or manga",
     file: "title.html",
+    changefreq: "weekly",
+    priority: "0.8",
+  },
+  "/search": {
+    title: "Recs☆Moe | Time for another day of hard work!",
+    description:
+      "Find anime or manga that match the description.",
+    file: "search.html",
     changefreq: "weekly",
     priority: "0.8",
   },

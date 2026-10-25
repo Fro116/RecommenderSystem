@@ -7,12 +7,17 @@ import React, {
   FormEvent,
   ChangeEvent,
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { SourceType, AutocompleteItem, API_BASE, SOURCE_MAP } from "./types";
 import Footer from "./Footer";
 
-type QueryMode = "user" | "item";
+type QueryMode = "user" | "item" | "query";
 type ItemType = "anime" | "manga";
+
+interface SearchNavState {
+  query?: string;
+  itemType?: ItemType;
+}
 
 interface HomePageProps {
   mode?: QueryMode;
@@ -62,6 +67,7 @@ const HomePage: React.FC<HomePageProps> = ({ mode = "user" }) => {
   const [windowWidth, setWindowWidth] = useState(0);
 
   const navigate = useNavigate();
+  const location = useLocation();
   const inputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const buttonContainerRef = useRef<HTMLDivElement>(null);
@@ -91,9 +97,26 @@ const HomePage: React.FC<HomePageProps> = ({ mode = "user" }) => {
   }, [showModeDropdown]);
 
   useEffect(() => {
-    setQuery("");
+    const navState = location.state as SearchNavState | null;
+    const prefill =
+      queryMode === "query" && typeof navState?.query === "string"
+        ? navState.query
+        : "";
+    setQuery(prefill);
     setAutocompleteResults([]);
-  }, [queryMode]);
+    if (!prefill) return;
+    if (navState?.itemType === "anime" || navState?.itemType === "manga") {
+      setItemType(navState.itemType);
+    }
+    // Focus with the cursor at the end so the query is ready to edit.
+    const frame = requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(prefill.length, prefill.length);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [queryMode, location.state]);
 
   const userPlaceholders: Record<SourceType, string> = {
     MyAnimeList: "Type a MyAnimeList username",
@@ -107,13 +130,42 @@ const HomePage: React.FC<HomePageProps> = ({ mode = "user" }) => {
     manga: "Type a manga title",
   };
 
+  const queryPlaceholders: Record<ItemType, string> = {
+    anime: "Type an anime description",
+    manga: "Type a manga description",
+  };
+
+  const modeInfo: Record<QueryMode, { title: string; description: string; path: string }> = {
+    user: {
+      title: "Search by User",
+      description: "Get recommendations based on a user's profile.",
+      path: "/",
+    },
+    item: {
+      title: "Search by Title",
+      description: "Discover works similar to a specific anime or manga.",
+      path: "/title",
+    },
+    query: {
+      title: "Search by Query",
+      description: "Describe an anime or manga and find matching series.",
+      path: "/search",
+    },
+  };
+
   const inputPlaceholder =
     queryMode === "user"
       ? userPlaceholders[activeSource]
-      : itemPlaceholders[itemType];
+      : queryMode === "item"
+        ? itemPlaceholders[itemType]
+        : queryPlaceholders[itemType];
 
   useEffect(() => {
     if (autocompleteDisabled) return;
+    if (queryMode === "query") {
+      setAutocompleteResults([]);
+      return;
+    }
     if (!query.trim()) {
       setAutocompleteResults([]);
       return;
@@ -184,6 +236,16 @@ const HomePage: React.FC<HomePageProps> = ({ mode = "user" }) => {
 
   const handleSearch = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+
+    if (queryMode === "query") {
+      const trimmed = query.trim();
+      if (!trimmed) return;
+      setErrorMessage("");
+      navigate(`/search/${itemType}/${encodeURIComponent(trimmed)}`);
+      setQuery("");
+      inputRef.current?.blur();
+      return;
+    }
 
     if (queryMode === "item") {
       if (autocompleteResults.length > 0) {
@@ -278,6 +340,7 @@ const HomePage: React.FC<HomePageProps> = ({ mode = "user" }) => {
                 }
               }}
               autoComplete="off"
+              maxLength={queryMode === "query" ? 1000 : undefined}
             />
             {query.trim() && autocompleteResults.length > 0 && (
               <div className="autocomplete-container">
@@ -416,12 +479,10 @@ const HomePage: React.FC<HomePageProps> = ({ mode = "user" }) => {
               onClick={() => setShowModeDropdown((prev) => !prev)}
             >
               <span className="query-mode-button-title">
-                {queryMode === "user" ? "Search by User" : "Search by Title"}
+                {modeInfo[queryMode].title}
               </span>
               <span className="query-mode-button-description">
-                {queryMode === "user"
-                  ? "Get recommendations based on a user's profile."
-                  : "Discover works similar to a specific anime or manga."}
+                {modeInfo[queryMode].description}
               </span>
               <span className="query-mode-button-chevron">
                 <svg
@@ -440,30 +501,21 @@ const HomePage: React.FC<HomePageProps> = ({ mode = "user" }) => {
             </button>
             {showModeDropdown && (
               <ul className="query-mode-list">
-                <li
-                  className={`query-mode-item ${queryMode === "user" ? "active" : ""}`}
-                  onClick={() => {
-                    setShowModeDropdown(false);
-                    navigate("/");
-                  }}
-                >
-                  <div className="query-mode-title">Search by User</div>
-                  <div className="query-mode-description">
-                    Get recommendations based on a user's profile.
-                  </div>
-                </li>
-                <li
-                  className={`query-mode-item ${queryMode === "item" ? "active" : ""}`}
-                  onClick={() => {
-                    setShowModeDropdown(false);
-                    navigate("/title");
-                  }}
-                >
-                  <div className="query-mode-title">Search by Title</div>
-                  <div className="query-mode-description">
-                    Discover works similar to a specific anime or manga.
-                  </div>
-                </li>
+                {(["user", "item", "query"] as QueryMode[]).map((m) => (
+                  <li
+                    key={m}
+                    className={`query-mode-item ${queryMode === m ? "active" : ""}`}
+                    onClick={() => {
+                      setShowModeDropdown(false);
+                      navigate(modeInfo[m].path);
+                    }}
+                  >
+                    <div className="query-mode-title">{modeInfo[m].title}</div>
+                    <div className="query-mode-description">
+                      {modeInfo[m].description}
+                    </div>
+                  </li>
+                ))}
               </ul>
             )}
           </div>
@@ -474,7 +526,9 @@ const HomePage: React.FC<HomePageProps> = ({ mode = "user" }) => {
             <h2 className="source-selection-title">
               {queryMode === "user"
                 ? "Find recommendations for a user on:"
-                : "Find series that are similar to:"}
+                : queryMode === "item"
+                  ? "Find series that are similar to:"
+                  : "Find works that fit the description of:"}
             </h2>
             <div className="source-buttons">
               {queryMode === "user"

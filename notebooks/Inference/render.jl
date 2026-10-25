@@ -10,6 +10,7 @@ const datadir = "../../data/finetune";
 const registry = JLD2.load("$datadir/model.registry.jld2")
 const relations = merge([JLD2.load("$datadir/media_relations.$m.jld2") for m in [0, 1]]...)
 const item_similarity = JLD2.load("$datadir/item_similarity.jld2")
+const search_embeddings = JLD2.load("$datadir/search.embeddings.jld2")
 const status_map = Dict(
     "none" => 0,
     "wont_watch" => 1,
@@ -224,6 +225,9 @@ end
         best_synopsis = nothing
         synopsis_min_chars = 100
         for x in synopses
+            if isnothing(x)
+                continue
+            end
             if isnothing(best_synopsis) || (length(best_synopsis) < synopsis_min_chars && length(x) >= synopsis_min_chars)
                 best_synopsis = x
             end
@@ -274,6 +278,9 @@ function retrieval(state)
             x = item_similarity["crossproject.$am"] * x
         end
         p += item_similarity["embeddings.$m"]' * x
+    end
+    for a in state["searches"]
+        p += search_embeddings["embeddings.$m"]' * a["embedding"]
     end
     for u in state["users"]
         p += log.(compute_retrieval(registry, m, u["embeds"], 1:num_items(m)))
@@ -360,6 +367,7 @@ end
 function ranking(state, idxs, speedscope)
     m = state["medium"]
     ts = time()
+    fails = fill(false, length(state["users"]))
     Threads.@threads for i = 1:length(state["users"])
         s = state["users"][i]
         if "$m.ranking" in keys(s["embeds"]) && s["embeds"]["$m.ranking_idxs"] == idxs
@@ -369,10 +377,14 @@ function ranking(state, idxs, speedscope)
         u["embeds"] = Dict(k => s["embeds"][k] for k in ["$m.retrieval"])
         d_embed = query_model(u, m, idxs .- 1)
         if isnothing(d_embed)
-            return HTTP.Response(500, []), false
+            fails[i] = true
+        else
+            d_embed["$m.ranking_idxs"] = idxs
+            s["embeds"] = merge(s["embeds"], d_embed)
         end
-        d_embed["$m.ranking_idxs"] = idxs
-        s["embeds"] = merge(s["embeds"], d_embed)
+    end
+    if any(fails)
+        return HTTP.Response(500, []), false
     end
     push!(speedscope, ("ranking_model", time()))
     score = zeros(Float32, length(idxs))
@@ -482,7 +494,7 @@ function render(state, pagination, speedscope)
         eidx = total
     end
     page = div(sidx - 1, max_items_to_rank, RoundDown)
-    idxs = idxs[page*max_items_to_rank+1:(page+1)*max_items_to_rank]
+    idxs = idxs[page*max_items_to_rank+1:min((page+1)*max_items_to_rank, total)]
     sidx -= page * max_items_to_rank
     eidx -= page * max_items_to_rank
     push!(speedscope, ("retrieval_sort", time()))

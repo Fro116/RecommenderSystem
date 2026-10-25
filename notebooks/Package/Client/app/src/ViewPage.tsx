@@ -38,11 +38,12 @@ const loadingMessages = [
 const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
   // Hooks and State
   const navigate = useNavigate();
-  const { source, username, itemType, itemid } = useParams<{
-    source: string;
+  const { source, username, itemType, itemid, query } = useParams<{
+    source?: string;
     username?: string;
     itemType?: "anime" | "manga";
     itemid?: string;
+    query?: string;
   }>();
   const [results, setResults] = useState<Result[]>([]);
   const [apiState, setApiState] = useState<string>("");
@@ -84,6 +85,10 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
 
   const isUserMode = !!(source && username);
   const isItemMode = !!(source && itemType && itemid);
+  const isSearchMode =
+    !!(itemType && query) && (itemType === "anime" || itemType === "manga");
+  // Send the brand link back to the home mode this page was reached from.
+  const homePath = isSearchMode ? "/search" : isItemMode ? "/title" : "/";
 
   useEffect(() => {
     const siteDefaultTitle = document.title;
@@ -257,7 +262,17 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
           usersource: getStoredSource(),
         },
       };
-    } else{
+    } else if (isSearchMode) {
+      endpoint = "/add_search";
+      payload = {
+        state: "",
+        action: {
+          medium: itemType === "anime" ? "Anime" : "Manga",
+          text: query!,
+          usersource: getStoredSource(),
+        },
+      };
+    } else {
       console.warn("Missing or invalid URL parameters. Redirecting home.");
       setError("Invalid URL. Please start a search from the homepage.");
       setIsLoading(false);
@@ -278,8 +293,10 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
     username,
     itemType,
     itemid,
+    query,
     isUserMode,
     isItemMode,
+    isSearchMode,
   ]);
 
   useEffect(() => {
@@ -417,21 +434,37 @@ const ViewPage: React.FC<ViewPageProps> = ({ isMobile }) => {
         <div className="header-toggle">
           <div className="recommendations-title">
             <h2>
-              <Link to="/" className="recsmoe-brand-link">
+              <Link to={homePath} className="recsmoe-brand-link">
                 Recs☆Moe
               </Link>
               's picks
               {titleName && (
                 <>
                   {" for "}
-                  <a
-                    href={titleUrl || "#"}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="profile-link"
-                  >
-                    {titleName}
-                  </a>
+                  {isSearchMode ? (
+                    <Link
+                      to="/search"
+                      state={{
+                        query: titleUrl || query,
+                        itemType: cardType === "Manga" ? "manga" : "anime",
+                      }}
+                      className="profile-link"
+                      title="Edit this search"
+                    >
+                      {titleName}
+                    </Link>
+                  ) : titleUrl ? (
+                    <a
+                      href={titleUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="profile-link"
+                    >
+                      {titleName}
+                    </a>
+                  ) : (
+                    <span className="profile-link">{titleName}</span>
+                  )}
                 </>
               )}
             </h2>

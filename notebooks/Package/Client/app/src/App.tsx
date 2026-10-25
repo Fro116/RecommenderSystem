@@ -61,12 +61,17 @@ const App: React.FC = () => {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/title" element={<HomePage mode="item" />} />
+        <Route path="/search" element={<HomePage mode="query" />} />
         <Route
           path="/user/:source/:username"
           element={<ViewPage isMobile={isMobile} />}
         />
         <Route
           path="/item/:itemType/:source/:itemid"
+          element={<ViewPage isMobile={isMobile} />}
+        />
+        <Route
+          path="/search/:itemType/:query"
           element={<ViewPage isMobile={isMobile} />}
         />
         <Route path="/about" element={<AboutPage />} />

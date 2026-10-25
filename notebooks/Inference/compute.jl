@@ -21,8 +21,10 @@ include("../julia_utils/database.jl")
 include("../julia_utils/http.jl")
 include("../julia_utils/stdout.jl")
 include("../julia_utils/multithreading.jl")
+include("../julia_utils/scheduling.jl")
 include("../Finetune/embed.jl")
 include("render.jl")
+include("search.jl")
 
 sanitize(x) = strip(x)
 
@@ -385,6 +387,7 @@ function decode_state(r::HTTP.Request)
             "medium" => 1,
             "users" => [],
             "items" => [],
+            "searches" => [],
             "penalties" => Dict(
                 "same_series_penalty" => 0,
                 "related_penalty" => 0,
@@ -402,6 +405,13 @@ function decode_state(r::HTTP.Request)
                 "decay" => exp(log(0.5) / 12),
             )
         elseif uri.path == "/add_item"
+            state["penalties"] = Dict(
+                "same_series_penalty" => 0,
+                "related_penalty" => 0,
+                "mmr_penalty" => 0,
+                "decay" => exp(log(0.5) / 12),
+            )
+        elseif uri.path == "/add_search"
             state["penalties"] = Dict(
                 "same_series_penalty" => 0,
                 "related_penalty" => 0,
@@ -437,7 +447,7 @@ function render_state(state, pagination, encoding, followup_action, speedscope)
         "medium" => Dict(0 => "Manga", 1 => "Anime")[state["medium"]],
         "followup_action" => followup_action,
     )
-    header = first(vcat(state["users"], state["items"]))["header"]
+    header = first(vcat(state["users"], state["items"], state["searches"]))["header"]
     ret["titlename"] = header["titlename"]
     ret["titleurl"] = header["titleurl"]
     push!(speedscope, ("finish", time()))
@@ -521,10 +531,41 @@ Oxygen.@post "/add_item" function add_item_endpoint(r::HTTP.Request)::HTTP.Respo
     render_state(state, pagination, encoding, nothing, speedscope)
 end
 
+Oxygen.@post "/add_search" function add_search_endpoint(r::HTTP.Request)::HTTP.Response
+    state, action, pagination, encoding, speedscope = decode_state(r)
+    text = strip(action["text"])
+    medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
+    state["medium"] = medium
+    embedding, ok = get_text_embedding(text)
+    if !ok
+        return HTTP.Response(500, [])
+    end
+    titlename = text
+    max_title_len = 12
+    if length(text) > max_title_len
+        suffix = "..."
+        titlename = first(titlename, max_title_len - length(suffix)) * suffix
+    end
+    d_search = Dict(
+        "text" => text,
+        "embedding" => embedding,
+        "header" => Dict(
+            "titlename" => titlename,
+            "titleurl" => text,
+        ),
+    )
+    push!(state["searches"], d_search)
+    if isnothing(state["cardsource"])
+        state["cardsource"] = action["usersource"]
+    end
+    render_state(state, pagination, encoding, nothing, speedscope)
+end
+
 Oxygen.@post "/set_media" function set_media_endpoint(r::HTTP.Request)::HTTP.Response
     state, action, pagination, encoding, speedscope = decode_state(r)
     medium = Dict("Manga" => 0, "Anime" => 1)[action["medium"]]
     state["medium"] = medium
+    fails = fill(false, length(state["users"]))
     Threads.@threads for i = 1:length(state["users"])
         u = state["users"][i]
         if "$medium.retrieval" in keys(u["embeds"])
@@ -532,9 +573,13 @@ Oxygen.@post "/set_media" function set_media_endpoint(r::HTTP.Request)::HTTP.Res
         end
         d_embed = query_model(u["user"], medium, nothing)
         if isnothing(d_embed)
-            return HTTP.Response(500, [])
+            fails[i] = true
+        else
+            state["users"][i]["embeds"] = merge(state["users"][i]["embeds"], d_embed)
         end
-        state["users"][i]["embeds"] = merge(state["users"][i]["embeds"], d_embed)
+    end
+    if any(fails)
+        return HTTP.Response(500, [])
     end
     render_state(state, pagination, encoding, nothing, speedscope)
 end
@@ -549,17 +594,14 @@ Oxygen.@get "/version" function version_endpoint(r::HTTP.Request)::HTTP.Response
 end
 
 function compile_source(port::Integer, compile_source::AbstractString)
-    test_users = CSV.read(
-        "$secretdir/test.users.csv",
-        DataFrames.DataFrame,
-        stringtype = String,
-        ntasks = 1,
-    )
-    test_items = CSV.read(
-        "$secretdir/test.items.csv",
-        DataFrames.DataFrame,
-        stringtype = String,
-        ntasks = 1,
+    tests = Dict(
+        x => CSV.read(
+            "$secretdir/test.$x.csv",
+            DataFrames.DataFrame,
+            stringtype = String,
+            ntasks = 1,
+        )
+        for x in ["users", "items", "searches"]
     )
     state = ""
     pagination = Dict("offset" => 0, "limit" => 16)
@@ -587,7 +629,15 @@ function compile_source(port::Integer, compile_source::AbstractString)
         end
         state = d["state"]
     end
-    for (source, medium, itemid) in zip(test_items.source, test_items.medium, test_items.itemid)
+    for (source, medium, text) in zip(tests["searches"].source, tests["searches"].medium, tests["searches"].text)
+        if source != compile_source
+            continue
+        end
+        m = Dict(0=>"Manga", 1=>"Anime")[medium]
+        logtag("STARTUP", "/search")
+        apply_action("add_search", Dict("medium" => m, "text" => text, "usersource" => source))
+    end
+    for (source, medium, itemid) in zip(tests["items"].source, tests["items"].medium, tests["items"].itemid)
         if source != compile_source
             continue
         end
@@ -605,7 +655,7 @@ function compile_source(port::Integer, compile_source::AbstractString)
         logtag("STARTUP", "/add_item $compile_source")
         apply_action("add_item", Dict("source" => source, "medium" => m, "itemid" => itemid, "usersource" => source))
     end
-    for (source, username) in zip(test_users.source, test_users.username)
+    for (source, username) in zip(tests["users"].source, tests["users"].username)
         if source != compile_source
             continue
         end
