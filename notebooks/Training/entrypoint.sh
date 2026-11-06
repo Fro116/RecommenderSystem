@@ -21,8 +21,8 @@ source venv/bin/activate
 pip install torch==2.13.0 pandas==3.0.3 scipy==1.18.0 h5py==3.16.0 hdf5plugin==7.0.0 msgpack==1.2.1 torchao==0.17.0 tqdm==4.68.4 flash-attn-4==4.0.0b22
 cd RecommenderSystem/notebooks/Training/
 if timeout --kill-after=30 180 torchrun --standalone --nproc_per_node={{NUM_GPUS}} hardware_check.py; then
-    python transformer.py --datadir ../../data/training --download 0 1 --prod
-    torchrun --standalone --nproc_per_node={{NUM_GPUS}} transformer.py --datadir ../../data/training --prod
+    python transformer.py --datadir ../../data/training --download 0 1
+    torchrun --standalone --nproc_per_node={{NUM_GPUS}} transformer.py --datadir ../../data/training
 fi
 pip install vastai
 vastai stop instance $CONTAINER_ID

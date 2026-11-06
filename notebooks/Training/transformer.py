@@ -463,10 +463,6 @@ def checkpoint_model(
                 "training_loss": training_loss,
                 "test_loss": test_loss,
             }
-            torch.save(checkpoint, f"{args.datadir}/{basename}.pt")
-            if global_rank == 0 and args.prod:
-                cmd = f"rclone --retries=10 copyto {args.datadir}/{basename}.pt r2:rsys/database/training/{list_tag}/{basename}.pt"
-                os.system(f"{cmd} &")
         else:
             checkpoint = {
                 "model": model.module._orig_mod.state_dict(),
@@ -475,10 +471,7 @@ def checkpoint_model(
                 "training_loss": training_loss,
                 "test_loss": test_loss,
             }
-            torch.save(
-                checkpoint,
-                f"{args.datadir}/{basename}.pt",
-            )
+        torch.save(checkpoint, f"{args.datadir}/{basename}.pt")
     # save metrics
     names = [f"{m}.{metric}" for m in ALL_MEDIUMS for metric in ALL_METRICS]
     csv_fn = f"{args.datadir}/{basename}.csv"
@@ -492,13 +485,13 @@ def checkpoint_model(
             wsum(test_loss, task_weights),
         ] + test_loss
         f.write(",".join([str(x) for x in vals]) + "\n")
-    if global_rank == 0 and args.prod and not config["finetune"]:
+    if global_rank == 0 and not config["finetune"]:
         cmd = f"rclone --retries=10 copyto {args.datadir}/{basename}.csv r2:rsys/database/training/{list_tag}/{basename}.csv"
         os.system(f"{cmd} &")
 
 
 def upload(global_rank, logger):
-    if global_rank != 0 or args.finetune is not None or not args.prod:
+    if global_rank != 0 or args.finetune is not None:
         return
     logger.info("uploading model")
     with open(os.path.join(args.datadir, "list_tag"), "r") as f:
@@ -654,15 +647,6 @@ def train():
             )["model"],
             strict=False,
         )
-    else:
-        checkpoint_fn = f"{args.datadir}/transformer.masked.pt"
-        if os.path.exists(checkpoint_fn) and args.prod:
-            checkpoint = torch.load(
-                checkpoint_fn, weights_only=False, map_location=f"cuda:{local_rank}"
-            )
-            logger.info(f"loading model from epoch {checkpoint['epoch']}")
-            model.load_state_dict(checkpoint["model"])
-            del checkpoint["model"]
     logger.info(
         f"Created model with {sum(p.numel() for p in model.parameters())} parameters"
         f" and {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters"
@@ -768,11 +752,6 @@ def download(node, num_nodes):
         + [f"{m}.csv" for m in ["manga", "anime"]]
         + ["media_embeddings.h5"]
     )
-    if args.prod:
-        files += [
-            "transformer.masked.pt",
-            "transformer.masked.csv",
-        ]
     for data in files:
         os.system(f"{template}/{data} {args.datadir}/{data}")
     with open(f"{args.datadir}/list_tag") as f:
@@ -802,7 +781,6 @@ parser.add_argument("--finetune_medium", type=int, default=None)
 parser.add_argument("--finetune_metric", type=str, default=None)
 parser.add_argument("--download", metavar="N", type=int, nargs="+", default=None)
 parser.add_argument("--mini", action="store_true")
-parser.add_argument("--prod", action="store_true")
 args = parser.parse_args()
 
 if __name__ == "__main__":

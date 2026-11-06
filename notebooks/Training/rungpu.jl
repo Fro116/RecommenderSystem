@@ -138,7 +138,7 @@ function launch_job(instance_id::String, duration::Real)
 end
 
 function destroy_instance(instance_id)
-    run(`vastai destroy instance $instance_id -y`)
+    run(`vastai destroy instance $instance_id`)
 end
 
 function launch_job()

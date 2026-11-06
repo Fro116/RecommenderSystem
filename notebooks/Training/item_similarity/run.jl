@@ -1,7 +1,6 @@
 const datadir = "../../../data/training"
 const tag = read("$datadir/list_tag", String)
 run(`julia pairwise_dataset.jl`)
-run(`python pairwise_dataset.py`)
 for m in [0, 1]
     run(`python pairwise_ltr.py --datadir ../../../data/training/item_similarity --device 0 --medium $m --features transformer`)
 end
