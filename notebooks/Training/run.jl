@@ -77,6 +77,8 @@ function train(datetag::AbstractString)
     run(`python embeddings.py`)
     cmd = "cd item_similarity && julia run.jl"
     run(`sh -c $cmd`)
+    cmd = "cd search && julia run.jl"
+    run(`sh -c $cmd`)
     run(`rclone --retries=10 copyto $datadir/list_tag r2:rsys/database/training/latest`)
     prune_directories("training", 2)
     ts = time() - start_ts
