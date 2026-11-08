@@ -1,3 +1,5 @@
+import { SEARCH_BY_QUERY_ENABLED } from "./features";
+
 export const SITE_ORIGIN = "https://recs.moe";
 
 export interface PageMeta {
@@ -18,21 +20,24 @@ export const PAGE_META: Record<string, PageMeta> = {
     priority: "1.0",
   },
   "/title": {
-    title: "Recs☆Moe | Time for another day of hard work!",
+    title: "Recs☆Moe | Similar Titles",
     description:
       "Search for series that are similar to a given anime or manga",
     file: "title.html",
     changefreq: "weekly",
     priority: "0.8",
   },
-  "/search": {
-    title: "Recs☆Moe | Time for another day of hard work!",
-    description:
-      "Find anime or manga that match the description.",
-    file: "search.html",
-    changefreq: "weekly",
-    priority: "0.8",
-  },
+  ...(SEARCH_BY_QUERY_ENABLED
+    ? {
+        "/search": {
+          title: "Recs☆Moe | Search",
+          description: "Find anime or manga that match the description.",
+          file: "search.html",
+          changefreq: "weekly",
+          priority: "0.8",
+        },
+      }
+    : {}),
   "/about": {
     title: "About | Recs☆Moe",
     description:

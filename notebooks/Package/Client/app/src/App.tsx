@@ -5,6 +5,7 @@ import ViewPage from "./ViewPage";
 import AboutPage from "./AboutPage";
 import NotFoundPage from "./NotFoundPage";
 import { PAGE_META } from "./metadata";
+import { SEARCH_BY_QUERY_ENABLED } from "./features";
 import "./Global.css";
 
 const App: React.FC = () => {
@@ -61,7 +62,9 @@ const App: React.FC = () => {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/title" element={<HomePage mode="item" />} />
-        <Route path="/search" element={<HomePage mode="query" />} />
+        {SEARCH_BY_QUERY_ENABLED && (
+          <Route path="/search" element={<HomePage mode="query" />} />
+        )}
         <Route
           path="/user/:source/:username"
           element={<ViewPage isMobile={isMobile} />}
@@ -70,10 +73,12 @@ const App: React.FC = () => {
           path="/item/:itemType/:source/:itemid"
           element={<ViewPage isMobile={isMobile} />}
         />
-        <Route
-          path="/search/:itemType/:query"
-          element={<ViewPage isMobile={isMobile} />}
-        />
+        {SEARCH_BY_QUERY_ENABLED && (
+          <Route
+            path="/search/:itemType/:query"
+            element={<ViewPage isMobile={isMobile} />}
+          />
+        )}
         <Route path="/about" element={<AboutPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>

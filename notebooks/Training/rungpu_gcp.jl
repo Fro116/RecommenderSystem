@@ -120,6 +120,7 @@ function run_gpu_job()
         max_queue_wait_seconds,
     )
     if isnothing(res)
+        logerror("run_gpu_job: failed to launch job after $(max_queue_wait_seconds)s")
         return false
     end
     instance_name, zone = res

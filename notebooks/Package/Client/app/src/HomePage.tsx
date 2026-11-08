@@ -8,10 +8,15 @@ import React, {
   ChangeEvent,
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { SEARCH_BY_QUERY_ENABLED } from "./features";
 import { SourceType, AutocompleteItem, API_BASE, SOURCE_MAP } from "./types";
 import Footer from "./Footer";
 
 type QueryMode = "user" | "item" | "query";
+
+const AVAILABLE_MODES: QueryMode[] = SEARCH_BY_QUERY_ENABLED
+  ? ["user", "item", "query"]
+  : ["user", "item"];
 type ItemType = "anime" | "manga";
 
 interface SearchNavState {
@@ -501,7 +506,7 @@ const HomePage: React.FC<HomePageProps> = ({ mode = "user" }) => {
             </button>
             {showModeDropdown && (
               <ul className="query-mode-list">
-                {(["user", "item", "query"] as QueryMode[]).map((m) => (
+                {AVAILABLE_MODES.map((m) => (
                   <li
                     key={m}
                     className={`query-mode-item ${queryMode === m ? "active" : ""}`}
